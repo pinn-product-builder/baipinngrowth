@@ -18,26 +18,48 @@ Deno.serve(async (req) => {
       auth: { autoRefreshToken: false, persistSession: false }
     })
 
-    const adminEmail = 'adm@pinngrowth.com'
-    const adminPassword = 'Teste123@'
+    // Check if any admin exists first
+    const { data: existingAdmins, error: checkError } = await supabase
+      .from('user_roles')
+      .select('id')
+      .eq('role', 'admin')
+      .limit(1)
 
-    // Check if admin already exists
-    const { data: existingUsers } = await supabase.auth.admin.listUsers()
-    const adminExists = existingUsers?.users?.some(u => u.email === adminEmail)
+    if (checkError) {
+      throw checkError
+    }
 
-    if (adminExists) {
+    if (existingAdmins && existingAdmins.length > 0) {
       return new Response(
-        JSON.stringify({ message: 'Admin user already exists', created: false }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Admin already exists. Setup is disabled.' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Parse request body
+    const { email, password, fullName } = await req.json()
+
+    if (!email || !password) {
+      return new Response(
+        JSON.stringify({ error: 'Email and password are required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Validate password strength
+    if (password.length < 8) {
+      return new Response(
+        JSON.stringify({ error: 'Password must be at least 8 characters' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
     // Create admin user
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-      email: adminEmail,
-      password: adminPassword,
+      email,
+      password,
       email_confirm: true,
-      user_metadata: { full_name: 'Admin PinnGrowth' }
+      user_metadata: { full_name: fullName || 'Administrator' }
     })
 
     if (authError) {
@@ -46,37 +68,41 @@ Deno.serve(async (req) => {
 
     const userId = authData.user.id
 
-    // Update profile with tenant (PinnGrowth)
+    // Update profile
     await supabase
       .from('profiles')
       .update({ 
-        full_name: 'Admin PinnGrowth',
-        tenant_id: '11111111-1111-1111-1111-111111111111',
-        password_changed: false
+        full_name: fullName || 'Administrator',
+        password_changed: true // No force change for self-setup
       })
       .eq('id', userId)
 
     // Add admin role
-    await supabase
+    const { error: roleError } = await supabase
       .from('user_roles')
       .insert({ user_id: userId, role: 'admin' })
+
+    if (roleError) {
+      throw roleError
+    }
 
     // Log activity
     await supabase
       .from('activity_logs')
       .insert({
         user_id: userId,
-        action: 'admin_seeded',
+        action: 'admin_bootstrap',
         entity_type: 'user',
         entity_id: userId,
-        details: { email: adminEmail, method: 'edge_function' }
+        details: { email, method: 'setup_screen' }
       })
+
+    console.log(`First admin created: ${email}`)
 
     return new Response(
       JSON.stringify({ 
-        message: 'Admin user created successfully',
-        email: adminEmail,
-        created: true
+        success: true,
+        message: 'Administrator account created successfully'
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

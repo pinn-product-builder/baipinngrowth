@@ -52,6 +52,7 @@ export type Database = {
           display_type: Database["public"]["Enums"]["dashboard_type"]
           id: string
           is_active: boolean
+          last_error_message: string | null
           last_fetched_at: string | null
           last_health_check_at: string | null
           last_health_status: string | null
@@ -67,6 +68,7 @@ export type Database = {
           display_type?: Database["public"]["Enums"]["dashboard_type"]
           id?: string
           is_active?: boolean
+          last_error_message?: string | null
           last_fetched_at?: string | null
           last_health_check_at?: string | null
           last_health_status?: string | null
@@ -82,6 +84,7 @@ export type Database = {
           display_type?: Database["public"]["Enums"]["dashboard_type"]
           id?: string
           is_active?: boolean
+          last_error_message?: string | null
           last_fetched_at?: string | null
           last_health_check_at?: string | null
           last_health_status?: string | null

@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { BarChart3, Eye, EyeOff, ArrowLeft } from 'lucide-react';
+import { BarChart3, Eye, EyeOff, ArrowLeft, Loader2 } from 'lucide-react';
 import { z } from 'zod';
 
 const loginSchema = z.object({
@@ -23,11 +24,16 @@ export default function Auth() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCheckingAdmin, setIsCheckingAdmin] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const { user, signIn, resetPassword } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+
+  useEffect(() => {
+    checkAdminExists();
+  }, []);
 
   useEffect(() => {
     if (user) {
@@ -39,6 +45,25 @@ export default function Auth() {
     const urlMode = searchParams.get('mode');
     if (urlMode === 'forgot' || urlMode === 'reset') setMode('forgot');
   }, [searchParams]);
+
+  const checkAdminExists = async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke('check-admin-exists');
+      
+      if (error) throw error;
+      
+      if (!data?.hasAdmin) {
+        // No admin exists, redirect to setup
+        navigate('/setup');
+        return;
+      }
+    } catch (error) {
+      console.error('Error checking admin:', error);
+      // Continue to login on error
+    } finally {
+      setIsCheckingAdmin(false);
+    }
+  };
 
   const validateForm = () => {
     setErrors({});
@@ -92,6 +117,14 @@ export default function Auth() {
       setIsSubmitting(false);
     }
   };
+
+  if (isCheckingAdmin) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
