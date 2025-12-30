@@ -10,7 +10,8 @@ import {
   LogOut,
   Menu,
   X,
-  ChevronDown
+  ChevronDown,
+  Activity
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -34,6 +35,7 @@ const navItems: NavItem[] = [
   { label: 'Tenants', href: '/admin/tenants', icon: Building2, adminOnly: true },
   { label: 'Users', href: '/admin/users', icon: Users, adminOnly: true },
   { label: 'Manage Dashboards', href: '/admin/dashboards', icon: BarChart3, adminOnly: true },
+  { label: 'Activity Logs', href: '/admin/activity-logs', icon: Activity, adminOnly: true },
 ];
 
 export default function AppLayout() {

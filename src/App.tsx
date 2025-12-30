@@ -13,6 +13,7 @@ import Account from "@/pages/Account";
 import Tenants from "@/pages/admin/Tenants";
 import Users from "@/pages/admin/Users";
 import AdminDashboards from "@/pages/admin/AdminDashboards";
+import ActivityLogs from "@/pages/admin/ActivityLogs";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -52,6 +53,11 @@ const App = () => (
               <Route path="/admin/dashboards" element={
                 <ProtectedRoute requireAdmin>
                   <AdminDashboards />
+                </ProtectedRoute>
+              } />
+              <Route path="/admin/activity-logs" element={
+                <ProtectedRoute requireAdmin>
+                  <ActivityLogs />
                 </ProtectedRoute>
               } />
             </Route>

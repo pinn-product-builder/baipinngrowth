@@ -2,11 +2,12 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { LoadingPage, LoadingSpinner } from '@/components/ui/loading-spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useToast } from '@/hooks/use-toast';
-import { ArrowLeft, RefreshCw, Clock, AlertCircle, FileText } from 'lucide-react';
+import { useActivityLogger } from '@/hooks/useActivityLogger';
+import { ArrowLeft, RefreshCw, Clock, AlertCircle, FileText, ExternalLink, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
 
 interface Dashboard {
@@ -20,11 +21,13 @@ interface Dashboard {
 
 type ContentType = 'iframe' | 'html' | 'json' | 'unknown';
 type LoadState = 'loading' | 'success' | 'error' | 'empty';
+type ErrorType = 'generic' | 'cors' | 'iframe_blocked' | 'network';
 
 export default function DashboardView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { logActivity } = useActivityLogger();
 
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -34,6 +37,7 @@ export default function DashboardView() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [iframeError, setIframeError] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [errorType, setErrorType] = useState<ErrorType>('generic');
 
   useEffect(() => {
     fetchDashboard();
@@ -49,6 +53,10 @@ export default function DashboardView() {
 
       if (error) throw error;
       setDashboard(data);
+      
+      // Log view activity
+      logActivity('view_dashboard', 'dashboard', data.id, { name: data.name });
+      
       loadDashboardContent(data);
     } catch (error) {
       console.error('Error fetching dashboard:', error);
@@ -60,6 +68,7 @@ export default function DashboardView() {
   const loadDashboardContent = useCallback(async (dash: Dashboard) => {
     setLoadState('loading');
     setIframeError(false);
+    setErrorType('generic');
     
     const displayType = dash.display_type;
 
@@ -115,9 +124,22 @@ export default function DashboardView() {
         .update({ last_fetched_at: new Date().toISOString() })
         .eq('id', dash.id);
 
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error loading content:', error);
+      
+      // Detect error type
+      const errorMessage = error instanceof Error ? error.message : '';
+      if (errorMessage.includes('CORS') || errorMessage.includes('Failed to fetch')) {
+        setErrorType('cors');
+      } else if (errorMessage.includes('NetworkError')) {
+        setErrorType('network');
+      }
+      
       setLoadState('error');
+      logActivity('dashboard_load_error', 'dashboard', dash.id, { 
+        error: errorMessage,
+        type: errorType 
+      });
     } finally {
       setIsRefreshing(false);
       setIsLoading(false);
@@ -126,6 +148,12 @@ export default function DashboardView() {
 
   const handleIframeError = () => {
     setIframeError(true);
+    setErrorType('iframe_blocked');
+    toast({
+      title: 'Embed blocked',
+      description: 'Loading via fallback method. Or use "Open in new tab".',
+      variant: 'default'
+    });
     // Fallback to fetch if iframe fails
     if (dashboard) {
       fetchContent(dashboard);
@@ -140,6 +168,37 @@ export default function DashboardView() {
       } else {
         fetchContent(dashboard);
       }
+    }
+  };
+
+  const handleOpenInNewTab = () => {
+    if (dashboard) {
+      window.open(dashboard.webhook_url, '_blank');
+    }
+  };
+
+  const getErrorMessage = () => {
+    switch (errorType) {
+      case 'cors':
+        return {
+          title: 'CORS blocked',
+          description: 'The endpoint is blocking cross-origin requests. Adjust CORS headers on the webhook server, or use "Open in new tab".'
+        };
+      case 'iframe_blocked':
+        return {
+          title: 'Embed blocked',
+          description: 'X-Frame-Options or CSP is blocking the embed. Use "Open in new tab" to view.'
+        };
+      case 'network':
+        return {
+          title: 'Network error',
+          description: 'Could not connect to the server. Check your internet connection.'
+        };
+      default:
+        return {
+          title: 'Failed to load dashboard',
+          description: 'Could not load the dashboard content. Please try again.'
+        };
     }
   };
 
@@ -162,6 +221,8 @@ export default function DashboardView() {
       />
     );
   }
+
+  const errorInfo = getErrorMessage();
 
   return (
     <div className="flex h-full flex-col space-y-4 animate-fade-in">
@@ -187,6 +248,13 @@ export default function DashboardView() {
           )}
           <Button 
             variant="outline" 
+            onClick={handleOpenInNewTab}
+          >
+            <ExternalLink className="mr-2 h-4 w-4" />
+            Open in new tab
+          </Button>
+          <Button 
+            variant="outline" 
             onClick={handleRefresh}
             disabled={isRefreshing}
           >
@@ -206,16 +274,22 @@ export default function DashboardView() {
 
         {loadState === 'error' && (
           <Card className="flex h-full items-center justify-center">
-            <CardContent className="text-center">
-              <AlertCircle className="mx-auto h-12 w-12 text-destructive" />
-              <h3 className="mt-4 text-lg font-medium">Failed to load dashboard</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Could not load the dashboard content. Please try again.
+            <CardContent className="text-center py-12">
+              <AlertTriangle className="mx-auto h-12 w-12 text-warning" />
+              <h3 className="mt-4 text-lg font-medium">{errorInfo.title}</h3>
+              <p className="mt-1 max-w-md text-sm text-muted-foreground">
+                {errorInfo.description}
               </p>
-              <Button variant="outline" className="mt-4" onClick={handleRefresh}>
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Try Again
-              </Button>
+              <div className="mt-4 flex justify-center gap-3">
+                <Button variant="outline" onClick={handleOpenInNewTab}>
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  Open in new tab
+                </Button>
+                <Button variant="outline" onClick={handleRefresh}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Try Again
+                </Button>
+              </div>
             </CardContent>
           </Card>
         )}
