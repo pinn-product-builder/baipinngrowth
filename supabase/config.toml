@@ -5,3 +5,12 @@ verify_jwt = false
 
 [functions.bootstrap-admin]
 verify_jwt = false
+
+[functions.send-invite]
+verify_jwt = true
+
+[functions.accept-invite]
+verify_jwt = false
+
+[functions.verify-invite]
+verify_jwt = false

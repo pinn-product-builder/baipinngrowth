@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/ui/page-header';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadingPage } from '@/components/ui/loading-spinner';
@@ -31,9 +32,15 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
-import { Users as UsersIcon, Plus, Search, MoreHorizontal, Power, Mail } from 'lucide-react';
+import { Users as UsersIcon, Plus, Search, MoreHorizontal, Power, Mail, Send, Clock, UserPlus } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,14 +59,30 @@ interface UserProfile {
   full_name: string | null;
   tenant_id: string | null;
   is_active: boolean;
+  status: string;
   created_at: string;
   tenant_name?: string | null;
   role?: string | null;
 }
 
+interface PendingInvite {
+  id: string;
+  email: string;
+  role: string;
+  tenant_id: string | null;
+  tenant_name?: string | null;
+  expires_at: string;
+  created_at: string;
+}
+
+type AppRole = 'admin' | 'manager' | 'viewer';
+
 export default function Users() {
+  const { userRole, tenantId: currentUserTenantId } = useAuth();
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [filteredUsers, setFilteredUsers] = useState<UserProfile[]>([]);
+  const [filteredInvites, setFilteredInvites] = useState<PendingInvite[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -67,14 +90,17 @@ export default function Users() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [formData, setFormData] = useState({ 
     email: '', 
-    password: '', 
     fullName: '', 
     tenantId: '', 
-    role: 'client' as 'admin' | 'client' 
+    role: 'viewer' as AppRole
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeTab, setActiveTab] = useState('users');
   const { toast } = useToast();
   const { logActivity } = useActivityLogger();
+
+  const isAdmin = userRole === 'admin';
+  const isManager = userRole === 'manager';
 
   useEffect(() => {
     fetchData();
@@ -94,17 +120,34 @@ export default function Users() {
     }
     
     setFilteredUsers(filtered);
-  }, [users, searchQuery, filterTenant]);
+
+    // Filter invites
+    let filteredInv = pendingInvites;
+    if (searchQuery) {
+      filteredInv = filteredInv.filter(i => 
+        i.email.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+    if (filterTenant !== 'all') {
+      filteredInv = filteredInv.filter(i => i.tenant_id === filterTenant);
+    }
+    setFilteredInvites(filteredInv);
+  }, [users, pendingInvites, searchQuery, filterTenant]);
 
   const fetchData = async () => {
     try {
-      // Fetch tenants
-      const { data: tenantsData } = await supabase
+      // Fetch tenants (admin sees all, manager sees only their own)
+      let tenantsQuery = supabase
         .from('tenants')
         .select('id, name')
         .eq('is_active', true)
         .order('name');
       
+      if (isManager && currentUserTenantId) {
+        tenantsQuery = tenantsQuery.eq('id', currentUserTenantId);
+      }
+      
+      const { data: tenantsData } = await tenantsQuery;
       setTenants(tenantsData || []);
 
       // Fetch profiles with tenant info
@@ -115,6 +158,7 @@ export default function Users() {
           full_name,
           tenant_id,
           is_active,
+          status,
           created_at,
           tenants (name)
         `)
@@ -135,6 +179,7 @@ export default function Users() {
           full_name: profile.full_name,
           tenant_id: profile.tenant_id,
           is_active: profile.is_active,
+          status: profile.status || 'active',
           created_at: profile.created_at,
           tenant_name: profile.tenants?.name || null,
           role: userRole?.role || null
@@ -142,6 +187,34 @@ export default function Users() {
       });
 
       setUsers(combinedUsers);
+
+      // Fetch pending invites
+      const { data: invitesData } = await supabase
+        .from('user_invites')
+        .select(`
+          id,
+          email,
+          role,
+          tenant_id,
+          expires_at,
+          created_at,
+          tenants (name)
+        `)
+        .eq('accepted', false)
+        .gte('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false });
+
+      const formattedInvites: PendingInvite[] = (invitesData || []).map((invite: any) => ({
+        id: invite.id,
+        email: invite.email,
+        role: invite.role,
+        tenant_id: invite.tenant_id,
+        tenant_name: invite.tenants?.name || null,
+        expires_at: invite.expires_at,
+        created_at: invite.created_at
+      }));
+
+      setPendingInvites(formattedInvites);
     } catch (error) {
       console.error('Error fetching data:', error);
       toast({ title: 'Error', description: 'Failed to load users.', variant: 'destructive' });
@@ -152,68 +225,71 @@ export default function Users() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.email.trim() || !formData.password.trim()) return;
+    if (!formData.email.trim()) return;
     
-    // Validate client has tenant
-    if (formData.role === 'client' && !formData.tenantId) {
-      toast({ title: 'Tenant required', description: 'Client users must be assigned to a tenant.', variant: 'destructive' });
+    // Validate non-admin has tenant
+    if (formData.role !== 'admin' && !formData.tenantId) {
+      toast({ title: 'Tenant required', description: 'Non-admin users must be assigned to a tenant.', variant: 'destructive' });
+      return;
+    }
+
+    // Managers cannot create admins
+    if (isManager && formData.role === 'admin') {
+      toast({ title: 'Permission denied', description: 'Managers cannot create admin users.', variant: 'destructive' });
       return;
     }
 
     setIsSubmitting(true);
     try {
-      // Create user via Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: formData.email,
-        password: formData.password,
-        options: {
-          data: { full_name: formData.fullName }
+      const { data, error } = await supabase.functions.invoke('send-invite', {
+        body: {
+          email: formData.email,
+          fullName: formData.fullName || undefined,
+          tenantId: formData.tenantId || undefined,
+          role: formData.role
         }
       });
 
-      if (authError) throw authError;
-      if (!authData.user) throw new Error('User creation failed');
+      if (error) throw error;
+      if (data.error) throw new Error(data.error);
 
-      const userId = authData.user.id;
-
-      // Update profile with tenant_id
-      if (formData.tenantId) {
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .update({ tenant_id: formData.tenantId, full_name: formData.fullName })
-          .eq('id', userId);
-
-        if (profileError) throw profileError;
-      }
-
-      // Add role
-      const { error: roleError } = await supabase
-        .from('user_roles')
-        .insert({ user_id: userId, role: formData.role });
-
-      if (roleError) throw roleError;
-
-      logActivity('create_user', 'user', userId, { email: formData.email, role: formData.role });
-      toast({ title: 'User created', description: 'New user has been added successfully.' });
+      toast({ title: 'Invite sent', description: `Invitation sent to ${formData.email}` });
       setIsDialogOpen(false);
-      setFormData({ email: '', password: '', fullName: '', tenantId: '', role: 'client' });
+      setFormData({ email: '', fullName: '', tenantId: isManager ? currentUserTenantId || '' : '', role: 'viewer' });
       fetchData();
     } catch (error: any) {
-      if (error.message?.includes('already registered')) {
-        toast({ title: 'Email exists', description: 'This email is already registered.', variant: 'destructive' });
-      } else {
-        toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      }
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const resendInvite = async (invite: PendingInvite) => {
+    try {
+      const { data, error } = await supabase.functions.invoke('send-invite', {
+        body: {
+          email: invite.email,
+          tenantId: invite.tenant_id || undefined,
+          role: invite.role
+        }
+      });
+
+      if (error) throw error;
+      if (data.error) throw new Error(data.error);
+
+      toast({ title: 'Invite resent', description: `New invitation sent to ${invite.email}` });
+      fetchData();
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    }
+  };
+
   const toggleUserStatus = async (user: UserProfile) => {
     try {
+      const newStatus = user.is_active ? 'disabled' : 'active';
       const { error } = await supabase
         .from('profiles')
-        .update({ is_active: !user.is_active })
+        .update({ is_active: !user.is_active, status: newStatus })
         .eq('id', user.id);
 
       if (error) throw error;
@@ -228,13 +304,20 @@ export default function Users() {
     }
   };
 
-  const sendPasswordReset = async (userId: string, userName: string | null) => {
-    // Get user email from auth - we need to look it up
-    // For now, show a message that this needs to be done via email lookup
-    toast({ 
-      title: 'Password Reset', 
-      description: `To reset password for ${userName || 'this user'}, ask them to use "Forgot password" on the login page.`
-    });
+  const getStatusBadge = (user: UserProfile) => {
+    if (!user.is_active) {
+      return <StatusBadge variant="inactive">Disabled</StatusBadge>;
+    }
+    return <StatusBadge variant="active">Active</StatusBadge>;
+  };
+
+  const getRoleBadgeColor = (role: string | null) => {
+    switch (role) {
+      case 'admin': return 'bg-destructive/10 text-destructive';
+      case 'manager': return 'bg-primary/10 text-primary';
+      case 'viewer': return 'bg-muted text-muted-foreground';
+      default: return 'bg-muted text-muted-foreground';
+    }
   };
 
   if (isLoading) {
@@ -245,20 +328,20 @@ export default function Users() {
     <div className="space-y-6 animate-fade-in">
       <PageHeader 
         title="Users" 
-        description="Manage user accounts and access"
+        description="Manage user accounts and invitations"
         actions={
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Add User
+                <UserPlus className="mr-2 h-4 w-4" />
+                Invite User
               </Button>
             </DialogTrigger>
             <DialogContent>
               <form onSubmit={handleSubmit}>
                 <DialogHeader>
-                  <DialogTitle>Create User</DialogTitle>
-                  <DialogDescription>Add a new user account.</DialogDescription>
+                  <DialogTitle>Invite User</DialogTitle>
+                  <DialogDescription>Send an invitation to join the platform.</DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                   <div className="space-y-2">
@@ -272,17 +355,7 @@ export default function Users() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="password">Password</Label>
-                    <Input
-                      id="password"
-                      type="password"
-                      value={formData.password}
-                      onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                      placeholder="Minimum 6 characters"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="fullName">Full Name</Label>
+                    <Label htmlFor="fullName">Full Name (optional)</Label>
                     <Input
                       id="fullName"
                       value={formData.fullName}
@@ -294,23 +367,25 @@ export default function Users() {
                     <Label htmlFor="role">Role</Label>
                     <Select 
                       value={formData.role} 
-                      onValueChange={(v) => setFormData({ ...formData, role: v as 'admin' | 'client' })}
+                      onValueChange={(v) => setFormData({ ...formData, role: v as AppRole })}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Select role" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="client">Client</SelectItem>
-                        <SelectItem value="admin">Admin</SelectItem>
+                        <SelectItem value="viewer">Viewer (read-only)</SelectItem>
+                        <SelectItem value="manager">Manager (tenant admin)</SelectItem>
+                        {isAdmin && <SelectItem value="admin">Admin (global)</SelectItem>}
                       </SelectContent>
                     </Select>
                   </div>
-                  {formData.role === 'client' && (
+                  {formData.role !== 'admin' && (
                     <div className="space-y-2">
-                      <Label htmlFor="tenant">Tenant (required for clients)</Label>
+                      <Label htmlFor="tenant">Tenant (required for non-admin)</Label>
                       <Select 
                         value={formData.tenantId} 
                         onValueChange={(v) => setFormData({ ...formData, tenantId: v })}
+                        disabled={isManager}
                       >
                         <SelectTrigger>
                           <SelectValue placeholder="Select tenant" />
@@ -329,7 +404,8 @@ export default function Users() {
                     Cancel
                   </Button>
                   <Button type="submit" disabled={isSubmitting}>
-                    {isSubmitting ? 'Creating...' : 'Create User'}
+                    <Send className="mr-2 h-4 w-4" />
+                    {isSubmitting ? 'Sending...' : 'Send Invite'}
                   </Button>
                 </DialogFooter>
               </form>
@@ -343,89 +419,156 @@ export default function Users() {
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search users..."
+            placeholder="Search users or invites..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
           />
         </div>
-        <Select value={filterTenant} onValueChange={setFilterTenant}>
-          <SelectTrigger className="w-[200px]">
-            <SelectValue placeholder="Filter by tenant" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Tenants</SelectItem>
-            {tenants.map((t) => (
-              <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {isAdmin && (
+          <Select value={filterTenant} onValueChange={setFilterTenant}>
+            <SelectTrigger className="w-[200px]">
+              <SelectValue placeholder="Filter by tenant" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Tenants</SelectItem>
+              {tenants.map((t) => (
+                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
-      {filteredUsers.length === 0 ? (
-        <EmptyState
-          icon={<UsersIcon className="h-6 w-6 text-muted-foreground" />}
-          title={searchQuery || filterTenant !== 'all' ? 'No users found' : 'No users yet'}
-          description={searchQuery || filterTenant !== 'all' ? 'Try adjusting your filters.' : 'Create your first user to get started.'}
-        />
-      ) : (
-        <div className="rounded-lg border bg-card">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Tenant</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="w-[50px]"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredUsers.map((user) => (
-                <TableRow key={user.id}>
-                  <TableCell className="font-medium">{user.full_name || 'No name'}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {user.tenant_name || '-'}
-                  </TableCell>
-                  <TableCell>
-                    <span className="capitalize">
-                      {user.role || 'No role'}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge variant={user.is_active ? 'active' : 'inactive'}>
-                      {user.is_active ? 'Active' : 'Inactive'}
-                    </StatusBadge>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {format(new Date(user.created_at), 'dd MMM yyyy')}
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon">
-                          <MoreHorizontal className="h-4 w-4" />
+      {/* Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList>
+          <TabsTrigger value="users" className="gap-2">
+            <UsersIcon className="h-4 w-4" />
+            Users ({filteredUsers.length})
+          </TabsTrigger>
+          <TabsTrigger value="invites" className="gap-2">
+            <Mail className="h-4 w-4" />
+            Pending Invites ({filteredInvites.length})
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="users" className="mt-4">
+          {filteredUsers.length === 0 ? (
+            <EmptyState
+              icon={<UsersIcon className="h-6 w-6 text-muted-foreground" />}
+              title={searchQuery || filterTenant !== 'all' ? 'No users found' : 'No users yet'}
+              description={searchQuery || filterTenant !== 'all' ? 'Try adjusting your filters.' : 'Invite your first user to get started.'}
+            />
+          ) : (
+            <div className="rounded-lg border bg-card">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Tenant</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead className="w-[50px]"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredUsers.map((user) => (
+                    <TableRow key={user.id}>
+                      <TableCell className="font-medium">{user.full_name || 'No name'}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {user.tenant_name || '-'}
+                      </TableCell>
+                      <TableCell>
+                        <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
+                          {user.role || 'No role'}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        {getStatusBadge(user)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {format(new Date(user.created_at), 'dd MMM yyyy')}
+                      </TableCell>
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => toggleUserStatus(user)}>
+                              <Power className="mr-2 h-4 w-4" />
+                              {user.is_active ? 'Disable' : 'Enable'}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="invites" className="mt-4">
+          {filteredInvites.length === 0 ? (
+            <EmptyState
+              icon={<Mail className="h-6 w-6 text-muted-foreground" />}
+              title={searchQuery || filterTenant !== 'all' ? 'No invites found' : 'No pending invites'}
+              description={searchQuery || filterTenant !== 'all' ? 'Try adjusting your filters.' : 'All invitations have been accepted or expired.'}
+            />
+          ) : (
+            <div className="rounded-lg border bg-card">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Tenant</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Expires</TableHead>
+                    <TableHead>Sent</TableHead>
+                    <TableHead className="w-[50px]"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredInvites.map((invite) => (
+                    <TableRow key={invite.id}>
+                      <TableCell className="font-medium">{invite.email}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {invite.tenant_name || '-'}
+                      </TableCell>
+                      <TableCell>
+                        <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${getRoleBadgeColor(invite.role)}`}>
+                          {invite.role}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1.5 text-muted-foreground">
+                          <Clock className="h-3.5 w-3.5" />
+                          {format(new Date(invite.expires_at), 'dd MMM HH:mm')}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {format(new Date(invite.created_at), 'dd MMM yyyy')}
+                      </TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="sm" onClick={() => resendInvite(invite)}>
+                          <Send className="mr-1 h-3.5 w-3.5" />
+                          Resend
                         </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => sendPasswordReset(user.id, user.full_name)}>
-                          <Mail className="mr-2 h-4 w-4" />
-                          Reset Password
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => toggleUserStatus(user)}>
-                          <Power className="mr-2 h-4 w-4" />
-                          {user.is_active ? 'Deactivate' : 'Activate'}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

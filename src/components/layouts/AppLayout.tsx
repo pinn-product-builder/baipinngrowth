@@ -38,6 +38,9 @@ const navItems: NavItem[] = [
   { label: 'Activity Logs', href: '/admin/activity-logs', icon: Activity, adminOnly: true },
 ];
 
+// Manager allowed routes (subset of admin)
+const managerAllowedRoutes = ['/admin/users', '/admin/dashboards', '/admin/activity-logs'];
+
 export default function AppLayout() {
   const { user, userRole, signOut } = useAuth();
   const navigate = useNavigate();
@@ -45,7 +48,13 @@ export default function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const isAdmin = userRole === 'admin';
-  const filteredNavItems = navItems.filter(item => !item.adminOnly || isAdmin);
+  const isManager = userRole === 'manager';
+  const filteredNavItems = navItems.filter(item => {
+    if (!item.adminOnly) return true;
+    if (isAdmin) return true;
+    if (isManager && managerAllowedRoutes.includes(item.href)) return true;
+    return false;
+  });
 
   const handleSignOut = async () => {
     await signOut();
