@@ -9,6 +9,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { LayoutDashboard, Clock, ArrowRight, CheckCircle, XCircle, HelpCircle } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 interface Dashboard {
   id: string;
@@ -42,7 +43,7 @@ export default function Dashboards() {
       if (error) throw error;
       setDashboards(data || []);
     } catch (error) {
-      console.error('Error fetching dashboards:', error);
+      console.error('Erro ao buscar dashboards:', error);
     } finally {
       setIsLoading(false);
     }
@@ -59,27 +60,27 @@ export default function Dashboards() {
   };
 
   const getHealthLabel = (status: string | null, lastCheck: string | null) => {
-    if (!lastCheck) return 'Never checked';
+    if (!lastCheck) return 'Nunca verificado';
     if (status === 'ok') return 'OK';
-    return 'Error';
+    return 'Erro';
   };
 
   if (isLoading) {
-    return <LoadingPage message="Loading dashboards..." />;
+    return <LoadingPage message="Carregando dashboards..." />;
   }
 
   return (
     <div className="space-y-6 animate-fade-in">
       <PageHeader 
         title="Dashboards" 
-        description="View and analyze your business metrics"
+        description="Visualize e analise suas métricas de negócio"
       />
 
       {dashboards.length === 0 ? (
         <EmptyState
           icon={<LayoutDashboard className="h-6 w-6 text-muted-foreground" />}
-          title="No dashboards available"
-          description="Dashboards will appear here once they are configured by your administrator."
+          title="Nenhum dashboard disponível"
+          description="Os dashboards aparecerão aqui assim que forem configurados pelo administrador."
         />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -114,8 +115,8 @@ export default function Dashboards() {
                     <Clock className="h-3.5 w-3.5" />
                     <span>
                       {dashboard.last_fetched_at 
-                        ? formatDistanceToNow(new Date(dashboard.last_fetched_at), { addSuffix: true })
-                        : 'Not loaded yet'}
+                        ? formatDistanceToNow(new Date(dashboard.last_fetched_at), { addSuffix: true, locale: ptBR })
+                        : 'Ainda não carregado'}
                     </span>
                   </div>
                   <ArrowRight className="h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />

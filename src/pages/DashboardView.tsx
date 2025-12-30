@@ -9,6 +9,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
 import { ArrowLeft, RefreshCw, Clock, AlertCircle, FileText, ExternalLink, AlertTriangle, Copy, CheckCheck } from 'lucide-react';
 import { format } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 interface Dashboard {
   id: string;
@@ -23,7 +24,7 @@ type ContentType = 'iframe' | 'html' | 'json' | 'unknown';
 type LoadState = 'loading' | 'success' | 'error' | 'empty';
 type ErrorType = 'generic' | 'cors' | 'iframe_blocked' | 'network' | 'timeout';
 
-const FETCH_TIMEOUT = 15000; // 15 seconds
+const FETCH_TIMEOUT = 15000; // 15 segundos
 const MAX_RETRIES = 2;
 
 export default function DashboardView() {
@@ -59,12 +60,12 @@ export default function DashboardView() {
       if (error) throw error;
       setDashboard(data);
       
-      // Log view activity
+      // Registrar visualização
       logActivity('view_dashboard', 'dashboard', data.id, { name: data.name });
       
       loadDashboardContent(data);
     } catch (error) {
-      console.error('Error fetching dashboard:', error);
+      console.error('Erro ao buscar dashboard:', error);
       setLoadState('error');
       setIsLoading(false);
     }
@@ -78,19 +79,19 @@ export default function DashboardView() {
     
     const displayType = dash.display_type;
 
-    // If type is iframe or auto, try iframe first
+    // Se o tipo for iframe ou auto, tentar iframe primeiro
     if (displayType === 'iframe' || displayType === 'auto') {
       setContentType('iframe');
       setLoadState('success');
       setLastUpdated(new Date());
       setIsLoading(false);
       
-      // Log success
+      // Registrar sucesso
       await updateDashboardHealth(dash.id, 'ok', null);
       return;
     }
 
-    // Otherwise fetch content
+    // Caso contrário, buscar conteúdo
     await fetchContentWithRetry(dash, 1);
   }, []);
 
@@ -160,9 +161,9 @@ export default function DashboardView() {
       setLastUpdated(new Date());
 
     } catch (error: unknown) {
-      console.error('Error loading content:', error);
+      console.error('Erro ao carregar conteúdo:', error);
       
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
       let detectedErrorType: ErrorType = 'generic';
       
       if (error instanceof Error && error.name === 'AbortError') {
@@ -173,7 +174,7 @@ export default function DashboardView() {
         detectedErrorType = 'network';
       }
       
-      // Retry if not max attempts
+      // Tentar novamente se não atingiu o máximo de tentativas
       if (attempt < MAX_RETRIES) {
         await fetchContentWithRetry(dash, attempt + 1);
         return;
@@ -197,11 +198,11 @@ export default function DashboardView() {
     setIframeError(true);
     setErrorType('iframe_blocked');
     toast({
-      title: 'Embed blocked',
-      description: 'Loading via fallback method. Or use "Open in new tab".',
+      title: 'Embed bloqueado',
+      description: 'Carregando via método alternativo. Ou use "Abrir em nova aba".',
       variant: 'default'
     });
-    // Fallback to fetch if iframe fails
+    // Fallback para fetch se iframe falhar
     if (dashboard) {
       fetchContentWithRetry(dashboard, 1);
     }
@@ -210,7 +211,7 @@ export default function DashboardView() {
   const handleRefresh = () => {
     if (dashboard) {
       if (contentType === 'iframe' && !iframeError) {
-        // Force iframe reload by updating lastUpdated
+        // Forçar reload do iframe atualizando lastUpdated
         setLastUpdated(new Date());
       } else {
         fetchContentWithRetry(dashboard, 1);
@@ -229,10 +230,10 @@ export default function DashboardView() {
       try {
         await navigator.clipboard.writeText(window.location.href);
         setCopied(true);
-        toast({ title: 'Link copied', description: 'Dashboard link copied to clipboard.' });
+        toast({ title: 'Link copiado', description: 'Link do dashboard copiado para a área de transferência.' });
         setTimeout(() => setCopied(false), 2000);
       } catch {
-        toast({ title: 'Copy failed', description: 'Could not copy link.', variant: 'destructive' });
+        toast({ title: 'Erro ao copiar', description: 'Não foi possível copiar o link.', variant: 'destructive' });
       }
     }
   };
@@ -241,46 +242,46 @@ export default function DashboardView() {
     switch (errorType) {
       case 'cors':
         return {
-          title: 'CORS blocked',
-          description: 'CORS blocked on the endpoint. Adjust headers on the webhook server, or use "Open in new tab".'
+          title: 'CORS bloqueado',
+          description: 'CORS bloqueado no endpoint. Ajuste os headers no servidor do webhook, ou use "Abrir em nova aba".'
         };
       case 'iframe_blocked':
         return {
-          title: 'Embed blocked',
-          description: 'X-Frame-Options or CSP is blocking the embed. Use "Open in new tab" or fallback.'
+          title: 'Embed bloqueado',
+          description: 'X-Frame-Options ou CSP está bloqueando o embed. Use "Abrir em nova aba" ou método alternativo.'
         };
       case 'network':
         return {
-          title: 'Network error',
-          description: 'Could not connect to the server. Check your internet connection.'
+          title: 'Erro de rede',
+          description: 'Não foi possível conectar ao servidor. Verifique sua conexão com a internet.'
         };
       case 'timeout':
         return {
-          title: 'Timeout',
-          description: `Request timed out after ${FETCH_TIMEOUT / 1000} seconds. The server may be slow or unresponsive.`
+          title: 'Tempo esgotado',
+          description: `A requisição expirou após ${FETCH_TIMEOUT / 1000} segundos. O servidor pode estar lento ou indisponível.`
         };
       default:
         return {
-          title: 'Failed to load dashboard',
-          description: 'Could not load the dashboard content. Please try again.'
+          title: 'Falha ao carregar dashboard',
+          description: 'Não foi possível carregar o conteúdo do dashboard. Por favor, tente novamente.'
         };
     }
   };
 
   if (isLoading) {
-    return <LoadingPage message="Loading dashboard..." />;
+    return <LoadingPage message="Carregando dashboard..." />;
   }
 
   if (!dashboard) {
     return (
       <EmptyState
         icon={<AlertCircle className="h-6 w-6 text-muted-foreground" />}
-        title="Dashboard not found"
-        description="The requested dashboard could not be found."
+        title="Dashboard não encontrado"
+        description="O dashboard solicitado não foi encontrado."
         action={
           <Button variant="outline" onClick={() => navigate('/dashboards')}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Dashboards
+            Voltar aos Dashboards
           </Button>
         }
       />
@@ -308,12 +309,12 @@ export default function DashboardView() {
           {lastUpdated && (
             <div className="flex items-center gap-1.5 text-sm text-muted-foreground mr-2">
               <Clock className="h-4 w-4" />
-              <span>Updated: {format(lastUpdated, 'HH:mm:ss')}</span>
+              <span>Atualizado: {format(lastUpdated, 'HH:mm:ss', { locale: ptBR })}</span>
             </div>
           )}
           {retryCount > 1 && loadState === 'loading' && (
             <span className="text-xs text-muted-foreground mr-2">
-              Attempt {retryCount}/{MAX_RETRIES}
+              Tentativa {retryCount}/{MAX_RETRIES}
             </span>
           )}
           <Button 
@@ -322,7 +323,7 @@ export default function DashboardView() {
             onClick={handleCopyLink}
           >
             {copied ? <CheckCheck className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
-            {copied ? 'Copied' : 'Copy link'}
+            {copied ? 'Copiado' : 'Copiar link'}
           </Button>
           <Button 
             variant="outline"
@@ -330,7 +331,7 @@ export default function DashboardView() {
             onClick={handleOpenInNewTab}
           >
             <ExternalLink className="mr-2 h-4 w-4" />
-            Open in new tab
+            Abrir em nova aba
           </Button>
           <Button 
             variant="outline"
@@ -339,7 +340,7 @@ export default function DashboardView() {
             disabled={isRefreshing}
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-            Refresh
+            Atualizar
           </Button>
         </div>
       </div>
@@ -350,7 +351,7 @@ export default function DashboardView() {
           <div className="flex h-full flex-col items-center justify-center rounded-lg border bg-card gap-2">
             <LoadingSpinner size="lg" />
             {retryCount > 1 && (
-              <p className="text-sm text-muted-foreground">Attempt {retryCount}/{MAX_RETRIES}...</p>
+              <p className="text-sm text-muted-foreground">Tentativa {retryCount}/{MAX_RETRIES}...</p>
             )}
           </div>
         )}
@@ -366,11 +367,11 @@ export default function DashboardView() {
               <div className="mt-4 flex justify-center gap-3">
                 <Button variant="outline" onClick={handleOpenInNewTab}>
                   <ExternalLink className="mr-2 h-4 w-4" />
-                  Open in new tab
+                  Abrir em nova aba
                 </Button>
                 <Button variant="outline" onClick={handleRefresh}>
                   <RefreshCw className="mr-2 h-4 w-4" />
-                  Try Again
+                  Tentar novamente
                 </Button>
               </div>
             </CardContent>
@@ -380,12 +381,12 @@ export default function DashboardView() {
         {loadState === 'empty' && (
           <EmptyState
             icon={<FileText className="h-6 w-6 text-muted-foreground" />}
-            title="No data available"
-            description="This dashboard doesn't have any data to display yet."
+            title="Sem dados disponíveis"
+            description="Este dashboard ainda não possui dados para exibir."
             action={
               <Button variant="outline" onClick={handleRefresh}>
                 <RefreshCw className="mr-2 h-4 w-4" />
-                Refresh
+                Atualizar
               </Button>
             }
             className="h-full"
@@ -426,7 +427,7 @@ export default function DashboardView() {
   );
 }
 
-// Simple JSON renderer component
+// Componente simples de renderização JSON
 function JsonRenderer({ data }: { data: object }) {
   if (Array.isArray(data)) {
     return (

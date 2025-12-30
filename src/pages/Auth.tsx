@@ -11,8 +11,8 @@ import { BarChart3, Eye, EyeOff, ArrowLeft, Loader2 } from 'lucide-react';
 import { z } from 'zod';
 
 const loginSchema = z.object({
-  email: z.string().email('Invalid email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  email: z.string().email('Endereço de email inválido'),
+  password: z.string().min(6, 'A senha deve ter pelo menos 6 caracteres'),
 });
 
 type AuthMode = 'login' | 'forgot';
@@ -53,13 +53,13 @@ export default function Auth() {
       if (error) throw error;
       
       if (!data?.hasAdmin) {
-        // No admin exists, redirect to setup
+        // Nenhum admin existe, redirecionar para setup
         navigate('/setup');
         return;
       }
     } catch (error) {
-      console.error('Error checking admin:', error);
-      // Continue to login on error
+      console.error('Erro ao verificar admin:', error);
+      // Continuar para login em caso de erro
     } finally {
       setIsCheckingAdmin(false);
     }
@@ -97,9 +97,9 @@ export default function Auth() {
         const { error } = await signIn(email, password);
         if (error) {
           if (error.message.includes('Invalid login credentials')) {
-            toast({ title: 'Login failed', description: 'Invalid email or password.', variant: 'destructive' });
+            toast({ title: 'Falha no login', description: 'Email ou senha inválidos.', variant: 'destructive' });
           } else {
-            toast({ title: 'Login failed', description: error.message, variant: 'destructive' });
+            toast({ title: 'Falha no login', description: error.message, variant: 'destructive' });
           }
         } else {
           navigate('/dashboards');
@@ -107,9 +107,9 @@ export default function Auth() {
       } else {
         const { error } = await resetPassword(email);
         if (error) {
-          toast({ title: 'Reset failed', description: error.message, variant: 'destructive' });
+          toast({ title: 'Falha na recuperação', description: error.message, variant: 'destructive' });
         } else {
-          toast({ title: 'Check your email', description: 'Password reset instructions have been sent.' });
+          toast({ title: 'Verifique seu email', description: 'Instruções de recuperação de senha foram enviadas.' });
           setMode('login');
         }
       }
@@ -142,12 +142,12 @@ export default function Auth() {
         <Card className="border-border/50 shadow-lg">
           <CardHeader className="space-y-1">
             <CardTitle className="text-2xl">
-              {mode === 'login' && 'Sign in'}
-              {mode === 'forgot' && 'Reset password'}
+              {mode === 'login' && 'Entrar'}
+              {mode === 'forgot' && 'Recuperar senha'}
             </CardTitle>
             <CardDescription>
-              {mode === 'login' && 'Enter your credentials to access your dashboards'}
-              {mode === 'forgot' && 'Enter your email to receive reset instructions'}
+              {mode === 'login' && 'Digite suas credenciais para acessar seus dashboards'}
+              {mode === 'forgot' && 'Digite seu email para receber instruções de recuperação'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -159,7 +159,7 @@ export default function Auth() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="your@email.com"
+                  placeholder="seu@email.com"
                   disabled={isSubmitting}
                 />
                 {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
@@ -167,14 +167,14 @@ export default function Auth() {
 
               {mode === 'login' && (
                 <div className="space-y-2">
-                  <Label htmlFor="password">Password</Label>
+                  <Label htmlFor="password">Senha</Label>
                   <div className="relative">
                     <Input
                       id="password"
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Enter your password"
+                      placeholder="Digite sua senha"
                       disabled={isSubmitting}
                       className="pr-10"
                     />
@@ -197,14 +197,14 @@ export default function Auth() {
                     onClick={() => setMode('forgot')}
                     className="text-sm text-primary hover:underline"
                   >
-                    Forgot password?
+                    Esqueceu a senha?
                   </button>
                 </div>
               )}
 
               <Button type="submit" className="w-full" disabled={isSubmitting}>
-                {isSubmitting ? 'Please wait...' : (
-                  mode === 'login' ? 'Sign in' : 'Send reset link'
+                {isSubmitting ? 'Aguarde...' : (
+                  mode === 'login' ? 'Entrar' : 'Enviar link de recuperação'
                 )}
               </Button>
             </form>
@@ -212,7 +212,7 @@ export default function Auth() {
             <div className="mt-6 text-center text-sm">
               {mode === 'login' && (
                 <p className="text-muted-foreground">
-                  Access is by invitation only. Contact your administrator.
+                  O acesso é apenas por convite. Entre em contato com seu administrador.
                 </p>
               )}
               {mode === 'forgot' && (
@@ -220,7 +220,7 @@ export default function Auth() {
                   onClick={() => setMode('login')} 
                   className="inline-flex items-center gap-1 text-primary hover:underline"
                 >
-                  <ArrowLeft className="h-3 w-3" /> Back to login
+                  <ArrowLeft className="h-3 w-3" /> Voltar ao login
                 </button>
               )}
             </div>

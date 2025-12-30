@@ -32,14 +32,20 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { label: 'Dashboards', href: '/dashboards', icon: LayoutDashboard },
-  { label: 'Tenants', href: '/admin/tenants', icon: Building2, adminOnly: true },
-  { label: 'Users', href: '/admin/users', icon: Users, adminOnly: true },
-  { label: 'Manage Dashboards', href: '/admin/dashboards', icon: BarChart3, adminOnly: true },
-  { label: 'Activity Logs', href: '/admin/activity-logs', icon: Activity, adminOnly: true },
+  { label: 'Clientes', href: '/admin/tenants', icon: Building2, adminOnly: true },
+  { label: 'Usuários', href: '/admin/users', icon: Users, adminOnly: true },
+  { label: 'Gerenciar Dashboards', href: '/admin/dashboards', icon: BarChart3, adminOnly: true },
+  { label: 'Logs de Atividade', href: '/admin/activity-logs', icon: Activity, adminOnly: true },
 ];
 
-// Manager allowed routes (subset of admin)
+// Rotas permitidas para manager (subconjunto de admin)
 const managerAllowedRoutes = ['/admin/users', '/admin/dashboards', '/admin/activity-logs'];
+
+const roleLabels: Record<string, string> = {
+  admin: 'Administrador',
+  manager: 'Gestor',
+  viewer: 'Visualizador'
+};
 
 export default function AppLayout() {
   const { user, userRole, signOut } = useAuth();
@@ -63,7 +69,7 @@ export default function AppLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Mobile sidebar overlay */}
+      {/* Overlay do sidebar mobile */}
       {sidebarOpen && (
         <div 
           className="fixed inset-0 z-40 bg-foreground/20 backdrop-blur-sm lg:hidden"
@@ -93,7 +99,7 @@ export default function AppLayout() {
             </button>
           </div>
 
-          {/* Navigation */}
+          {/* Navegação */}
           <nav className="flex-1 space-y-1 px-3 py-4">
             {filteredNavItems.map((item) => {
               const isActive = location.pathname === item.href || 
@@ -120,7 +126,7 @@ export default function AppLayout() {
             })}
           </nav>
 
-          {/* User section */}
+          {/* Seção do usuário */}
           <div className="border-t border-sidebar-border p-4">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -130,7 +136,7 @@ export default function AppLayout() {
                   </div>
                   <div className="flex-1 text-left">
                     <p className="font-medium truncate">{user?.email}</p>
-                    <p className="text-xs text-sidebar-foreground/60 capitalize">{userRole}</p>
+                    <p className="text-xs text-sidebar-foreground/60">{userRole ? roleLabels[userRole] || userRole : 'Usuário'}</p>
                   </div>
                   <ChevronDown className="h-4 w-4 text-sidebar-foreground/60" />
                 </button>
@@ -138,12 +144,12 @@ export default function AppLayout() {
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuItem onClick={() => navigate('/account')}>
                   <User className="mr-2 h-4 w-4" />
-                  Account
+                  Conta
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={handleSignOut} className="text-destructive focus:text-destructive">
                   <LogOut className="mr-2 h-4 w-4" />
-                  Sign Out
+                  Sair
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -151,9 +157,9 @@ export default function AppLayout() {
         </div>
       </aside>
 
-      {/* Main content */}
+      {/* Conteúdo principal */}
       <main className="flex flex-1 flex-col overflow-hidden">
-        {/* Top bar */}
+        {/* Barra superior */}
         <header className="flex h-16 items-center gap-4 border-b bg-card px-4 lg:px-6">
           <button
             onClick={() => setSidebarOpen(true)}
@@ -164,7 +170,7 @@ export default function AppLayout() {
           <div className="flex-1" />
         </header>
 
-        {/* Page content */}
+        {/* Conteúdo da página */}
         <div className="flex-1 overflow-auto p-4 lg:p-6">
           <Outlet />
         </div>

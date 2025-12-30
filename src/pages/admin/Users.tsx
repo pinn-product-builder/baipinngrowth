@@ -48,6 +48,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { format } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 interface Tenant {
   id: string;
@@ -76,6 +77,12 @@ interface PendingInvite {
 }
 
 type AppRole = 'admin' | 'manager' | 'viewer';
+
+const roleLabels: Record<string, string> = {
+  admin: 'Administrador',
+  manager: 'Gestor',
+  viewer: 'Visualizador'
+};
 
 export default function Users() {
   const { userRole, tenantId: currentUserTenantId } = useAuth();
@@ -121,7 +128,7 @@ export default function Users() {
     
     setFilteredUsers(filtered);
 
-    // Filter invites
+    // Filtrar convites
     let filteredInv = pendingInvites;
     if (searchQuery) {
       filteredInv = filteredInv.filter(i => 
@@ -136,7 +143,7 @@ export default function Users() {
 
   const fetchData = async () => {
     try {
-      // Fetch tenants (admin sees all, manager sees only their own)
+      // Buscar clientes (admin vê todos, manager vê apenas o seu)
       let tenantsQuery = supabase
         .from('tenants')
         .select('id, name')
@@ -150,7 +157,7 @@ export default function Users() {
       const { data: tenantsData } = await tenantsQuery;
       setTenants(tenantsData || []);
 
-      // Fetch profiles with tenant info
+      // Buscar perfis com info do cliente
       const { data: profilesData, error: profilesError } = await supabase
         .from('profiles')
         .select(`
@@ -166,12 +173,12 @@ export default function Users() {
 
       if (profilesError) throw profilesError;
 
-      // Fetch user roles separately
+      // Buscar roles dos usuários separadamente
       const { data: rolesData } = await supabase
         .from('user_roles')
         .select('user_id, role');
 
-      // Combine the data
+      // Combinar os dados
       const combinedUsers: UserProfile[] = (profilesData || []).map((profile: any) => {
         const userRole = rolesData?.find(r => r.user_id === profile.id);
         return {
@@ -188,7 +195,7 @@ export default function Users() {
 
       setUsers(combinedUsers);
 
-      // Fetch pending invites
+      // Buscar convites pendentes
       const { data: invitesData } = await supabase
         .from('user_invites')
         .select(`
@@ -216,8 +223,8 @@ export default function Users() {
 
       setPendingInvites(formattedInvites);
     } catch (error) {
-      console.error('Error fetching data:', error);
-      toast({ title: 'Error', description: 'Failed to load users.', variant: 'destructive' });
+      console.error('Erro ao buscar dados:', error);
+      toast({ title: 'Erro', description: 'Falha ao carregar usuários.', variant: 'destructive' });
     } finally {
       setIsLoading(false);
     }
@@ -227,15 +234,15 @@ export default function Users() {
     e.preventDefault();
     if (!formData.email.trim()) return;
     
-    // Validate non-admin has tenant
+    // Validar se não-admin tem cliente
     if (formData.role !== 'admin' && !formData.tenantId) {
-      toast({ title: 'Tenant required', description: 'Non-admin users must be assigned to a tenant.', variant: 'destructive' });
+      toast({ title: 'Cliente obrigatório', description: 'Usuários não-admin devem ser atribuídos a um cliente.', variant: 'destructive' });
       return;
     }
 
-    // Managers cannot create admins
+    // Managers não podem criar admins
     if (isManager && formData.role === 'admin') {
-      toast({ title: 'Permission denied', description: 'Managers cannot create admin users.', variant: 'destructive' });
+      toast({ title: 'Permissão negada', description: 'Gestores não podem criar usuários administradores.', variant: 'destructive' });
       return;
     }
 
@@ -253,12 +260,12 @@ export default function Users() {
       if (error) throw error;
       if (data.error) throw new Error(data.error);
 
-      toast({ title: 'Invite sent', description: `Invitation sent to ${formData.email}` });
+      toast({ title: 'Convite enviado', description: `Convite enviado para ${formData.email}` });
       setIsDialogOpen(false);
       setFormData({ email: '', fullName: '', tenantId: isManager ? currentUserTenantId || '' : '', role: 'viewer' });
       fetchData();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     } finally {
       setIsSubmitting(false);
     }
@@ -277,10 +284,10 @@ export default function Users() {
       if (error) throw error;
       if (data.error) throw new Error(data.error);
 
-      toast({ title: 'Invite resent', description: `New invitation sent to ${invite.email}` });
+      toast({ title: 'Convite reenviado', description: `Novo convite enviado para ${invite.email}` });
       fetchData();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     }
   };
 
@@ -295,20 +302,20 @@ export default function Users() {
       if (error) throw error;
       logActivity(user.is_active ? 'deactivate_user' : 'create_user', 'user', user.id, { name: user.full_name });
       toast({ 
-        title: user.is_active ? 'User deactivated' : 'User activated',
-        description: `Account is now ${user.is_active ? 'inactive' : 'active'}.`
+        title: user.is_active ? 'Usuário desativado' : 'Usuário ativado',
+        description: `A conta agora está ${user.is_active ? 'inativa' : 'ativa'}.`
       });
       fetchData();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     }
   };
 
   const getStatusBadge = (user: UserProfile) => {
     if (!user.is_active) {
-      return <StatusBadge variant="inactive">Disabled</StatusBadge>;
+      return <StatusBadge variant="inactive">Desativado</StatusBadge>;
     }
-    return <StatusBadge variant="active">Active</StatusBadge>;
+    return <StatusBadge variant="active">Ativo</StatusBadge>;
   };
 
   const getRoleBadgeColor = (role: string | null) => {
@@ -321,27 +328,27 @@ export default function Users() {
   };
 
   if (isLoading) {
-    return <LoadingPage message="Loading users..." />;
+    return <LoadingPage message="Carregando usuários..." />;
   }
 
   return (
     <div className="space-y-6 animate-fade-in">
       <PageHeader 
-        title="Users" 
-        description="Manage user accounts and invitations"
+        title="Usuários" 
+        description="Gerencie contas de usuários e convites"
         actions={
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button>
                 <UserPlus className="mr-2 h-4 w-4" />
-                Invite User
+                Convidar Usuário
               </Button>
             </DialogTrigger>
             <DialogContent>
               <form onSubmit={handleSubmit}>
                 <DialogHeader>
-                  <DialogTitle>Invite User</DialogTitle>
-                  <DialogDescription>Send an invitation to join the platform.</DialogDescription>
+                  <DialogTitle>Convidar Usuário</DialogTitle>
+                  <DialogDescription>Envie um convite para ingressar na plataforma.</DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                   <div className="space-y-2">
@@ -351,44 +358,44 @@ export default function Users() {
                       type="email"
                       value={formData.email}
                       onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                      placeholder="user@example.com"
+                      placeholder="usuario@exemplo.com"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="fullName">Full Name (optional)</Label>
+                    <Label htmlFor="fullName">Nome Completo (opcional)</Label>
                     <Input
                       id="fullName"
                       value={formData.fullName}
                       onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
-                      placeholder="User's full name"
+                      placeholder="Nome completo do usuário"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="role">Role</Label>
+                    <Label htmlFor="role">Perfil</Label>
                     <Select 
                       value={formData.role} 
                       onValueChange={(v) => setFormData({ ...formData, role: v as AppRole })}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select role" />
+                        <SelectValue placeholder="Selecione o perfil" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="viewer">Viewer (read-only)</SelectItem>
-                        <SelectItem value="manager">Manager (tenant admin)</SelectItem>
-                        {isAdmin && <SelectItem value="admin">Admin (global)</SelectItem>}
+                        <SelectItem value="viewer">Visualizador (somente leitura)</SelectItem>
+                        <SelectItem value="manager">Gestor (admin do cliente)</SelectItem>
+                        {isAdmin && <SelectItem value="admin">Administrador (global)</SelectItem>}
                       </SelectContent>
                     </Select>
                   </div>
                   {formData.role !== 'admin' && (
                     <div className="space-y-2">
-                      <Label htmlFor="tenant">Tenant (required for non-admin)</Label>
+                      <Label htmlFor="tenant">Cliente (obrigatório para não-admin)</Label>
                       <Select 
                         value={formData.tenantId} 
                         onValueChange={(v) => setFormData({ ...formData, tenantId: v })}
                         disabled={isManager}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Select tenant" />
+                          <SelectValue placeholder="Selecione o cliente" />
                         </SelectTrigger>
                         <SelectContent>
                           {tenants.map((t) => (
@@ -401,11 +408,11 @@ export default function Users() {
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Cancel
+                    Cancelar
                   </Button>
                   <Button type="submit" disabled={isSubmitting}>
                     <Send className="mr-2 h-4 w-4" />
-                    {isSubmitting ? 'Sending...' : 'Send Invite'}
+                    {isSubmitting ? 'Enviando...' : 'Enviar Convite'}
                   </Button>
                 </DialogFooter>
               </form>
@@ -414,12 +421,12 @@ export default function Users() {
         }
       />
 
-      {/* Filters */}
+      {/* Filtros */}
       <div className="flex flex-col gap-3 sm:flex-row">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search users or invites..."
+            placeholder="Buscar usuários ou convites..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
@@ -428,10 +435,10 @@ export default function Users() {
         {isAdmin && (
           <Select value={filterTenant} onValueChange={setFilterTenant}>
             <SelectTrigger className="w-[200px]">
-              <SelectValue placeholder="Filter by tenant" />
+              <SelectValue placeholder="Filtrar por cliente" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Tenants</SelectItem>
+              <SelectItem value="all">Todos os Clientes</SelectItem>
               {tenants.map((t) => (
                 <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
               ))}
@@ -440,16 +447,16 @@ export default function Users() {
         )}
       </div>
 
-      {/* Tabs */}
+      {/* Abas */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="users" className="gap-2">
             <UsersIcon className="h-4 w-4" />
-            Users ({filteredUsers.length})
+            Usuários ({filteredUsers.length})
           </TabsTrigger>
           <TabsTrigger value="invites" className="gap-2">
             <Mail className="h-4 w-4" />
-            Pending Invites ({filteredInvites.length})
+            Convites Pendentes ({filteredInvites.length})
           </TabsTrigger>
         </TabsList>
 
@@ -457,39 +464,39 @@ export default function Users() {
           {filteredUsers.length === 0 ? (
             <EmptyState
               icon={<UsersIcon className="h-6 w-6 text-muted-foreground" />}
-              title={searchQuery || filterTenant !== 'all' ? 'No users found' : 'No users yet'}
-              description={searchQuery || filterTenant !== 'all' ? 'Try adjusting your filters.' : 'Invite your first user to get started.'}
+              title={searchQuery || filterTenant !== 'all' ? 'Nenhum usuário encontrado' : 'Nenhum usuário ainda'}
+              description={searchQuery || filterTenant !== 'all' ? 'Tente ajustar seus filtros.' : 'Convide seu primeiro usuário para começar.'}
             />
           ) : (
             <div className="rounded-lg border bg-card">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Tenant</TableHead>
-                    <TableHead>Role</TableHead>
+                    <TableHead>Nome</TableHead>
+                    <TableHead>Cliente</TableHead>
+                    <TableHead>Perfil</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Created</TableHead>
+                    <TableHead>Criado</TableHead>
                     <TableHead className="w-[50px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredUsers.map((user) => (
                     <TableRow key={user.id}>
-                      <TableCell className="font-medium">{user.full_name || 'No name'}</TableCell>
+                      <TableCell className="font-medium">{user.full_name || 'Sem nome'}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {user.tenant_name || '-'}
                       </TableCell>
                       <TableCell>
                         <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
-                          {user.role || 'No role'}
+                          {user.role ? roleLabels[user.role] || user.role : 'Sem perfil'}
                         </span>
                       </TableCell>
                       <TableCell>
                         {getStatusBadge(user)}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
-                        {format(new Date(user.created_at), 'dd MMM yyyy')}
+                        {format(new Date(user.created_at), 'dd MMM yyyy', { locale: ptBR })}
                       </TableCell>
                       <TableCell>
                         <DropdownMenu>
@@ -501,7 +508,7 @@ export default function Users() {
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => toggleUserStatus(user)}>
                               <Power className="mr-2 h-4 w-4" />
-                              {user.is_active ? 'Disable' : 'Enable'}
+                              {user.is_active ? 'Desativar' : 'Ativar'}
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -518,8 +525,8 @@ export default function Users() {
           {filteredInvites.length === 0 ? (
             <EmptyState
               icon={<Mail className="h-6 w-6 text-muted-foreground" />}
-              title={searchQuery || filterTenant !== 'all' ? 'No invites found' : 'No pending invites'}
-              description={searchQuery || filterTenant !== 'all' ? 'Try adjusting your filters.' : 'All invitations have been accepted or expired.'}
+              title={searchQuery || filterTenant !== 'all' ? 'Nenhum convite encontrado' : 'Nenhum convite pendente'}
+              description={searchQuery || filterTenant !== 'all' ? 'Tente ajustar seus filtros.' : 'Todos os convites foram aceitos ou expiraram.'}
             />
           ) : (
             <div className="rounded-lg border bg-card">
@@ -527,10 +534,10 @@ export default function Users() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Email</TableHead>
-                    <TableHead>Tenant</TableHead>
-                    <TableHead>Role</TableHead>
-                    <TableHead>Expires</TableHead>
-                    <TableHead>Sent</TableHead>
+                    <TableHead>Cliente</TableHead>
+                    <TableHead>Perfil</TableHead>
+                    <TableHead>Expira</TableHead>
+                    <TableHead>Enviado</TableHead>
                     <TableHead className="w-[50px]"></TableHead>
                   </TableRow>
                 </TableHeader>
@@ -543,22 +550,22 @@ export default function Users() {
                       </TableCell>
                       <TableCell>
                         <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${getRoleBadgeColor(invite.role)}`}>
-                          {invite.role}
+                          {roleLabels[invite.role] || invite.role}
                         </span>
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5 text-muted-foreground">
                           <Clock className="h-3.5 w-3.5" />
-                          {format(new Date(invite.expires_at), 'dd MMM HH:mm')}
+                          {format(new Date(invite.expires_at), 'dd MMM HH:mm', { locale: ptBR })}
                         </div>
                       </TableCell>
                       <TableCell className="text-muted-foreground">
-                        {format(new Date(invite.created_at), 'dd MMM yyyy')}
+                        {format(new Date(invite.created_at), 'dd MMM yyyy', { locale: ptBR })}
                       </TableCell>
                       <TableCell>
                         <Button variant="ghost" size="sm" onClick={() => resendInvite(invite)}>
                           <Send className="mr-1 h-3.5 w-3.5" />
-                          Resend
+                          Reenviar
                         </Button>
                       </TableCell>
                     </TableRow>
