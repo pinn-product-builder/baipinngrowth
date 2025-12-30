@@ -20,7 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Activity, Search } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, subDays } from 'date-fns';
 
 interface Tenant {
   id: string;
@@ -38,6 +38,8 @@ interface ActivityLog {
   user_name?: string;
 }
 
+type PeriodFilter = 'all' | '7' | '30' | '90';
+
 export default function ActivityLogs() {
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [filteredLogs, setFilteredLogs] = useState<ActivityLog[]>([]);
@@ -45,10 +47,11 @@ export default function ActivityLogs() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterAction, setFilterAction] = useState<string>('all');
+  const [filterPeriod, setFilterPeriod] = useState<PeriodFilter>('30');
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [filterPeriod]);
 
   useEffect(() => {
     let filtered = logs;
@@ -69,6 +72,7 @@ export default function ActivityLogs() {
   }, [logs, searchQuery, filterAction]);
 
   const fetchData = async () => {
+    setIsLoading(true);
     try {
       const { data: tenantsData } = await supabase
         .from('tenants')
@@ -77,11 +81,19 @@ export default function ActivityLogs() {
       
       setTenants(tenantsData || []);
 
-      const { data: logsData, error } = await supabase
+      let query = supabase
         .from('activity_logs')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(500);
+        .limit(1000);
+
+      // Apply period filter
+      if (filterPeriod !== 'all') {
+        const daysAgo = subDays(new Date(), parseInt(filterPeriod));
+        query = query.gte('created_at', daysAgo.toISOString());
+      }
+
+      const { data: logsData, error } = await query;
 
       if (error) throw error;
 
@@ -134,7 +146,7 @@ export default function ActivityLogs() {
       />
 
       {/* Filters */}
-      <div className="flex flex-col gap-3 sm:flex-row">
+      <div className="flex flex-col gap-3 sm:flex-row flex-wrap">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -145,7 +157,7 @@ export default function ActivityLogs() {
           />
         </div>
         <Select value={filterAction} onValueChange={setFilterAction}>
-          <SelectTrigger className="w-[200px]">
+          <SelectTrigger className="w-[180px]">
             <SelectValue placeholder="Filter by action" />
           </SelectTrigger>
           <SelectContent>
@@ -153,6 +165,17 @@ export default function ActivityLogs() {
             {uniqueActions.map((action) => (
               <SelectItem key={action} value={action}>{action.replace(/_/g, ' ')}</SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+        <Select value={filterPeriod} onValueChange={(v) => setFilterPeriod(v as PeriodFilter)}>
+          <SelectTrigger className="w-[150px]">
+            <SelectValue placeholder="Period" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="7">Last 7 days</SelectItem>
+            <SelectItem value="30">Last 30 days</SelectItem>
+            <SelectItem value="90">Last 90 days</SelectItem>
+            <SelectItem value="all">All time</SelectItem>
           </SelectContent>
         </Select>
       </div>

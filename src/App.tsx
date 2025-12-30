@@ -7,6 +7,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppLayout from "@/components/layouts/AppLayout";
 import Auth from "@/pages/Auth";
+import Setup from "@/pages/Setup";
 import ChangePassword from "@/pages/ChangePassword";
 import Dashboards from "@/pages/Dashboards";
 import DashboardView from "@/pages/DashboardView";
@@ -28,6 +29,7 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/auth" element={<Auth />} />
+            <Route path="/setup" element={<Setup />} />
             <Route path="/change-password" element={
               <ProtectedRoute>
                 <ChangePassword />

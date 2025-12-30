@@ -7,7 +7,7 @@ import { LoadingPage, LoadingSpinner } from '@/components/ui/loading-spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useToast } from '@/hooks/use-toast';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
-import { ArrowLeft, RefreshCw, Clock, AlertCircle, FileText, ExternalLink, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Clock, AlertCircle, FileText, ExternalLink, AlertTriangle, Copy, CheckCheck } from 'lucide-react';
 import { format } from 'date-fns';
 
 interface Dashboard {
@@ -21,7 +21,10 @@ interface Dashboard {
 
 type ContentType = 'iframe' | 'html' | 'json' | 'unknown';
 type LoadState = 'loading' | 'success' | 'error' | 'empty';
-type ErrorType = 'generic' | 'cors' | 'iframe_blocked' | 'network';
+type ErrorType = 'generic' | 'cors' | 'iframe_blocked' | 'network' | 'timeout';
+
+const FETCH_TIMEOUT = 15000; // 15 seconds
+const MAX_RETRIES = 2;
 
 export default function DashboardView() {
   const { id } = useParams<{ id: string }>();
@@ -38,6 +41,8 @@ export default function DashboardView() {
   const [iframeError, setIframeError] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorType, setErrorType] = useState<ErrorType>('generic');
+  const [retryCount, setRetryCount] = useState(0);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     fetchDashboard();
@@ -69,6 +74,7 @@ export default function DashboardView() {
     setLoadState('loading');
     setIframeError(false);
     setErrorType('generic');
+    setRetryCount(0);
     
     const displayType = dash.display_type;
 
@@ -78,17 +84,48 @@ export default function DashboardView() {
       setLoadState('success');
       setLastUpdated(new Date());
       setIsLoading(false);
+      
+      // Log success
+      await updateDashboardHealth(dash.id, 'ok', null);
       return;
     }
 
     // Otherwise fetch content
-    await fetchContent(dash);
+    await fetchContentWithRetry(dash, 1);
   }, []);
 
-  const fetchContent = async (dash: Dashboard) => {
+  const fetchWithTimeout = async (url: string, timeout: number): Promise<Response> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  };
+
+  const updateDashboardHealth = async (dashboardId: string, status: 'ok' | 'error', errorMessage: string | null) => {
+    await supabase
+      .from('dashboards')
+      .update({ 
+        last_fetched_at: new Date().toISOString(),
+        last_health_status: status,
+        last_health_check_at: new Date().toISOString(),
+        last_error_message: errorMessage
+      })
+      .eq('id', dashboardId);
+  };
+
+  const fetchContentWithRetry = async (dash: Dashboard, attempt: number) => {
+    setRetryCount(attempt);
+    
     try {
       setIsRefreshing(true);
-      const response = await fetch(dash.webhook_url);
+      const response = await fetchWithTimeout(dash.webhook_url, FETCH_TIMEOUT);
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -100,45 +137,55 @@ export default function DashboardView() {
         const jsonData = await response.json();
         if (!jsonData || (Array.isArray(jsonData) && jsonData.length === 0) || Object.keys(jsonData).length === 0) {
           setLoadState('empty');
+          await updateDashboardHealth(dash.id, 'ok', null);
         } else {
           setContent(jsonData);
           setContentType('json');
           setLoadState('success');
+          await updateDashboardHealth(dash.id, 'ok', null);
         }
       } else {
         const htmlContent = await response.text();
         if (!htmlContent.trim()) {
           setLoadState('empty');
+          await updateDashboardHealth(dash.id, 'ok', null);
         } else {
           setContent(htmlContent);
           setContentType('html');
           setLoadState('success');
+          await updateDashboardHealth(dash.id, 'ok', null);
         }
       }
       
       setLastUpdated(new Date());
 
-      // Update last_fetched_at in database
-      await supabase
-        .from('dashboards')
-        .update({ last_fetched_at: new Date().toISOString() })
-        .eq('id', dash.id);
-
     } catch (error: unknown) {
       console.error('Error loading content:', error);
       
-      // Detect error type
-      const errorMessage = error instanceof Error ? error.message : '';
-      if (errorMessage.includes('CORS') || errorMessage.includes('Failed to fetch')) {
-        setErrorType('cors');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      let detectedErrorType: ErrorType = 'generic';
+      
+      if (error instanceof Error && error.name === 'AbortError') {
+        detectedErrorType = 'timeout';
+      } else if (errorMessage.includes('CORS') || errorMessage.includes('Failed to fetch')) {
+        detectedErrorType = 'cors';
       } else if (errorMessage.includes('NetworkError')) {
-        setErrorType('network');
+        detectedErrorType = 'network';
       }
       
+      // Retry if not max attempts
+      if (attempt < MAX_RETRIES) {
+        await fetchContentWithRetry(dash, attempt + 1);
+        return;
+      }
+      
+      setErrorType(detectedErrorType);
       setLoadState('error');
+      await updateDashboardHealth(dash.id, 'error', errorMessage.slice(0, 200));
       logActivity('dashboard_load_error', 'dashboard', dash.id, { 
         error: errorMessage,
-        type: errorType 
+        type: detectedErrorType,
+        attempts: attempt
       });
     } finally {
       setIsRefreshing(false);
@@ -156,7 +203,7 @@ export default function DashboardView() {
     });
     // Fallback to fetch if iframe fails
     if (dashboard) {
-      fetchContent(dashboard);
+      fetchContentWithRetry(dashboard, 1);
     }
   };
 
@@ -166,7 +213,7 @@ export default function DashboardView() {
         // Force iframe reload by updating lastUpdated
         setLastUpdated(new Date());
       } else {
-        fetchContent(dashboard);
+        fetchContentWithRetry(dashboard, 1);
       }
     }
   };
@@ -177,22 +224,40 @@ export default function DashboardView() {
     }
   };
 
+  const handleCopyLink = async () => {
+    if (dashboard) {
+      try {
+        await navigator.clipboard.writeText(window.location.href);
+        setCopied(true);
+        toast({ title: 'Link copied', description: 'Dashboard link copied to clipboard.' });
+        setTimeout(() => setCopied(false), 2000);
+      } catch {
+        toast({ title: 'Copy failed', description: 'Could not copy link.', variant: 'destructive' });
+      }
+    }
+  };
+
   const getErrorMessage = () => {
     switch (errorType) {
       case 'cors':
         return {
           title: 'CORS blocked',
-          description: 'The endpoint is blocking cross-origin requests. Adjust CORS headers on the webhook server, or use "Open in new tab".'
+          description: 'CORS blocked on the endpoint. Adjust headers on the webhook server, or use "Open in new tab".'
         };
       case 'iframe_blocked':
         return {
           title: 'Embed blocked',
-          description: 'X-Frame-Options or CSP is blocking the embed. Use "Open in new tab" to view.'
+          description: 'X-Frame-Options or CSP is blocking the embed. Use "Open in new tab" or fallback.'
         };
       case 'network':
         return {
           title: 'Network error',
           description: 'Could not connect to the server. Check your internet connection.'
+        };
+      case 'timeout':
+        return {
+          title: 'Timeout',
+          description: `Request timed out after ${FETCH_TIMEOUT / 1000} seconds. The server may be slow or unresponsive.`
         };
       default:
         return {
@@ -239,22 +304,37 @@ export default function DashboardView() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           {lastUpdated && (
-            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground mr-2">
               <Clock className="h-4 w-4" />
-              <span>Last updated: {format(lastUpdated, 'HH:mm:ss')}</span>
+              <span>Updated: {format(lastUpdated, 'HH:mm:ss')}</span>
             </div>
+          )}
+          {retryCount > 1 && loadState === 'loading' && (
+            <span className="text-xs text-muted-foreground mr-2">
+              Attempt {retryCount}/{MAX_RETRIES}
+            </span>
           )}
           <Button 
             variant="outline" 
+            size="sm"
+            onClick={handleCopyLink}
+          >
+            {copied ? <CheckCheck className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+            {copied ? 'Copied' : 'Copy link'}
+          </Button>
+          <Button 
+            variant="outline"
+            size="sm"
             onClick={handleOpenInNewTab}
           >
             <ExternalLink className="mr-2 h-4 w-4" />
             Open in new tab
           </Button>
           <Button 
-            variant="outline" 
+            variant="outline"
+            size="sm"
             onClick={handleRefresh}
             disabled={isRefreshing}
           >
@@ -267,8 +347,11 @@ export default function DashboardView() {
       {/* Content */}
       <div className="flex-1 min-h-0">
         {loadState === 'loading' && (
-          <div className="flex h-full items-center justify-center rounded-lg border bg-card">
+          <div className="flex h-full flex-col items-center justify-center rounded-lg border bg-card gap-2">
             <LoadingSpinner size="lg" />
+            {retryCount > 1 && (
+              <p className="text-sm text-muted-foreground">Attempt {retryCount}/{MAX_RETRIES}...</p>
+            )}
           </div>
         )}
 

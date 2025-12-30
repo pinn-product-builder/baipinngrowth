@@ -34,7 +34,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
-import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown } from 'lucide-react';
+import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown, Copy } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -225,6 +225,31 @@ export default function AdminDashboards() {
         title: dashboard.is_active ? 'Dashboard deactivated' : 'Dashboard activated',
         description: `${dashboard.name} is now ${dashboard.is_active ? 'inactive' : 'active'}.`
       });
+      fetchData();
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    }
+  };
+
+  const duplicateDashboard = async (dashboard: Dashboard) => {
+    try {
+      const { data, error } = await supabase
+        .from('dashboards')
+        .insert({
+          tenant_id: dashboard.tenant_id,
+          name: `${dashboard.name} (Copy)`,
+          description: dashboard.description,
+          webhook_url: dashboard.webhook_url,
+          display_type: dashboard.display_type,
+          display_order: dashboard.display_order + 1,
+          is_active: false
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      logActivity('create_dashboard', 'dashboard', data.id, { name: data.name, duplicated_from: dashboard.id });
+      toast({ title: 'Dashboard duplicated', description: 'Copy created successfully. Edit and activate when ready.' });
       fetchData();
     } catch (error: any) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
@@ -535,6 +560,10 @@ export default function AdminDashboards() {
                         <DropdownMenuItem onClick={() => window.open(dashboard.webhook_url, '_blank')}>
                           <ExternalLink className="mr-2 h-4 w-4" />
                           Open URL
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => duplicateDashboard(dashboard)}>
+                          <Copy className="mr-2 h-4 w-4" />
+                          Duplicate
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => toggleDashboardStatus(dashboard)}>
                           <Power className="mr-2 h-4 w-4" />
