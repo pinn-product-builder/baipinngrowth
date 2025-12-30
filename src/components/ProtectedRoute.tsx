@@ -1,5 +1,5 @@
 import { Navigate, useLocation } from 'react-router-dom';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth, UserRole } from '@/contexts/AuthContext';
 import { LoadingPage } from '@/components/ui/loading-spinner';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -7,10 +7,10 @@ import { AlertTriangle } from 'lucide-react';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
-  requireAdmin?: boolean;
+  allowedRoles?: UserRole[];
 }
 
-export default function ProtectedRoute({ children, requireAdmin = false }: ProtectedRouteProps) {
+export default function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
   const { user, userRole, tenantActive, passwordChanged, isLoading, signOut } = useAuth();
   const location = useLocation();
 
@@ -27,8 +27,8 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
     return <Navigate to="/change-password" replace />;
   }
 
-  // Block if tenant is inactive (only for client users with a tenant)
-  if (userRole === 'client' && tenantActive === false) {
+  // Block if tenant is inactive (only for non-admin users with a tenant)
+  if (userRole !== 'admin' && tenantActive === false) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-4">
         <Card className="max-w-md">
@@ -58,7 +58,8 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
     );
   }
 
-  if (requireAdmin && userRole !== 'admin') {
+  // Check role-based access
+  if (allowedRoles && userRole && !allowedRoles.includes(userRole)) {
     return <Navigate to="/dashboards" replace />;
   }
 
