@@ -33,7 +33,8 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { useActivityLogger } from '@/hooks/useActivityLogger';
+import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,6 +58,8 @@ interface Dashboard {
   is_active: boolean;
   display_order: number;
   created_at: string;
+  last_health_status: string | null;
+  last_health_check_at: string | null;
   tenants?: { name: string } | null;
 }
 
@@ -82,6 +85,7 @@ export default function AdminDashboards() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [healthChecks, setHealthChecks] = useState<Record<string, HealthStatus>>({});
   const { toast } = useToast();
+  const { logActivity } = useActivityLogger();
 
   useEffect(() => {
     fetchData();
@@ -154,13 +158,17 @@ export default function AdminDashboards() {
           .eq('id', editingDashboard.id);
 
         if (error) throw error;
+        logActivity('update_dashboard', 'dashboard', editingDashboard.id, { name: formData.name });
         toast({ title: 'Dashboard updated', description: 'Changes saved successfully.' });
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('dashboards')
-          .insert(payload);
+          .insert(payload)
+          .select()
+          .single();
 
         if (error) throw error;
+        logActivity('create_dashboard', 'dashboard', data.id, { name: formData.name });
         toast({ title: 'Dashboard created', description: 'New dashboard added successfully.' });
       }
       
@@ -212,6 +220,7 @@ export default function AdminDashboards() {
         .eq('id', dashboard.id);
 
       if (error) throw error;
+      logActivity(dashboard.is_active ? 'deactivate_dashboard' : 'create_dashboard', 'dashboard', dashboard.id, { name: dashboard.name });
       toast({ 
         title: dashboard.is_active ? 'Dashboard deactivated' : 'Dashboard activated',
         description: `${dashboard.name} is now ${dashboard.is_active ? 'inactive' : 'active'}.`
@@ -225,23 +234,54 @@ export default function AdminDashboards() {
   const checkHealth = async (dashboard: Dashboard) => {
     setHealthChecks(prev => ({ ...prev, [dashboard.id]: 'checking' }));
     
+    let status: 'ok' | 'error' = 'error';
+    
     try {
       const response = await fetch(dashboard.webhook_url, { method: 'HEAD' });
-      setHealthChecks(prev => ({ ...prev, [dashboard.id]: response.ok ? 'success' : 'error' }));
+      status = response.ok ? 'ok' : 'error';
     } catch {
       // Try GET as fallback
       try {
         const response = await fetch(dashboard.webhook_url);
-        setHealthChecks(prev => ({ ...prev, [dashboard.id]: response.ok ? 'success' : 'error' }));
+        status = response.ok ? 'ok' : 'error';
       } catch {
-        setHealthChecks(prev => ({ ...prev, [dashboard.id]: 'error' }));
+        status = 'error';
       }
     }
 
-    // Reset after 3 seconds
+    // Save health check result to database
+    await supabase
+      .from('dashboards')
+      .update({ 
+        last_health_status: status,
+        last_health_check_at: new Date().toISOString()
+      })
+      .eq('id', dashboard.id);
+
+    setHealthChecks(prev => ({ ...prev, [dashboard.id]: status === 'ok' ? 'success' : 'error' }));
+    fetchData();
+
+    // Reset visual after 3 seconds
     setTimeout(() => {
       setHealthChecks(prev => ({ ...prev, [dashboard.id]: 'idle' }));
     }, 3000);
+  };
+
+  const moveOrder = async (dashboard: Dashboard, direction: 'up' | 'down') => {
+    const currentIndex = filteredDashboards.findIndex(d => d.id === dashboard.id);
+    if (direction === 'up' && currentIndex === 0) return;
+    if (direction === 'down' && currentIndex === filteredDashboards.length - 1) return;
+
+    const swapIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    const swapDashboard = filteredDashboards[swapIndex];
+
+    try {
+      await supabase.from('dashboards').update({ display_order: swapDashboard.display_order }).eq('id', dashboard.id);
+      await supabase.from('dashboards').update({ display_order: dashboard.display_order }).eq('id', swapDashboard.id);
+      fetchData();
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    }
   };
 
   if (isLoading) {
@@ -409,7 +449,7 @@ export default function AdminDashboards() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredDashboards.map((dashboard) => (
+              {filteredDashboards.map((dashboard, index) => (
                 <TableRow key={dashboard.id}>
                   <TableCell>
                     <div>
@@ -429,27 +469,57 @@ export default function AdminDashboards() {
                     </StatusBadge>
                   </TableCell>
                   <TableCell>
-                    <Button 
-                      variant="ghost" 
-                      size="sm"
-                      onClick={() => checkHealth(dashboard)}
-                      disabled={healthChecks[dashboard.id] === 'checking'}
-                    >
-                      {healthChecks[dashboard.id] === 'checking' && (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      )}
-                      {healthChecks[dashboard.id] === 'success' && (
-                        <CheckCircle className="h-4 w-4 text-success" />
-                      )}
-                      {healthChecks[dashboard.id] === 'error' && (
-                        <XCircle className="h-4 w-4 text-destructive" />
-                      )}
-                      {(!healthChecks[dashboard.id] || healthChecks[dashboard.id] === 'idle') && (
-                        <span className="text-xs">Check</span>
-                      )}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        onClick={() => checkHealth(dashboard)}
+                        disabled={healthChecks[dashboard.id] === 'checking'}
+                      >
+                        {healthChecks[dashboard.id] === 'checking' && (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        )}
+                        {healthChecks[dashboard.id] === 'success' && (
+                          <CheckCircle className="h-4 w-4 text-success" />
+                        )}
+                        {healthChecks[dashboard.id] === 'error' && (
+                          <XCircle className="h-4 w-4 text-destructive" />
+                        )}
+                        {(!healthChecks[dashboard.id] || healthChecks[dashboard.id] === 'idle') && (
+                          <>
+                            {dashboard.last_health_status === 'ok' && <CheckCircle className="h-4 w-4 text-success" />}
+                            {dashboard.last_health_status === 'error' && <XCircle className="h-4 w-4 text-destructive" />}
+                            {!dashboard.last_health_status && <span className="text-xs">Check</span>}
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{dashboard.display_order}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <span className="text-muted-foreground">{dashboard.display_order}</span>
+                      <div className="flex flex-col">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => moveOrder(dashboard, 'up')}
+                          disabled={index === 0}
+                        >
+                          <ArrowUp className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5"
+                          onClick={() => moveOrder(dashboard, 'down')}
+                          disabled={index === filteredDashboards.length - 1}
+                        >
+                          <ArrowDown className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  </TableCell>
                   <TableCell>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>

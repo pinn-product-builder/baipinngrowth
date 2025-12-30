@@ -32,7 +32,8 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import { Users as UsersIcon, Plus, Search, MoreHorizontal, Power } from 'lucide-react';
+import { useActivityLogger } from '@/hooks/useActivityLogger';
+import { Users as UsersIcon, Plus, Search, MoreHorizontal, Power, Mail } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -73,6 +74,7 @@ export default function Users() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
+  const { logActivity } = useActivityLogger();
 
   useEffect(() => {
     fetchData();
@@ -151,6 +153,12 @@ export default function Users() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.email.trim() || !formData.password.trim()) return;
+    
+    // Validate client has tenant
+    if (formData.role === 'client' && !formData.tenantId) {
+      toast({ title: 'Tenant required', description: 'Client users must be assigned to a tenant.', variant: 'destructive' });
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -185,6 +193,7 @@ export default function Users() {
 
       if (roleError) throw roleError;
 
+      logActivity('create_user', 'user', userId, { email: formData.email, role: formData.role });
       toast({ title: 'User created', description: 'New user has been added successfully.' });
       setIsDialogOpen(false);
       setFormData({ email: '', password: '', fullName: '', tenantId: '', role: 'client' });
@@ -208,6 +217,7 @@ export default function Users() {
         .eq('id', user.id);
 
       if (error) throw error;
+      logActivity(user.is_active ? 'deactivate_user' : 'create_user', 'user', user.id, { name: user.full_name });
       toast({ 
         title: user.is_active ? 'User deactivated' : 'User activated',
         description: `Account is now ${user.is_active ? 'inactive' : 'active'}.`
@@ -216,6 +226,15 @@ export default function Users() {
     } catch (error: any) {
       toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
+  };
+
+  const sendPasswordReset = async (userId: string, userName: string | null) => {
+    // Get user email from auth - we need to look it up
+    // For now, show a message that this needs to be done via email lookup
+    toast({ 
+      title: 'Password Reset', 
+      description: `To reset password for ${userName || 'this user'}, ask them to use "Forgot password" on the login page.`
+    });
   };
 
   if (isLoading) {
@@ -288,7 +307,7 @@ export default function Users() {
                   </div>
                   {formData.role === 'client' && (
                     <div className="space-y-2">
-                      <Label htmlFor="tenant">Tenant</Label>
+                      <Label htmlFor="tenant">Tenant (required for clients)</Label>
                       <Select 
                         value={formData.tenantId} 
                         onValueChange={(v) => setFormData({ ...formData, tenantId: v })}
@@ -390,6 +409,10 @@ export default function Users() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => sendPasswordReset(user.id, user.full_name)}>
+                          <Mail className="mr-2 h-4 w-4" />
+                          Reset Password
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => toggleUserStatus(user)}>
                           <Power className="mr-2 h-4 w-4" />
                           {user.is_active ? 'Deactivate' : 'Activate'}

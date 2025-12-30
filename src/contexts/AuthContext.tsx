@@ -9,11 +9,15 @@ interface AuthContextType {
   session: Session | null;
   userRole: UserRole;
   tenantId: string | null;
+  tenantActive: boolean | null;
+  passwordChanged: boolean | null;
   isLoading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: Error | null }>;
+  updatePassword: (newPassword: string) => Promise<{ error: Error | null }>;
+  markPasswordChanged: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -23,6 +27,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [userRole, setUserRole] = useState<UserRole>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
+  const [tenantActive, setTenantActive] = useState<boolean | null>(null);
+  const [passwordChanged, setPasswordChanged] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchUserDetails = async (userId: string) => {
@@ -31,21 +37,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .from('user_roles')
       .select('role')
       .eq('user_id', userId)
-      .single();
+      .maybeSingle();
 
     if (roleData) {
       setUserRole(roleData.role as UserRole);
     }
 
-    // Fetch tenant_id from profile
+    // Fetch tenant_id and password_changed from profile
     const { data: profileData } = await supabase
       .from('profiles')
-      .select('tenant_id')
+      .select('tenant_id, password_changed')
       .eq('id', userId)
-      .single();
+      .maybeSingle();
 
     if (profileData) {
       setTenantId(profileData.tenant_id);
+      setPasswordChanged(profileData.password_changed);
+
+      // Check if tenant is active
+      if (profileData.tenant_id) {
+        const { data: tenantData } = await supabase
+          .from('tenants')
+          .select('is_active')
+          .eq('id', profileData.tenant_id)
+          .maybeSingle();
+        
+        setTenantActive(tenantData?.is_active ?? null);
+      } else {
+        setTenantActive(true); // Admins without tenant are always active
+      }
     }
   };
 
@@ -64,6 +84,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } else {
           setUserRole(null);
           setTenantId(null);
+          setTenantActive(null);
+          setPasswordChanged(null);
         }
         setIsLoading(false);
       }
@@ -106,6 +128,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut();
     setUserRole(null);
     setTenantId(null);
+    setTenantActive(null);
+    setPasswordChanged(null);
   };
 
   const resetPassword = async (email: string) => {
@@ -115,17 +139,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error };
   };
 
+  const updatePassword = async (newPassword: string) => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    return { error };
+  };
+
+  const markPasswordChanged = async () => {
+    if (user) {
+      await supabase
+        .from('profiles')
+        .update({ password_changed: true })
+        .eq('id', user.id);
+      setPasswordChanged(true);
+    }
+  };
+
   return (
     <AuthContext.Provider value={{
       user,
       session,
       userRole,
       tenantId,
+      tenantActive,
+      passwordChanged,
       isLoading,
       signIn,
       signUp,
       signOut,
-      resetPassword
+      resetPassword,
+      updatePassword,
+      markPasswordChanged
     }}>
       {children}
     </AuthContext.Provider>
