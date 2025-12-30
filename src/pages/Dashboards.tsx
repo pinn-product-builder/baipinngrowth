@@ -7,7 +7,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { LoadingPage } from '@/components/ui/loading-spinner';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { LayoutDashboard, Clock, ArrowRight } from 'lucide-react';
+import { LayoutDashboard, Clock, ArrowRight, CheckCircle, XCircle, HelpCircle } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 interface Dashboard {
@@ -16,6 +16,8 @@ interface Dashboard {
   description: string | null;
   is_active: boolean;
   last_fetched_at: string | null;
+  last_health_status: string | null;
+  last_health_check_at: string | null;
   updated_at: string;
 }
 
@@ -33,7 +35,7 @@ export default function Dashboards() {
     try {
       const { data, error } = await supabase
         .from('dashboards')
-        .select('id, name, description, is_active, last_fetched_at, updated_at')
+        .select('id, name, description, is_active, last_fetched_at, last_health_status, last_health_check_at, updated_at')
         .eq('is_active', true)
         .order('display_order', { ascending: true });
 
@@ -44,6 +46,22 @@ export default function Dashboards() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const getHealthIcon = (status: string | null, lastCheck: string | null) => {
+    if (!lastCheck) {
+      return <HelpCircle className="h-4 w-4 text-muted-foreground" />;
+    }
+    if (status === 'ok') {
+      return <CheckCircle className="h-4 w-4 text-success" />;
+    }
+    return <XCircle className="h-4 w-4 text-destructive" />;
+  };
+
+  const getHealthLabel = (status: string | null, lastCheck: string | null) => {
+    if (!lastCheck) return 'Never checked';
+    if (status === 'ok') return 'OK';
+    return 'Error';
   };
 
   if (isLoading) {
@@ -76,7 +94,12 @@ export default function Dashboards() {
                   <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
                     <LayoutDashboard className="h-5 w-5 text-primary" />
                   </div>
-                  <StatusBadge variant="active">Active</StatusBadge>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                      {getHealthIcon(dashboard.last_health_status, dashboard.last_health_check_at)}
+                      <span>{getHealthLabel(dashboard.last_health_status, dashboard.last_health_check_at)}</span>
+                    </div>
+                  </div>
                 </div>
                 <CardTitle className="mt-3 text-lg">{dashboard.name}</CardTitle>
                 {dashboard.description && (

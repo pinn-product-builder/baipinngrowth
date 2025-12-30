@@ -14,25 +14,18 @@ const loginSchema = z.object({
   password: z.string().min(6, 'Password must be at least 6 characters'),
 });
 
-const signupSchema = z.object({
-  email: z.string().email('Invalid email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
-  fullName: z.string().min(2, 'Name must be at least 2 characters'),
-});
-
-type AuthMode = 'login' | 'signup' | 'forgot';
+type AuthMode = 'login' | 'forgot';
 
 export default function Auth() {
   const [searchParams] = useSearchParams();
   const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const { user, signIn, signUp, resetPassword } = useAuth();
+  const { user, signIn, resetPassword } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -44,16 +37,13 @@ export default function Auth() {
 
   useEffect(() => {
     const urlMode = searchParams.get('mode');
-    if (urlMode === 'signup') setMode('signup');
-    else if (urlMode === 'forgot' || urlMode === 'reset') setMode('forgot');
+    if (urlMode === 'forgot' || urlMode === 'reset') setMode('forgot');
   }, [searchParams]);
 
   const validateForm = () => {
     setErrors({});
     try {
-      if (mode === 'signup') {
-        signupSchema.parse({ email, password, fullName });
-      } else if (mode === 'login') {
+      if (mode === 'login') {
         loginSchema.parse({ email, password });
       } else {
         z.string().email().parse(email);
@@ -89,19 +79,6 @@ export default function Auth() {
         } else {
           navigate('/dashboards');
         }
-      } else if (mode === 'signup') {
-        const { error } = await signUp(email, password, fullName);
-        if (error) {
-          if (error.message.includes('already registered')) {
-            toast({ title: 'Account exists', description: 'This email is already registered. Try logging in.', variant: 'destructive' });
-          } else {
-            toast({ title: 'Sign up failed', description: error.message, variant: 'destructive' });
-          }
-        } else {
-          toast({ title: 'Account created', description: 'You can now sign in.' });
-          setMode('login');
-          setPassword('');
-        }
       } else {
         const { error } = await resetPassword(email);
         if (error) {
@@ -133,32 +110,15 @@ export default function Auth() {
           <CardHeader className="space-y-1">
             <CardTitle className="text-2xl">
               {mode === 'login' && 'Sign in'}
-              {mode === 'signup' && 'Create account'}
               {mode === 'forgot' && 'Reset password'}
             </CardTitle>
             <CardDescription>
               {mode === 'login' && 'Enter your credentials to access your dashboards'}
-              {mode === 'signup' && 'Fill in your details to create an account'}
               {mode === 'forgot' && 'Enter your email to receive reset instructions'}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
-              {mode === 'signup' && (
-                <div className="space-y-2">
-                  <Label htmlFor="fullName">Full Name</Label>
-                  <Input
-                    id="fullName"
-                    type="text"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    placeholder="Your name"
-                    disabled={isSubmitting}
-                  />
-                  {errors.fullName && <p className="text-xs text-destructive">{errors.fullName}</p>}
-                </div>
-              )}
-
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
                 <Input
@@ -172,7 +132,7 @@ export default function Auth() {
                 {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
               </div>
 
-              {mode !== 'forgot' && (
+              {mode === 'login' && (
                 <div className="space-y-2">
                   <Label htmlFor="password">Password</Label>
                   <div className="relative">
@@ -211,9 +171,7 @@ export default function Auth() {
 
               <Button type="submit" className="w-full" disabled={isSubmitting}>
                 {isSubmitting ? 'Please wait...' : (
-                  mode === 'login' ? 'Sign in' :
-                  mode === 'signup' ? 'Create account' :
-                  'Send reset link'
+                  mode === 'login' ? 'Sign in' : 'Send reset link'
                 )}
               </Button>
             </form>
@@ -221,18 +179,7 @@ export default function Auth() {
             <div className="mt-6 text-center text-sm">
               {mode === 'login' && (
                 <p className="text-muted-foreground">
-                  Don't have an account?{' '}
-                  <button onClick={() => setMode('signup')} className="text-primary hover:underline">
-                    Sign up
-                  </button>
-                </p>
-              )}
-              {mode === 'signup' && (
-                <p className="text-muted-foreground">
-                  Already have an account?{' '}
-                  <button onClick={() => setMode('login')} className="text-primary hover:underline">
-                    Sign in
-                  </button>
+                  Access is by invitation only. Contact your administrator.
                 </p>
               )}
               {mode === 'forgot' && (

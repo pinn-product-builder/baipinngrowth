@@ -53,6 +53,8 @@ export type Database = {
           id: string
           is_active: boolean
           last_fetched_at: string | null
+          last_health_check_at: string | null
+          last_health_status: string | null
           name: string
           tenant_id: string
           updated_at: string
@@ -66,6 +68,8 @@ export type Database = {
           id?: string
           is_active?: boolean
           last_fetched_at?: string | null
+          last_health_check_at?: string | null
+          last_health_status?: string | null
           name: string
           tenant_id: string
           updated_at?: string
@@ -79,6 +83,8 @@ export type Database = {
           id?: string
           is_active?: boolean
           last_fetched_at?: string | null
+          last_health_check_at?: string | null
+          last_health_status?: string | null
           name?: string
           tenant_id?: string
           updated_at?: string
@@ -100,6 +106,7 @@ export type Database = {
           full_name: string | null
           id: string
           is_active: boolean
+          password_changed: boolean
           tenant_id: string | null
           updated_at: string
         }
@@ -108,6 +115,7 @@ export type Database = {
           full_name?: string | null
           id: string
           is_active?: boolean
+          password_changed?: boolean
           tenant_id?: string | null
           updated_at?: string
         }
@@ -116,6 +124,7 @@ export type Database = {
           full_name?: string | null
           id?: string
           is_active?: boolean
+          password_changed?: boolean
           tenant_id?: string | null
           updated_at?: string
         }
