@@ -15,6 +15,12 @@ interface InviteDetails {
   tenantName: string | null;
 }
 
+const roleLabels: Record<string, string> = {
+  admin: 'Administrador',
+  manager: 'Gestor',
+  viewer: 'Visualizador'
+};
+
 export default function AcceptInvite() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -35,7 +41,7 @@ export default function AcceptInvite() {
 
   useEffect(() => {
     if (!token) {
-      setError('Invalid invitation link');
+      setError('Link de convite inválido');
       setIsLoading(false);
       return;
     }
@@ -51,7 +57,7 @@ export default function AcceptInvite() {
       if (fnError) throw fnError;
 
       if (!data.valid) {
-        setError(data.error || 'Invalid invitation');
+        setError(data.error || 'Convite inválido');
         return;
       }
 
@@ -61,8 +67,8 @@ export default function AcceptInvite() {
         tenantName: data.tenantName
       });
     } catch (err: any) {
-      console.error('Verify error:', err);
-      setError('Failed to verify invitation. It may be invalid or expired.');
+      console.error('Erro de verificação:', err);
+      setError('Falha ao verificar convite. Pode estar inválido ou expirado.');
     } finally {
       setIsLoading(false);
     }
@@ -72,12 +78,12 @@ export default function AcceptInvite() {
     e.preventDefault();
     
     if (password.length < 8) {
-      toast({ title: 'Password too short', description: 'Password must be at least 8 characters.', variant: 'destructive' });
+      toast({ title: 'Senha muito curta', description: 'A senha deve ter pelo menos 8 caracteres.', variant: 'destructive' });
       return;
     }
 
     if (password !== confirmPassword) {
-      toast({ title: 'Passwords do not match', description: 'Please make sure your passwords match.', variant: 'destructive' });
+      toast({ title: 'Senhas não coincidem', description: 'Por favor, verifique se as senhas são iguais.', variant: 'destructive' });
       return;
     }
 
@@ -91,27 +97,27 @@ export default function AcceptInvite() {
       if (fnError) throw fnError;
 
       if (data.error) {
-        toast({ title: 'Error', description: data.error, variant: 'destructive' });
+        toast({ title: 'Erro', description: data.error, variant: 'destructive' });
         return;
       }
 
       setIsSuccess(true);
-      toast({ title: 'Account created!', description: 'You can now log in with your credentials.' });
+      toast({ title: 'Conta criada!', description: 'Você já pode fazer login com suas credenciais.' });
       
-      // Redirect to login after 2 seconds
+      // Redirecionar para login após 2 segundos
       setTimeout(() => {
         navigate('/auth');
       }, 2000);
     } catch (err: any) {
-      console.error('Accept error:', err);
-      toast({ title: 'Error', description: err.message || 'Failed to create account.', variant: 'destructive' });
+      console.error('Erro ao aceitar:', err);
+      toast({ title: 'Erro', description: err.message || 'Falha ao criar conta.', variant: 'destructive' });
     } finally {
       setIsSubmitting(false);
     }
   };
 
   if (isLoading) {
-    return <LoadingPage message="Verifying invitation..." />;
+    return <LoadingPage message="Verificando convite..." />;
   }
 
   if (error) {
@@ -122,12 +128,12 @@ export default function AcceptInvite() {
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
               <AlertCircle className="h-6 w-6 text-destructive" />
             </div>
-            <CardTitle>Invalid Invitation</CardTitle>
+            <CardTitle>Convite Inválido</CardTitle>
             <CardDescription>{error}</CardDescription>
           </CardHeader>
           <CardContent>
             <Button className="w-full" onClick={() => navigate('/auth')}>
-              Go to Login
+              Ir para Login
             </Button>
           </CardContent>
         </Card>
@@ -143,8 +149,8 @@ export default function AcceptInvite() {
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
               <CheckCircle2 className="h-6 w-6 text-primary" />
             </div>
-            <CardTitle>Account Created!</CardTitle>
-            <CardDescription>Redirecting you to the login page...</CardDescription>
+            <CardTitle>Conta Criada!</CardTitle>
+            <CardDescription>Redirecionando para a página de login...</CardDescription>
           </CardHeader>
         </Card>
       </div>
@@ -166,11 +172,11 @@ export default function AcceptInvite() {
 
         <Card className="border-border/50 shadow-lg">
           <CardHeader className="space-y-1">
-            <CardTitle className="text-2xl">Accept Invitation</CardTitle>
+            <CardTitle className="text-2xl">Aceitar Convite</CardTitle>
             <CardDescription>
               {inviteDetails?.tenantName 
-                ? `Join ${inviteDetails.tenantName} as ${inviteDetails.role}`
-                : `Create your ${inviteDetails?.role} account`
+                ? `Junte-se a ${inviteDetails.tenantName} como ${roleLabels[inviteDetails.role] || inviteDetails.role}`
+                : `Crie sua conta de ${roleLabels[inviteDetails?.role || ''] || inviteDetails?.role}`
               }
             </CardDescription>
           </CardHeader>
@@ -188,25 +194,25 @@ export default function AcceptInvite() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="fullName">Full Name</Label>
+                <Label htmlFor="fullName">Nome Completo</Label>
                 <Input
                   id="fullName"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
-                  placeholder="Your full name"
+                  placeholder="Seu nome completo"
                   disabled={isSubmitting}
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="password">Password</Label>
+                <Label htmlFor="password">Senha</Label>
                 <div className="relative">
                   <Input
                     id="password"
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Minimum 8 characters"
+                    placeholder="Mínimo 8 caracteres"
                     disabled={isSubmitting}
                     className="pr-10"
                   />
@@ -221,26 +227,26 @@ export default function AcceptInvite() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Label htmlFor="confirmPassword">Confirmar Senha</Label>
                 <Input
                   id="confirmPassword"
                   type={showPassword ? 'text' : 'password'}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Repeat your password"
+                  placeholder="Repita sua senha"
                   disabled={isSubmitting}
                 />
               </div>
 
               <Button type="submit" className="w-full" disabled={isSubmitting}>
-                {isSubmitting ? 'Creating account...' : 'Create Account'}
+                {isSubmitting ? 'Criando conta...' : 'Criar Conta'}
               </Button>
             </form>
 
             <div className="mt-6 text-center text-sm text-muted-foreground">
-              Already have an account?{' '}
+              Já tem uma conta?{' '}
               <button onClick={() => navigate('/auth')} className="text-primary hover:underline">
-                Sign in
+                Entrar
               </button>
             </div>
           </CardContent>

@@ -11,10 +11,10 @@ import { BarChart3, Eye, EyeOff, AlertTriangle } from 'lucide-react';
 import { z } from 'zod';
 
 const passwordSchema = z.object({
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  password: z.string().min(8, 'A senha deve ter pelo menos 8 caracteres'),
   confirmPassword: z.string()
 }).refine(data => data.password === data.confirmPassword, {
-  message: "Passwords don't match",
+  message: "As senhas não coincidem",
   path: ['confirmPassword']
 });
 
@@ -51,14 +51,13 @@ export default function ChangePassword() {
     if (!validateForm()) return;
 
     setIsSubmitting(true);
-
     try {
       const { error } = await updatePassword(password);
       if (error) {
-        toast({ title: 'Error', description: error.message, variant: 'destructive' });
+        toast({ title: 'Erro', description: error.message, variant: 'destructive' });
       } else {
         await markPasswordChanged();
-        toast({ title: 'Password updated', description: 'Your password has been changed successfully.' });
+        toast({ title: 'Senha atualizada', description: 'Sua senha foi alterada com sucesso.' });
         navigate('/dashboards');
       }
     } finally {
@@ -74,7 +73,6 @@ export default function ChangePassword() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="w-full max-w-md animate-fade-in">
-        {/* Logo */}
         <div className="mb-8 flex justify-center">
           <div className="flex items-center gap-2">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
@@ -86,68 +84,34 @@ export default function ChangePassword() {
 
         <Card className="border-border/50 shadow-lg">
           <CardHeader className="space-y-1">
-            <CardTitle className="text-2xl">Change Password</CardTitle>
-            <CardDescription>
-              For security, you must change your password before continuing.
-            </CardDescription>
+            <CardTitle className="text-2xl">Alterar Senha</CardTitle>
+            <CardDescription>Por segurança, você deve alterar sua senha antes de continuar.</CardDescription>
           </CardHeader>
           <CardContent>
             <Alert className="mb-4 border-warning bg-warning/10">
               <AlertTriangle className="h-4 w-4 text-warning" />
-              <AlertDescription className="text-warning">
-                This is required for first-time login. Choose a secure password.
-              </AlertDescription>
+              <AlertDescription className="text-warning">Obrigatório no primeiro acesso. Escolha uma senha segura.</AlertDescription>
             </Alert>
-
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="password">New Password</Label>
+                <Label htmlFor="password">Nova Senha</Label>
                 <div className="relative">
-                  <Input
-                    id="password"
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Minimum 8 characters"
-                    disabled={isSubmitting}
-                    className="pr-10"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
+                  <Input id="password" type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Mínimo 8 caracteres" disabled={isSubmitting} className="pr-10" />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
                 {errors.password && <p className="text-xs text-destructive">{errors.password}</p>}
               </div>
-
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword">Confirm Password</Label>
-                <Input
-                  id="confirmPassword"
-                  type={showPassword ? 'text' : 'password'}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Repeat your password"
-                  disabled={isSubmitting}
-                />
+                <Label htmlFor="confirmPassword">Confirmar Senha</Label>
+                <Input id="confirmPassword" type={showPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repita sua senha" disabled={isSubmitting} />
                 {errors.confirmPassword && <p className="text-xs text-destructive">{errors.confirmPassword}</p>}
               </div>
-
-              <Button type="submit" className="w-full" disabled={isSubmitting}>
-                {isSubmitting ? 'Updating...' : 'Change Password'}
-              </Button>
+              <Button type="submit" className="w-full" disabled={isSubmitting}>{isSubmitting ? 'Atualizando...' : 'Alterar Senha'}</Button>
             </form>
-
             <div className="mt-4 text-center">
-              <button 
-                onClick={handleLogout}
-                className="text-sm text-muted-foreground hover:underline"
-              >
-                Or sign out instead
-              </button>
+              <button onClick={handleLogout} className="text-sm text-muted-foreground hover:underline">Ou sair da conta</button>
             </div>
           </CardContent>
         </Card>

@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/table';
 import { Activity, Search } from 'lucide-react';
 import { format, subDays } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 interface Tenant {
   id: string;
@@ -39,6 +40,18 @@ interface ActivityLog {
 }
 
 type PeriodFilter = 'all' | '7' | '30' | '90';
+
+const actionLabels: Record<string, string> = {
+  'view_dashboard': 'visualizar dashboard',
+  'create_dashboard': 'criar dashboard',
+  'update_dashboard': 'atualizar dashboard',
+  'deactivate_dashboard': 'desativar dashboard',
+  'create_user': 'criar usuário',
+  'deactivate_user': 'desativar usuário',
+  'invite_sent': 'convite enviado',
+  'invite_accepted': 'convite aceito',
+  'dashboard_load_error': 'erro ao carregar dashboard'
+};
 
 export default function ActivityLogs() {
   const [logs, setLogs] = useState<ActivityLog[]>([]);
@@ -87,7 +100,7 @@ export default function ActivityLogs() {
         .order('created_at', { ascending: false })
         .limit(1000);
 
-      // Apply period filter
+      // Aplicar filtro de período
       if (filterPeriod !== 'all') {
         const daysAgo = subDays(new Date(), parseInt(filterPeriod));
         query = query.gte('created_at', daysAgo.toISOString());
@@ -97,7 +110,7 @@ export default function ActivityLogs() {
 
       if (error) throw error;
 
-      // Fetch user names
+      // Buscar nomes dos usuários
       const userIds = [...new Set((logsData || []).map(l => l.user_id).filter(Boolean))];
       let userNames: Record<string, string> = {};
       
@@ -108,19 +121,19 @@ export default function ActivityLogs() {
           .in('id', userIds);
         
         userNames = (profiles || []).reduce((acc, p) => {
-          acc[p.id] = p.full_name || 'Unknown';
+          acc[p.id] = p.full_name || 'Desconhecido';
           return acc;
         }, {} as Record<string, string>);
       }
 
       const enrichedLogs = (logsData || []).map(log => ({
         ...log,
-        user_name: log.user_id ? userNames[log.user_id] || 'Unknown' : 'System'
+        user_name: log.user_id ? userNames[log.user_id] || 'Desconhecido' : 'Sistema'
       }));
 
       setLogs(enrichedLogs);
     } catch (error) {
-      console.error('Error fetching logs:', error);
+      console.error('Erro ao buscar logs:', error);
     } finally {
       setIsLoading(false);
     }
@@ -134,23 +147,27 @@ export default function ActivityLogs() {
     return entries.map(([k, v]) => `${k}: ${v}`).join(', ');
   };
 
+  const formatAction = (action: string) => {
+    return actionLabels[action] || action.replace(/_/g, ' ');
+  };
+
   if (isLoading) {
-    return <LoadingPage message="Loading activity logs..." />;
+    return <LoadingPage message="Carregando logs de atividade..." />;
   }
 
   return (
     <div className="space-y-6 animate-fade-in">
       <PageHeader 
-        title="Activity Logs" 
-        description="Monitor system activity and user actions"
+        title="Logs de Atividade" 
+        description="Monitore a atividade do sistema e ações dos usuários"
       />
 
-      {/* Filters */}
+      {/* Filtros */}
       <div className="flex flex-col gap-3 sm:flex-row flex-wrap">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search logs..."
+            placeholder="Buscar logs..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
@@ -158,24 +175,24 @@ export default function ActivityLogs() {
         </div>
         <Select value={filterAction} onValueChange={setFilterAction}>
           <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Filter by action" />
+            <SelectValue placeholder="Filtrar por ação" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Actions</SelectItem>
+            <SelectItem value="all">Todas as Ações</SelectItem>
             {uniqueActions.map((action) => (
-              <SelectItem key={action} value={action}>{action.replace(/_/g, ' ')}</SelectItem>
+              <SelectItem key={action} value={action}>{formatAction(action)}</SelectItem>
             ))}
           </SelectContent>
         </Select>
         <Select value={filterPeriod} onValueChange={(v) => setFilterPeriod(v as PeriodFilter)}>
           <SelectTrigger className="w-[150px]">
-            <SelectValue placeholder="Period" />
+            <SelectValue placeholder="Período" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="7">Last 7 days</SelectItem>
-            <SelectItem value="30">Last 30 days</SelectItem>
-            <SelectItem value="90">Last 90 days</SelectItem>
-            <SelectItem value="all">All time</SelectItem>
+            <SelectItem value="7">Últimos 7 dias</SelectItem>
+            <SelectItem value="30">Últimos 30 dias</SelectItem>
+            <SelectItem value="90">Últimos 90 dias</SelectItem>
+            <SelectItem value="all">Todo o período</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -183,31 +200,31 @@ export default function ActivityLogs() {
       {filteredLogs.length === 0 ? (
         <EmptyState
           icon={<Activity className="h-6 w-6 text-muted-foreground" />}
-          title="No activity logs"
-          description="Activity will appear here as users interact with the system."
+          title="Nenhum log de atividade"
+          description="As atividades aparecerão aqui conforme os usuários interagem com o sistema."
         />
       ) : (
         <div className="rounded-lg border bg-card overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Timestamp</TableHead>
-                <TableHead>User</TableHead>
-                <TableHead>Action</TableHead>
-                <TableHead>Entity</TableHead>
-                <TableHead>Details</TableHead>
+                <TableHead>Data/Hora</TableHead>
+                <TableHead>Usuário</TableHead>
+                <TableHead>Ação</TableHead>
+                <TableHead>Entidade</TableHead>
+                <TableHead>Detalhes</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredLogs.map((log) => (
                 <TableRow key={log.id}>
                   <TableCell className="whitespace-nowrap text-muted-foreground">
-                    {format(new Date(log.created_at), 'dd MMM yyyy HH:mm:ss')}
+                    {format(new Date(log.created_at), 'dd MMM yyyy HH:mm:ss', { locale: ptBR })}
                   </TableCell>
                   <TableCell className="font-medium">{log.user_name}</TableCell>
                   <TableCell>
                     <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium">
-                      {log.action.replace(/_/g, ' ')}
+                      {formatAction(log.action)}
                     </span>
                   </TableCell>
                   <TableCell className="text-muted-foreground">

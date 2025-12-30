@@ -9,6 +9,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { useToast } from '@/hooks/use-toast';
 import { User, Mail, Shield } from 'lucide-react';
 
+const roleLabels: Record<string, string> = {
+  admin: 'Administrador',
+  manager: 'Gestor',
+  viewer: 'Visualizador'
+};
+
 export default function Account() {
   const { user, userRole } = useAuth();
   const { toast } = useToast();
@@ -20,8 +26,8 @@ export default function Account() {
     
     if (newPassword.length < 6) {
       toast({ 
-        title: 'Invalid password', 
-        description: 'Password must be at least 6 characters.',
+        title: 'Senha inválida', 
+        description: 'A senha deve ter pelo menos 6 caracteres.',
         variant: 'destructive'
       });
       return;
@@ -33,11 +39,11 @@ export default function Account() {
       
       if (error) throw error;
       
-      toast({ title: 'Password updated', description: 'Your password has been changed successfully.' });
+      toast({ title: 'Senha atualizada', description: 'Sua senha foi alterada com sucesso.' });
       setNewPassword('');
     } catch (error: any) {
       toast({ 
-        title: 'Update failed', 
+        title: 'Falha na atualização', 
         description: error.message,
         variant: 'destructive'
       });
@@ -49,19 +55,19 @@ export default function Account() {
   return (
     <div className="space-y-6 animate-fade-in">
       <PageHeader 
-        title="Account" 
-        description="Manage your account settings"
+        title="Conta" 
+        description="Gerencie suas configurações de conta"
       />
 
       <div className="grid gap-6 md:grid-cols-2">
-        {/* Profile Info */}
+        {/* Informações do Perfil */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <User className="h-5 w-5" />
-              Profile Information
+              Informações do Perfil
             </CardTitle>
-            <CardDescription>Your account details</CardDescription>
+            <CardDescription>Detalhes da sua conta</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -74,35 +80,35 @@ export default function Account() {
             <div className="space-y-2">
               <Label className="flex items-center gap-2 text-muted-foreground">
                 <Shield className="h-4 w-4" />
-                Role
+                Perfil
               </Label>
-              <p className="text-sm font-medium capitalize">{userRole || 'User'}</p>
+              <p className="text-sm font-medium">{userRole ? roleLabels[userRole] || userRole : 'Usuário'}</p>
             </div>
           </CardContent>
         </Card>
 
-        {/* Change Password */}
+        {/* Alterar Senha */}
         <Card>
           <CardHeader>
-            <CardTitle>Change Password</CardTitle>
-            <CardDescription>Update your account password</CardDescription>
+            <CardTitle>Alterar Senha</CardTitle>
+            <CardDescription>Atualize a senha da sua conta</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handlePasswordUpdate} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="newPassword">New Password</Label>
+                <Label htmlFor="newPassword">Nova Senha</Label>
                 <Input
                   id="newPassword"
                   type="password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password"
+                  placeholder="Digite a nova senha"
                   minLength={6}
                 />
-                <p className="text-xs text-muted-foreground">Minimum 6 characters</p>
+                <p className="text-xs text-muted-foreground">Mínimo de 6 caracteres</p>
               </div>
               <Button type="submit" disabled={isUpdating || !newPassword}>
-                {isUpdating ? 'Updating...' : 'Update Password'}
+                {isUpdating ? 'Atualizando...' : 'Atualizar Senha'}
               </Button>
             </form>
           </CardContent>

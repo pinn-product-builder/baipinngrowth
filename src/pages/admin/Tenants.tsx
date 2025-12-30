@@ -33,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { format } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 interface Tenant {
   id: string;
@@ -75,8 +76,8 @@ export default function Tenants() {
       if (error) throw error;
       setTenants(data || []);
     } catch (error) {
-      console.error('Error fetching tenants:', error);
-      toast({ title: 'Error', description: 'Failed to load tenants.', variant: 'destructive' });
+      console.error('Erro ao buscar clientes:', error);
+      toast({ title: 'Erro', description: 'Falha ao carregar clientes.', variant: 'destructive' });
     } finally {
       setIsLoading(false);
     }
@@ -109,7 +110,7 @@ export default function Tenants() {
           .eq('id', editingTenant.id);
 
         if (error) throw error;
-        toast({ title: 'Tenant updated', description: 'Changes saved successfully.' });
+        toast({ title: 'Cliente atualizado', description: 'Alterações salvas com sucesso.' });
       } else {
         const { error } = await supabase
           .from('tenants')
@@ -117,12 +118,12 @@ export default function Tenants() {
 
         if (error) {
           if (error.code === '23505') {
-            toast({ title: 'Slug exists', description: 'This slug is already in use.', variant: 'destructive' });
+            toast({ title: 'Slug já existe', description: 'Este slug já está em uso.', variant: 'destructive' });
             return;
           }
           throw error;
         }
-        toast({ title: 'Tenant created', description: 'New tenant added successfully.' });
+        toast({ title: 'Cliente criado', description: 'Novo cliente adicionado com sucesso.' });
       }
       
       setIsDialogOpen(false);
@@ -130,7 +131,7 @@ export default function Tenants() {
       setEditingTenant(null);
       fetchTenants();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     } finally {
       setIsSubmitting(false);
     }
@@ -145,12 +146,12 @@ export default function Tenants() {
 
       if (error) throw error;
       toast({ 
-        title: tenant.is_active ? 'Tenant deactivated' : 'Tenant activated',
-        description: `${tenant.name} is now ${tenant.is_active ? 'inactive' : 'active'}.`
+        title: tenant.is_active ? 'Cliente desativado' : 'Cliente ativado',
+        description: `${tenant.name} agora está ${tenant.is_active ? 'inativo' : 'ativo'}.`
       });
       fetchTenants();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     }
   };
 
@@ -167,57 +168,57 @@ export default function Tenants() {
   };
 
   if (isLoading) {
-    return <LoadingPage message="Loading tenants..." />;
+    return <LoadingPage message="Carregando clientes..." />;
   }
 
   return (
     <div className="space-y-6 animate-fade-in">
       <PageHeader 
-        title="Tenants" 
-        description="Manage client organizations"
+        title="Clientes" 
+        description="Gerencie as organizações clientes"
         actions={
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button onClick={openCreateDialog}>
                 <Plus className="mr-2 h-4 w-4" />
-                Add Tenant
+                Adicionar Cliente
               </Button>
             </DialogTrigger>
             <DialogContent>
               <form onSubmit={handleSubmit}>
                 <DialogHeader>
-                  <DialogTitle>{editingTenant ? 'Edit Tenant' : 'Create Tenant'}</DialogTitle>
+                  <DialogTitle>{editingTenant ? 'Editar Cliente' : 'Criar Cliente'}</DialogTitle>
                   <DialogDescription>
-                    {editingTenant ? 'Update tenant details.' : 'Add a new client organization.'}
+                    {editingTenant ? 'Atualize os dados do cliente.' : 'Adicione uma nova organização cliente.'}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4">
                   <div className="space-y-2">
-                    <Label htmlFor="name">Name</Label>
+                    <Label htmlFor="name">Nome</Label>
                     <Input
                       id="name"
                       value={formData.name}
                       onChange={(e) => handleNameChange(e.target.value)}
-                      placeholder="Client Name"
+                      placeholder="Nome do Cliente"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="slug">Slug (identifier)</Label>
+                    <Label htmlFor="slug">Slug (identificador)</Label>
                     <Input
                       id="slug"
                       value={formData.slug}
                       onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
-                      placeholder="client-name"
+                      placeholder="nome-do-cliente"
                     />
-                    <p className="text-xs text-muted-foreground">Used as a unique identifier. Lowercase, no spaces.</p>
+                    <p className="text-xs text-muted-foreground">Usado como identificador único. Minúsculas, sem espaços.</p>
                   </div>
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Cancel
+                    Cancelar
                   </Button>
                   <Button type="submit" disabled={isSubmitting}>
-                    {isSubmitting ? 'Saving...' : (editingTenant ? 'Save Changes' : 'Create Tenant')}
+                    {isSubmitting ? 'Salvando...' : (editingTenant ? 'Salvar Alterações' : 'Criar Cliente')}
                   </Button>
                 </DialogFooter>
               </form>
@@ -226,11 +227,11 @@ export default function Tenants() {
         }
       />
 
-      {/* Search */}
+      {/* Busca */}
       <div className="relative max-w-sm">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
-          placeholder="Search tenants..."
+          placeholder="Buscar clientes..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="pl-9"
@@ -240,12 +241,12 @@ export default function Tenants() {
       {filteredTenants.length === 0 ? (
         <EmptyState
           icon={<Building2 className="h-6 w-6 text-muted-foreground" />}
-          title={searchQuery ? 'No tenants found' : 'No tenants yet'}
-          description={searchQuery ? 'Try adjusting your search.' : 'Create your first tenant to get started.'}
+          title={searchQuery ? 'Nenhum cliente encontrado' : 'Nenhum cliente ainda'}
+          description={searchQuery ? 'Tente ajustar sua busca.' : 'Crie seu primeiro cliente para começar.'}
           action={!searchQuery && (
             <Button onClick={openCreateDialog}>
               <Plus className="mr-2 h-4 w-4" />
-              Add Tenant
+              Adicionar Cliente
             </Button>
           )}
         />
@@ -254,10 +255,10 @@ export default function Tenants() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
+                <TableHead>Nome</TableHead>
                 <TableHead>Slug</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Created</TableHead>
+                <TableHead>Criado</TableHead>
                 <TableHead className="w-[50px]"></TableHead>
               </TableRow>
             </TableHeader>
@@ -268,11 +269,11 @@ export default function Tenants() {
                   <TableCell className="font-mono text-sm text-muted-foreground">{tenant.slug}</TableCell>
                   <TableCell>
                     <StatusBadge variant={tenant.is_active ? 'active' : 'inactive'}>
-                      {tenant.is_active ? 'Active' : 'Inactive'}
+                      {tenant.is_active ? 'Ativo' : 'Inativo'}
                     </StatusBadge>
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    {format(new Date(tenant.created_at), 'dd MMM yyyy')}
+                    {format(new Date(tenant.created_at), 'dd MMM yyyy', { locale: ptBR })}
                   </TableCell>
                   <TableCell>
                     <DropdownMenu>
@@ -284,11 +285,11 @@ export default function Tenants() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => openEditDialog(tenant)}>
                           <Pencil className="mr-2 h-4 w-4" />
-                          Edit
+                          Editar
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => toggleTenantStatus(tenant)}>
                           <Power className="mr-2 h-4 w-4" />
-                          {tenant.is_active ? 'Deactivate' : 'Activate'}
+                          {tenant.is_active ? 'Desativar' : 'Ativar'}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
