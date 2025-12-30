@@ -1,0 +1,107 @@
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
+import { PageHeader } from '@/components/ui/page-header';
+import { EmptyState } from '@/components/ui/empty-state';
+import { LoadingPage } from '@/components/ui/loading-spinner';
+import { StatusBadge } from '@/components/ui/status-badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { LayoutDashboard, Clock, ArrowRight } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
+
+interface Dashboard {
+  id: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  last_fetched_at: string | null;
+  updated_at: string;
+}
+
+export default function Dashboards() {
+  const [dashboards, setDashboards] = useState<Dashboard[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const { userRole, tenantId } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    fetchDashboards();
+  }, [userRole, tenantId]);
+
+  const fetchDashboards = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('dashboards')
+        .select('id, name, description, is_active, last_fetched_at, updated_at')
+        .eq('is_active', true)
+        .order('display_order', { ascending: true });
+
+      if (error) throw error;
+      setDashboards(data || []);
+    } catch (error) {
+      console.error('Error fetching dashboards:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (isLoading) {
+    return <LoadingPage message="Loading dashboards..." />;
+  }
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <PageHeader 
+        title="Dashboards" 
+        description="View and analyze your business metrics"
+      />
+
+      {dashboards.length === 0 ? (
+        <EmptyState
+          icon={<LayoutDashboard className="h-6 w-6 text-muted-foreground" />}
+          title="No dashboards available"
+          description="Dashboards will appear here once they are configured by your administrator."
+        />
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {dashboards.map((dashboard) => (
+            <Card 
+              key={dashboard.id}
+              className="group cursor-pointer transition-all hover:border-primary/50 hover:shadow-md"
+              onClick={() => navigate(`/dashboards/${dashboard.id}`)}
+            >
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+                    <LayoutDashboard className="h-5 w-5 text-primary" />
+                  </div>
+                  <StatusBadge variant="active">Active</StatusBadge>
+                </div>
+                <CardTitle className="mt-3 text-lg">{dashboard.name}</CardTitle>
+                {dashboard.description && (
+                  <CardDescription className="line-clamp-2">
+                    {dashboard.description}
+                  </CardDescription>
+                )}
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between text-sm text-muted-foreground">
+                  <div className="flex items-center gap-1">
+                    <Clock className="h-3.5 w-3.5" />
+                    <span>
+                      {dashboard.last_fetched_at 
+                        ? formatDistanceToNow(new Date(dashboard.last_fetched_at), { addSuffix: true })
+                        : 'Not loaded yet'}
+                    </span>
+                  </div>
+                  <ArrowRight className="h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
