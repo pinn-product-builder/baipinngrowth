@@ -11,8 +11,7 @@ import {
   Menu,
   X,
   ChevronDown,
-  Activity,
-  Calendar
+  Activity
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -28,16 +27,15 @@ interface NavItem {
   label: string;
   href: string;
   icon: React.ComponentType<{ className?: string }>;
-  roles: ('admin' | 'manager' | 'viewer')[];
+  adminOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
-  { label: 'Dashboards', href: '/dashboards', icon: LayoutDashboard, roles: ['admin', 'manager', 'viewer'] },
-  { label: 'Tenants', href: '/admin/tenants', icon: Building2, roles: ['admin'] },
-  { label: 'Users', href: '/admin/users', icon: Users, roles: ['admin', 'manager'] },
-  { label: 'Manage Dashboards', href: '/admin/dashboards', icon: BarChart3, roles: ['admin', 'manager'] },
-  { label: 'Scheduled Reports', href: '/admin/scheduled-reports', icon: Calendar, roles: ['admin', 'manager'] },
-  { label: 'Activity Logs', href: '/admin/activity-logs', icon: Activity, roles: ['admin'] },
+  { label: 'Dashboards', href: '/dashboards', icon: LayoutDashboard },
+  { label: 'Tenants', href: '/admin/tenants', icon: Building2, adminOnly: true },
+  { label: 'Users', href: '/admin/users', icon: Users, adminOnly: true },
+  { label: 'Manage Dashboards', href: '/admin/dashboards', icon: BarChart3, adminOnly: true },
+  { label: 'Activity Logs', href: '/admin/activity-logs', icon: Activity, adminOnly: true },
 ];
 
 export default function AppLayout() {
@@ -46,22 +44,12 @@ export default function AppLayout() {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const filteredNavItems = navItems.filter(item => 
-    userRole && item.roles.includes(userRole as 'admin' | 'manager' | 'viewer')
-  );
+  const isAdmin = userRole === 'admin';
+  const filteredNavItems = navItems.filter(item => !item.adminOnly || isAdmin);
 
   const handleSignOut = async () => {
     await signOut();
     navigate('/auth');
-  };
-
-  const getRoleLabel = (role: string | null) => {
-    switch (role) {
-      case 'admin': return 'Admin';
-      case 'manager': return 'Manager';
-      case 'viewer': return 'Viewer';
-      default: return role;
-    }
   };
 
   return (
@@ -133,7 +121,7 @@ export default function AppLayout() {
                   </div>
                   <div className="flex-1 text-left">
                     <p className="font-medium truncate">{user?.email}</p>
-                    <p className="text-xs text-sidebar-foreground/60">{getRoleLabel(userRole)}</p>
+                    <p className="text-xs text-sidebar-foreground/60 capitalize">{userRole}</p>
                   </div>
                   <ChevronDown className="h-4 w-4 text-sidebar-foreground/60" />
                 </button>

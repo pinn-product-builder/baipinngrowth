@@ -2,7 +2,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCallback } from 'react';
 
-type EntityType = 'tenant' | 'user' | 'dashboard' | 'scheduled_report';
+type EntityType = 'tenant' | 'user' | 'dashboard';
 type Action = 
   | 'login' 
   | 'logout' 
@@ -17,12 +17,7 @@ type Action =
   | 'update_dashboard'
   | 'deactivate_dashboard'
   | 'dashboard_load_error'
-  | 'password_changed'
-  | 'send_invite'
-  | 'resend_invite'
-  | 'create_scheduled_report'
-  | 'update_scheduled_report'
-  | 'delete_scheduled_report';
+  | 'password_changed';
 
 export function useActivityLogger() {
   const { user } = useAuth();

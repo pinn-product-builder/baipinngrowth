@@ -44,41 +44,8 @@ export type Database = {
         }
         Relationships: []
       }
-      dashboard_categories: {
-        Row: {
-          created_at: string | null
-          display_order: number | null
-          id: string
-          name: string
-          tenant_id: string | null
-        }
-        Insert: {
-          created_at?: string | null
-          display_order?: number | null
-          id?: string
-          name: string
-          tenant_id?: string | null
-        }
-        Update: {
-          created_at?: string | null
-          display_order?: number | null
-          id?: string
-          name?: string
-          tenant_id?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "dashboard_categories_tenant_id_fkey"
-            columns: ["tenant_id"]
-            isOneToOne: false
-            referencedRelation: "tenants"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       dashboards: {
         Row: {
-          category_id: string | null
           created_at: string
           description: string | null
           display_order: number
@@ -90,14 +57,11 @@ export type Database = {
           last_health_check_at: string | null
           last_health_status: string | null
           name: string
-          tags: string[] | null
           tenant_id: string
           updated_at: string
-          use_proxy: boolean | null
           webhook_url: string
         }
         Insert: {
-          category_id?: string | null
           created_at?: string
           description?: string | null
           display_order?: number
@@ -109,14 +73,11 @@ export type Database = {
           last_health_check_at?: string | null
           last_health_status?: string | null
           name: string
-          tags?: string[] | null
           tenant_id: string
           updated_at?: string
-          use_proxy?: boolean | null
           webhook_url: string
         }
         Update: {
-          category_id?: string | null
           created_at?: string
           description?: string | null
           display_order?: number
@@ -128,20 +89,11 @@ export type Database = {
           last_health_check_at?: string | null
           last_health_status?: string | null
           name?: string
-          tags?: string[] | null
           tenant_id?: string
           updated_at?: string
-          use_proxy?: boolean | null
           webhook_url?: string
         }
         Relationships: [
-          {
-            foreignKeyName: "dashboards_category_id_fkey"
-            columns: ["category_id"]
-            isOneToOne: false
-            referencedRelation: "dashboard_categories"
-            referencedColumns: ["id"]
-          },
           {
             foreignKeyName: "dashboards_tenant_id_fkey"
             columns: ["tenant_id"]
@@ -158,7 +110,6 @@ export type Database = {
           id: string
           is_active: boolean
           password_changed: boolean
-          status: string
           tenant_id: string | null
           updated_at: string
         }
@@ -168,7 +119,6 @@ export type Database = {
           id: string
           is_active?: boolean
           password_changed?: boolean
-          status?: string
           tenant_id?: string | null
           updated_at?: string
         }
@@ -178,66 +128,12 @@ export type Database = {
           id?: string
           is_active?: boolean
           password_changed?: boolean
-          status?: string
           tenant_id?: string | null
           updated_at?: string
         }
         Relationships: [
           {
             foreignKeyName: "profiles_tenant_id_fkey"
-            columns: ["tenant_id"]
-            isOneToOne: false
-            referencedRelation: "tenants"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      scheduled_reports: {
-        Row: {
-          created_at: string | null
-          created_by: string | null
-          dashboard_ids: string[]
-          emails: string[]
-          frequency: string
-          id: string
-          is_active: boolean | null
-          last_sent_at: string | null
-          name: string
-          next_send_at: string | null
-          tenant_id: string
-          updated_at: string | null
-        }
-        Insert: {
-          created_at?: string | null
-          created_by?: string | null
-          dashboard_ids: string[]
-          emails: string[]
-          frequency: string
-          id?: string
-          is_active?: boolean | null
-          last_sent_at?: string | null
-          name: string
-          next_send_at?: string | null
-          tenant_id: string
-          updated_at?: string | null
-        }
-        Update: {
-          created_at?: string | null
-          created_by?: string | null
-          dashboard_ids?: string[]
-          emails?: string[]
-          frequency?: string
-          id?: string
-          is_active?: boolean | null
-          last_sent_at?: string | null
-          name?: string
-          next_send_at?: string | null
-          tenant_id?: string
-          updated_at?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "scheduled_reports_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -271,50 +167,6 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
-      }
-      user_invites: {
-        Row: {
-          accepted: boolean | null
-          created_at: string | null
-          email: string
-          expires_at: string
-          id: string
-          invited_by: string | null
-          role: Database["public"]["Enums"]["app_role"]
-          tenant_id: string | null
-          token: string
-        }
-        Insert: {
-          accepted?: boolean | null
-          created_at?: string | null
-          email: string
-          expires_at: string
-          id?: string
-          invited_by?: string | null
-          role?: Database["public"]["Enums"]["app_role"]
-          tenant_id?: string | null
-          token: string
-        }
-        Update: {
-          accepted?: boolean | null
-          created_at?: string | null
-          email?: string
-          expires_at?: string
-          id?: string
-          invited_by?: string | null
-          role?: Database["public"]["Enums"]["app_role"]
-          tenant_id?: string | null
-          token?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "user_invites_tenant_id_fkey"
-            columns: ["tenant_id"]
-            isOneToOne: false
-            referencedRelation: "tenants"
-            referencedColumns: ["id"]
-          },
-        ]
       }
       user_roles: {
         Row: {

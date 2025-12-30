@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
-export type UserRole = 'admin' | 'manager' | 'viewer' | null;
+type UserRole = 'admin' | 'client' | null;
 
 interface AuthContextType {
   user: User | null;
@@ -18,11 +18,6 @@ interface AuthContextType {
   resetPassword: (email: string) => Promise<{ error: Error | null }>;
   updatePassword: (newPassword: string) => Promise<{ error: Error | null }>;
   markPasswordChanged: () => Promise<void>;
-  isAdmin: boolean;
-  isManager: boolean;
-  isViewer: boolean;
-  canManageUsers: boolean;
-  canManageDashboards: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -159,13 +154,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Role-based helpers
-  const isAdmin = userRole === 'admin';
-  const isManager = userRole === 'manager';
-  const isViewer = userRole === 'viewer';
-  const canManageUsers = isAdmin || isManager;
-  const canManageDashboards = isAdmin || isManager;
-
   return (
     <AuthContext.Provider value={{
       user,
@@ -180,12 +168,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signOut,
       resetPassword,
       updatePassword,
-      markPasswordChanged,
-      isAdmin,
-      isManager,
-      isViewer,
-      canManageUsers,
-      canManageDashboards
+      markPasswordChanged
     }}>
       {children}
     </AuthContext.Provider>
