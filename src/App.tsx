@@ -8,6 +8,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import AppLayout from "@/components/layouts/AppLayout";
 import Auth from "@/pages/Auth";
 import Setup from "@/pages/Setup";
+import AcceptInvite from "@/pages/AcceptInvite";
 import ChangePassword from "@/pages/ChangePassword";
 import Dashboards from "@/pages/Dashboards";
 import DashboardView from "@/pages/DashboardView";
@@ -30,6 +31,7 @@ const App = () => (
           <Routes>
             <Route path="/auth" element={<Auth />} />
             <Route path="/setup" element={<Setup />} />
+            <Route path="/accept-invite" element={<AcceptInvite />} />
             <Route path="/change-password" element={
               <ProtectedRoute>
                 <ChangePassword />

@@ -27,8 +27,8 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
     return <Navigate to="/change-password" replace />;
   }
 
-  // Block if tenant is inactive (only for client users with a tenant)
-  if (userRole === 'client' && tenantActive === false) {
+  // Block if tenant is inactive (only for non-admin users with a tenant)
+  if (userRole !== 'admin' && tenantActive === false) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-4">
         <Card className="max-w-md">
@@ -58,7 +58,8 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
     );
   }
 
-  if (requireAdmin && userRole !== 'admin') {
+  // Admin-only routes check (managers have limited admin access)
+  if (requireAdmin && userRole !== 'admin' && userRole !== 'manager') {
     return <Navigate to="/dashboards" replace />;
   }
 
