@@ -83,12 +83,28 @@ export default function ModernDashboardViewer({
   const [selectedRow, setSelectedRow] = useState<any>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // Generate template config from columns
+  // Generate template config from columns (with try-catch to prevent crash)
   const templateConfig: TemplateConfig = useMemo(() => {
-    const columns = detectedColumns.length > 0 
-      ? detectedColumns 
-      : data.length > 0 ? Object.keys(data[0]) : [];
-    return generateTemplateConfig(columns, templateKind, dashboardSpec);
+    try {
+      const columns = detectedColumns.length > 0 
+        ? detectedColumns 
+        : data.length > 0 ? Object.keys(data[0]) : [];
+      return generateTemplateConfig(columns, templateKind, dashboardSpec);
+    } catch (error) {
+      console.error('Error generating template config:', error);
+      // Return safe default config
+      return {
+        enabledTabs: ['executivo', 'detalhes'] as const,
+        kpis: [],
+        funnelStages: {},
+        costMetrics: [],
+        taxaColumns: [],
+        lossColumns: [],
+        dateColumn: 'dia',
+        goals: {},
+        formatting: {},
+      };
+    }
   }, [detectedColumns, data, templateKind, dashboardSpec]);
 
   // Aggregate data for KPIs and insights
