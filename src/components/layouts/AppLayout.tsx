@@ -12,7 +12,8 @@ import {
   X,
   ChevronDown,
   Activity,
-  Database
+  Database,
+  Calendar
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -37,11 +38,12 @@ const navItems: NavItem[] = [
   { label: 'Usuários', href: '/admin/users', icon: Users, adminOnly: true },
   { label: 'Gerenciar Dashboards', href: '/admin/dashboards', icon: BarChart3, adminOnly: true },
   { label: 'Data Sources', href: '/admin/data-sources', icon: Database, adminOnly: true },
+  { label: 'Relatórios', href: '/admin/scheduled-reports', icon: Calendar, adminOnly: true },
   { label: 'Logs de Atividade', href: '/admin/activity-logs', icon: Activity, adminOnly: true },
 ];
 
 // Rotas permitidas para manager (subconjunto de admin)
-const managerAllowedRoutes = ['/admin/users', '/admin/dashboards', '/admin/activity-logs'];
+const managerAllowedRoutes = ['/admin/users', '/admin/dashboards', '/admin/activity-logs', '/admin/scheduled-reports'];
 
 const roleLabels: Record<string, string> = {
   admin: 'Administrador',

@@ -23,3 +23,9 @@ verify_jwt = true
 
 [functions.detect-template]
 verify_jwt = true
+
+[functions.dashboard-proxy]
+verify_jwt = true
+
+[functions.send-scheduled-report]
+verify_jwt = true

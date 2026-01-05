@@ -13,7 +13,6 @@ interface AuthContextType {
   passwordChanged: boolean | null;
   isLoading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: Error | null }>;
   updatePassword: (newPassword: string) => Promise<{ error: Error | null }>;
@@ -110,19 +109,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error };
   };
 
-  const signUp = async (email: string, password: string, fullName: string) => {
-    const redirectUrl = `${window.location.origin}/`;
-    
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: redirectUrl,
-        data: { full_name: fullName }
-      }
-    });
-    return { error };
-  };
+  // signUp removed - invite-only system. Users are created via accept-invite edge function.
 
   const signOut = async () => {
     await supabase.auth.signOut();
@@ -164,7 +151,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       passwordChanged,
       isLoading,
       signIn,
-      signUp,
       signOut,
       resetPassword,
       updatePassword,
