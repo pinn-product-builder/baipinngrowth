@@ -40,6 +40,7 @@ interface Dashboard {
   template_kind: string | null;
   dashboard_spec: Record<string, any> | null;
   detected_columns: any[] | null;
+  use_proxy: boolean | null;
 }
 
 type ContentType = 'iframe' | 'html' | 'json' | 'supabase_view' | 'unknown';
@@ -160,36 +161,50 @@ export default function DashboardView() {
     
     try {
       setIsRefreshing(true);
-      const response = await fetchWithTimeout(dash.webhook_url, FETCH_TIMEOUT);
       
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const contentTypeHeader = response.headers.get('content-type') || '';
+      let responseData: { content: any; content_type: string } | null = null;
       
-      if (contentTypeHeader.includes('application/json')) {
-        const jsonData = await response.json();
-        if (!jsonData || (Array.isArray(jsonData) && jsonData.length === 0) || Object.keys(jsonData).length === 0) {
-          setLoadState('empty');
-          await updateDashboardHealth(dash.id, 'ok', null);
-        } else {
-          setContent(jsonData);
-          setContentType('json');
-          setLoadState('success');
-          await updateDashboardHealth(dash.id, 'ok', null);
-        }
+      // Use server-side proxy if enabled
+      if (dash.use_proxy) {
+        const { data, error } = await supabase.functions.invoke('dashboard-proxy', {
+          body: { dashboard_id: dash.id }
+        });
+        
+        if (error) throw error;
+        if (data.error) throw new Error(data.error);
+        
+        responseData = { content: data.content, content_type: data.content_type };
       } else {
-        const htmlContent = await response.text();
-        if (!htmlContent.trim()) {
-          setLoadState('empty');
-          await updateDashboardHealth(dash.id, 'ok', null);
-        } else {
-          setContent(htmlContent);
-          setContentType('html');
-          setLoadState('success');
-          await updateDashboardHealth(dash.id, 'ok', null);
+        // Direct fetch
+        const response = await fetchWithTimeout(dash.webhook_url!, FETCH_TIMEOUT);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
         }
+
+        const contentTypeHeader = response.headers.get('content-type') || '';
+        
+        if (contentTypeHeader.includes('application/json')) {
+          const jsonData = await response.json();
+          responseData = { content: jsonData, content_type: 'json' };
+        } else {
+          const htmlContent = await response.text();
+          responseData = { content: htmlContent, content_type: 'html' };
+        }
+      }
+      
+      // Process response
+      if (!responseData.content || 
+          (Array.isArray(responseData.content) && responseData.content.length === 0) || 
+          (typeof responseData.content === 'object' && Object.keys(responseData.content).length === 0) ||
+          (typeof responseData.content === 'string' && !responseData.content.trim())) {
+        setLoadState('empty');
+        await updateDashboardHealth(dash.id, 'ok', null);
+      } else {
+        setContent(responseData.content);
+        setContentType(responseData.content_type as ContentType);
+        setLoadState('success');
+        await updateDashboardHealth(dash.id, 'ok', null);
       }
       
       setLastUpdated(new Date());

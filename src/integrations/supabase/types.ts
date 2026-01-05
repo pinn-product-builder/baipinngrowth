@@ -78,6 +78,7 @@ export type Database = {
       }
       dashboards: {
         Row: {
+          allowed_domains: string[] | null
           cache_ttl_seconds: number | null
           category_id: string | null
           created_at: string
@@ -107,6 +108,7 @@ export type Database = {
           webhook_url: string | null
         }
         Insert: {
+          allowed_domains?: string[] | null
           cache_ttl_seconds?: number | null
           category_id?: string | null
           created_at?: string
@@ -136,6 +138,7 @@ export type Database = {
           webhook_url?: string | null
         }
         Update: {
+          allowed_domains?: string[] | null
           cache_ttl_seconds?: number | null
           category_id?: string | null
           created_at?: string
@@ -344,25 +347,40 @@ export type Database = {
       tenants: {
         Row: {
           created_at: string
+          domain_allowlist: string[] | null
           id: string
           is_active: boolean
+          max_dashboards: number | null
+          max_schedules: number | null
+          max_users: number | null
           name: string
+          rate_limit_per_minute: number | null
           slug: string
           updated_at: string
         }
         Insert: {
           created_at?: string
+          domain_allowlist?: string[] | null
           id?: string
           is_active?: boolean
+          max_dashboards?: number | null
+          max_schedules?: number | null
+          max_users?: number | null
           name: string
+          rate_limit_per_minute?: number | null
           slug: string
           updated_at?: string
         }
         Update: {
           created_at?: string
+          domain_allowlist?: string[] | null
           id?: string
           is_active?: boolean
+          max_dashboards?: number | null
+          max_schedules?: number | null
+          max_users?: number | null
           name?: string
+          rate_limit_per_minute?: number | null
           slug?: string
           updated_at?: string
         }

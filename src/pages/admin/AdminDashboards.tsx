@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Select,
   SelectContent,
@@ -99,6 +100,7 @@ export default function AdminDashboards() {
     sourceKind: 'webhook' as 'webhook' | 'supabase_view',
     webhookUrl: '',
     displayType: 'auto' as 'auto' | 'iframe' | 'html' | 'json',
+    useProxy: false,
     dataSourceId: '',
     viewName: '',
     defaultFilters: '{}',
@@ -197,6 +199,7 @@ export default function AdminDashboards() {
       if (formData.sourceKind === 'webhook') {
         payload.webhook_url = formData.webhookUrl;
         payload.display_type = formData.displayType;
+        payload.use_proxy = formData.useProxy;
         payload.data_source_id = null;
         payload.view_name = null;
       } else {
@@ -205,6 +208,7 @@ export default function AdminDashboards() {
         payload.default_filters = defaultFilters;
         payload.cache_ttl_seconds = formData.cacheTtlSeconds;
         payload.webhook_url = null;
+        payload.use_proxy = false;
       }
 
       if (editingDashboard) {
@@ -246,6 +250,7 @@ export default function AdminDashboards() {
       sourceKind: 'webhook',
       webhookUrl: '',
       displayType: 'auto',
+      useProxy: false,
       dataSourceId: '',
       viewName: '',
       defaultFilters: '{}',
@@ -264,6 +269,7 @@ export default function AdminDashboards() {
       sourceKind: dashboard.source_kind || 'webhook',
       webhookUrl: dashboard.webhook_url || '',
       displayType: dashboard.display_type,
+      useProxy: (dashboard as any).use_proxy || false,
       dataSourceId: dashboard.data_source_id || '',
       viewName: dashboard.view_name || '',
       defaultFilters: JSON.stringify(dashboard.default_filters || {}),
@@ -569,6 +575,21 @@ export default function AdminDashboards() {
                             <SelectItem value="json">JSON</SelectItem>
                           </SelectContent>
                         </Select>
+                      </div>
+                      <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-lg">
+                        <Checkbox
+                          id="useProxy"
+                          checked={formData.useProxy}
+                          onCheckedChange={(checked) => setFormData({ ...formData, useProxy: checked === true })}
+                        />
+                        <div className="space-y-0.5">
+                          <label htmlFor="useProxy" className="text-sm font-medium cursor-pointer">
+                            Usar Proxy Server-side
+                          </label>
+                          <p className="text-xs text-muted-foreground">
+                            Evita problemas de CORS/X-Frame-Options. Apenas HTTPS e domínios permitidos.
+                          </p>
+                        </div>
                       </div>
                     </>
                   ) : (
