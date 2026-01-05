@@ -1,4 +1,4 @@
-import { ModernDashboardViewer } from './viewer';
+import { ModernDashboardViewer, DashboardErrorBoundary } from './viewer';
 
 interface CostsFunnelDashboardProps {
   dashboardId: string;
@@ -16,12 +16,14 @@ export default function CostsFunnelDashboard({
   detectedColumns = [],
 }: CostsFunnelDashboardProps) {
   return (
-    <ModernDashboardViewer
-      dashboardId={dashboardId}
-      templateKind={templateKind}
-      dashboardSpec={dashboardSpec}
-      dashboardName={dashboardName}
-      detectedColumns={detectedColumns}
-    />
+    <DashboardErrorBoundary>
+      <ModernDashboardViewer
+        dashboardId={dashboardId}
+        templateKind={templateKind}
+        dashboardSpec={dashboardSpec}
+        dashboardName={dashboardName}
+        detectedColumns={detectedColumns}
+      />
+    </DashboardErrorBoundary>
   );
 }

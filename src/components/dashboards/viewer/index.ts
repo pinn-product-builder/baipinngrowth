@@ -6,4 +6,5 @@ export { default as AlertsInsights } from './AlertsInsights';
 export { default as DetailDrawer } from './DetailDrawer';
 export { default as EnhancedDataTable } from './EnhancedDataTable';
 export { default as TrendCharts } from './TrendCharts';
+export { default as DashboardErrorBoundary } from './DashboardErrorBoundary';
 export * from './templateEngine';
