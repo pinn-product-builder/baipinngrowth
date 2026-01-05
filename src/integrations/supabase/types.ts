@@ -81,9 +81,11 @@ export type Database = {
           cache_ttl_seconds: number | null
           category_id: string | null
           created_at: string
+          dashboard_spec: Json | null
           data_source_id: string | null
           default_filters: Json | null
           description: string | null
+          detected_columns: Json | null
           display_order: number
           display_type: Database["public"]["Enums"]["dashboard_type"]
           id: string
@@ -95,6 +97,9 @@ export type Database = {
           name: string
           source_kind: Database["public"]["Enums"]["dashboard_source_kind"]
           tags: string[] | null
+          template_kind:
+            | Database["public"]["Enums"]["dashboard_template_kind"]
+            | null
           tenant_id: string
           updated_at: string
           use_proxy: boolean | null
@@ -105,9 +110,11 @@ export type Database = {
           cache_ttl_seconds?: number | null
           category_id?: string | null
           created_at?: string
+          dashboard_spec?: Json | null
           data_source_id?: string | null
           default_filters?: Json | null
           description?: string | null
+          detected_columns?: Json | null
           display_order?: number
           display_type?: Database["public"]["Enums"]["dashboard_type"]
           id?: string
@@ -119,6 +126,9 @@ export type Database = {
           name: string
           source_kind?: Database["public"]["Enums"]["dashboard_source_kind"]
           tags?: string[] | null
+          template_kind?:
+            | Database["public"]["Enums"]["dashboard_template_kind"]
+            | null
           tenant_id: string
           updated_at?: string
           use_proxy?: boolean | null
@@ -129,9 +139,11 @@ export type Database = {
           cache_ttl_seconds?: number | null
           category_id?: string | null
           created_at?: string
+          dashboard_spec?: Json | null
           data_source_id?: string | null
           default_filters?: Json | null
           description?: string | null
+          detected_columns?: Json | null
           display_order?: number
           display_type?: Database["public"]["Enums"]["dashboard_type"]
           id?: string
@@ -143,6 +155,9 @@ export type Database = {
           name?: string
           source_kind?: Database["public"]["Enums"]["dashboard_source_kind"]
           tags?: string[] | null
+          template_kind?:
+            | Database["public"]["Enums"]["dashboard_template_kind"]
+            | null
           tenant_id?: string
           updated_at?: string
           use_proxy?: boolean | null
@@ -435,6 +450,7 @@ export type Database = {
     Enums: {
       app_role: "admin" | "client" | "manager" | "viewer"
       dashboard_source_kind: "webhook" | "supabase_view"
+      dashboard_template_kind: "none" | "costs_funnel_daily" | "custom"
       dashboard_type: "auto" | "iframe" | "html" | "json"
     }
     CompositeTypes: {
@@ -565,6 +581,7 @@ export const Constants = {
     Enums: {
       app_role: ["admin", "client", "manager", "viewer"],
       dashboard_source_kind: ["webhook", "supabase_view"],
+      dashboard_template_kind: ["none", "costs_funnel_daily", "custom"],
       dashboard_type: ["auto", "iframe", "html", "json"],
     },
   },

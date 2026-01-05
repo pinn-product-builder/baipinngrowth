@@ -34,7 +34,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
-import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown, Copy, Database } from 'lucide-react';
+import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown, Copy, Database, Wand2 } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -75,6 +75,9 @@ interface Dashboard {
   last_health_check_at: string | null;
   tenants?: { name: string } | null;
   tenant_data_sources?: { name: string } | null;
+  template_kind?: string | null;
+  dashboard_spec?: Record<string, any> | null;
+  detected_columns?: any[] | null;
 }
 
 type HealthStatus = 'idle' | 'checking' | 'success' | 'error';
@@ -104,6 +107,7 @@ export default function AdminDashboards() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [healthChecks, setHealthChecks] = useState<Record<string, HealthStatus>>({});
+  const [detectingTemplate, setDetectingTemplate] = useState<Record<string, boolean>>({});
   const { toast } = useToast();
   const { logActivity } = useActivityLogger();
 
@@ -405,6 +409,52 @@ export default function AdminDashboards() {
       fetchData();
     } catch (error: any) {
       toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    }
+  };
+
+  const detectTemplate = async (dashboard: Dashboard) => {
+    if (dashboard.source_kind !== 'supabase_view' || !dashboard.data_source_id || !dashboard.view_name) {
+      toast({ title: 'Erro', description: 'Este dashboard não é do tipo supabase_view.', variant: 'destructive' });
+      return;
+    }
+
+    setDetectingTemplate(prev => ({ ...prev, [dashboard.id]: true }));
+
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      if (!session.session) throw new Error('Não autenticado');
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const response = await fetch(`${supabaseUrl}/functions/v1/detect-template`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          data_source_id: dashboard.data_source_id,
+          view_name: dashboard.view_name,
+          dashboard_id: dashboard.id
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Erro ao detectar template');
+      }
+
+      const result = await response.json();
+      
+      toast({ 
+        title: 'Template detectado', 
+        description: `Template: ${result.template_kind} (Confiança: ${result.confidence}%)` 
+      });
+      
+      fetchData();
+    } catch (error: any) {
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    } finally {
+      setDetectingTemplate(prev => ({ ...prev, [dashboard.id]: false }));
     }
   };
 
@@ -761,6 +811,15 @@ export default function AdminDashboards() {
                           <DropdownMenuItem onClick={() => window.open(dashboard.webhook_url!, '_blank')}>
                             <ExternalLink className="mr-2 h-4 w-4" />
                             Abrir URL
+                          </DropdownMenuItem>
+                        )}
+                        {dashboard.source_kind === 'supabase_view' && (
+                          <DropdownMenuItem 
+                            onClick={() => detectTemplate(dashboard)}
+                            disabled={detectingTemplate[dashboard.id]}
+                          >
+                            <Wand2 className="mr-2 h-4 w-4" />
+                            {detectingTemplate[dashboard.id] ? 'Detectando...' : 'Detectar Template'}
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuItem onClick={() => duplicateDashboard(dashboard)}>
