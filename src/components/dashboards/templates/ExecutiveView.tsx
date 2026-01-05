@@ -10,10 +10,10 @@ import {
   Legend, 
   ResponsiveContainer 
 } from 'recharts';
-import { DollarSign, Users, TrendingUp, Target, ArrowRightLeft, Briefcase } from 'lucide-react';
+import { DollarSign, Users, TrendingUp, TrendingDown, Target, ArrowRightLeft, Briefcase, Minus } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import KpiCard from '../shared/KpiCard';
+import { cn } from '@/lib/utils';
 
 interface ExecutiveViewProps {
   data: any[];
@@ -50,30 +50,18 @@ const KPI_LABELS: Record<string, string> = {
   cac: 'CAC do Período',
 };
 
-const KPI_TOOLTIPS: Record<string, string> = {
-  custo_total: 'Total investido em marketing no período selecionado.',
-  leads_total: 'Total de leads gerados pelos canais de aquisição.',
-  entrada_total: 'Leads que entraram no funil de vendas.',
-  reuniao_realizada_total: 'Reuniões efetivamente realizadas com prospects.',
-  venda_total: 'Vendas fechadas no período.',
-  cpl: 'Custo Por Lead: investimento dividido pelo número de leads.',
-  cac: 'Custo de Aquisição de Cliente: investimento dividido pelo número de vendas.',
-};
-
 export default function ExecutiveView({ 
   data, 
   spec, 
   previousData = [],
   comparisonEnabled = false 
 }: ExecutiveViewProps) {
-  // Calculate aggregated KPIs for the period
   const aggregatedKpis = useMemo(() => {
     if (data.length === 0) return {};
 
     const sums: Record<string, number> = {};
     const kpiList = spec?.kpis || ['custo_total', 'leads_total', 'entrada_total', 'reuniao_realizada_total', 'venda_total'];
     
-    // Sum all numeric columns
     data.forEach(row => {
       kpiList.forEach((key: string) => {
         if (typeof row[key] === 'number') {
@@ -82,7 +70,6 @@ export default function ExecutiveView({
       });
     });
 
-    // Calculate CPL and CAC from aggregates
     if (sums.custo_total !== undefined) {
       if (sums.leads_total && sums.leads_total > 0) {
         sums.cpl = sums.custo_total / sums.leads_total;
@@ -95,7 +82,6 @@ export default function ExecutiveView({
     return sums;
   }, [data, spec]);
 
-  // Calculate previous period aggregates
   const previousAggregates = useMemo(() => {
     if (!previousData || previousData.length === 0) return {};
 
@@ -122,17 +108,13 @@ export default function ExecutiveView({
     return sums;
   }, [previousData, spec]);
 
-  // Get sparkline data for each KPI
-  const sparklineData = useMemo(() => {
-    const sparklines: Record<string, number[]> = {};
-    const kpiList = ['custo_total', 'leads_total', 'cpl', 'cac', 'venda_total', 'entrada_total', 'reuniao_realizada_total'];
-    
-    kpiList.forEach(key => {
-      sparklines[key] = data.map(row => row[key] || 0);
-    });
-    
-    return sparklines;
-  }, [data]);
+  const getVariation = (key: string) => {
+    if (!comparisonEnabled || !previousAggregates[key]) return null;
+    const current = aggregatedKpis[key] || 0;
+    const previous = previousAggregates[key] || 0;
+    if (previous === 0) return null;
+    return ((current - previous) / previous) * 100;
+  };
 
   const formatting = spec?.formatting || {};
   const kpiList = [...(spec?.kpis || ['custo_total', 'leads_total', 'entrada_total', 'reuniao_realizada_total', 'venda_total']), 'cpl', 'cac'];
@@ -162,41 +144,42 @@ export default function ExecutiveView({
     }
   };
 
-  // Determine format type for KpiCard
-  const getFormatType = (key: string): 'currency' | 'percent' | 'integer' => {
-    if (key === 'cpl' || key === 'cac' || key.includes('custo')) return 'currency';
-    if (key.startsWith('taxa_')) return 'percent';
-    return 'integer';
-  };
-
   return (
     <div className="space-y-6">
-      {/* KPI Cards - Grid with enterprise styling */}
+      {/* KPI Cards */}
       <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
         {uniqueKpis.map((key) => {
           if (aggregatedKpis[key] === undefined) return null;
           const Icon = KPI_ICONS[key] || TrendingUp;
-          const showComparison = comparisonEnabled && previousAggregates[key] !== undefined;
+          const variation = getVariation(key);
           
           return (
-            <KpiCard
-              key={key}
-              label={KPI_LABELS[key] || key}
-              value={formatValue(key, aggregatedKpis[key])}
-              icon={Icon}
-              tooltip={KPI_TOOLTIPS[key]}
-              currentValue={showComparison ? aggregatedKpis[key] : undefined}
-              previousValue={showComparison ? previousAggregates[key] : undefined}
-              sparklineData={sparklineData[key]}
-              format={getFormatType(key)}
-            />
+            <Card key={key} className="overflow-hidden">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">{KPI_LABELS[key] || key}</CardTitle>
+                <Icon className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatValue(key, aggregatedKpis[key])}</div>
+                {variation !== null && (
+                  <div className={cn(
+                    "flex items-center gap-1 text-xs mt-1",
+                    variation > 0 ? "text-green-600" : variation < 0 ? "text-red-600" : "text-muted-foreground"
+                  )}>
+                    {variation > 0 ? <TrendingUp className="h-3 w-3" /> : 
+                     variation < 0 ? <TrendingDown className="h-3 w-3" /> : 
+                     <Minus className="h-3 w-3" />}
+                    <span>{variation > 0 ? '+' : ''}{variation.toFixed(1)}%</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           );
         })}
       </div>
 
       {/* Charts */}
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Chart: Custo e Leads por Dia */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Custo e Leads por Dia</CardTitle>
@@ -206,54 +189,25 @@ export default function ExecutiveView({
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                  <XAxis 
-                    dataKey="dia" 
-                    tickFormatter={formatDate}
-                    className="text-xs"
-                    tick={{ fontSize: 11 }}
-                  />
-                  <YAxis yAxisId="left" className="text-xs" tick={{ fontSize: 11 }} />
-                  <YAxis yAxisId="right" orientation="right" className="text-xs" tick={{ fontSize: 11 }} />
+                  <XAxis dataKey="dia" tickFormatter={formatDate} tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
                   <Tooltip 
                     labelFormatter={formatDateFull}
                     formatter={(value: number, name: string) => {
                       if (name === 'Custo') return formatCurrency(value);
                       return formatInteger(value);
                     }}
-                    contentStyle={{
-                      backgroundColor: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: '8px',
-                    }}
                   />
                   <Legend />
-                  <Line 
-                    yAxisId="left"
-                    type="monotone" 
-                    dataKey="custo_total" 
-                    name="Custo"
-                    stroke="hsl(var(--primary))" 
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                  />
-                  <Line 
-                    yAxisId="right"
-                    type="monotone" 
-                    dataKey="leads_total" 
-                    name="Leads"
-                    stroke="hsl(var(--accent))" 
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                  />
+                  <Line yAxisId="left" type="monotone" dataKey="custo_total" name="Custo" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="leads_total" name="Leads" stroke="hsl(var(--accent))" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           </CardContent>
         </Card>
 
-        {/* Chart: CPL e CAC por Dia */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">CPL e CAC por Dia</CardTitle>
@@ -263,41 +217,12 @@ export default function ExecutiveView({
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                  <XAxis 
-                    dataKey="dia" 
-                    tickFormatter={formatDate}
-                    className="text-xs"
-                    tick={{ fontSize: 11 }}
-                  />
-                  <YAxis className="text-xs" tick={{ fontSize: 11 }} />
-                  <Tooltip 
-                    labelFormatter={formatDateFull}
-                    formatter={(value: number) => formatCurrency(value)}
-                    contentStyle={{
-                      backgroundColor: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: '8px',
-                    }}
-                  />
+                  <XAxis dataKey="dia" tickFormatter={formatDate} tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip labelFormatter={formatDateFull} formatter={(value: number) => formatCurrency(value)} />
                   <Legend />
-                  <Line 
-                    type="monotone" 
-                    dataKey="cpl" 
-                    name="CPL"
-                    stroke="hsl(var(--warning))" 
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="cac" 
-                    name="CAC"
-                    stroke="hsl(var(--destructive))" 
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                  />
+                  <Line type="monotone" dataKey="cpl" name="CPL" stroke="hsl(38, 92%, 50%)" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="cac" name="CAC" stroke="hsl(0, 72%, 50%)" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>

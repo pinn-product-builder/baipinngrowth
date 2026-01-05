@@ -1,7 +1,9 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -9,19 +11,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
-import { RefreshCw, BarChart3, Target, DollarSign, Table as TableIcon, Lightbulb } from 'lucide-react';
+import { 
+  RefreshCw, 
+  BarChart3, 
+  Target, 
+  DollarSign, 
+  Table as TableIcon,
+  Download,
+  FileSpreadsheet,
+  ArrowLeftRight
+} from 'lucide-react';
 import { format, subDays, differenceInDays } from 'date-fns';
 import ExecutiveView from './templates/ExecutiveView';
 import FunnelView from './templates/FunnelView';
 import CostEfficiencyView from './templates/CostEfficiencyView';
 import DataTableView from './templates/DataTableView';
-import InsightsPanel from './shared/InsightsPanel';
-import ExportButton from './shared/ExportButton';
-import ComparisonToggle from './shared/ComparisonToggle';
 
 interface CostsFunnelDashboardProps {
   dashboardId: string;
@@ -66,7 +79,6 @@ export default function CostsFunnelDashboard({
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       
-      // Fetch current period
       const url = new URL(`${supabaseUrl}/functions/v1/dashboard-data`);
       url.searchParams.set('dashboard_id', dashboardId);
       url.searchParams.set('start', startDate);
@@ -87,7 +99,6 @@ export default function CostsFunnelDashboard({
       const result = await res.json();
       setData(result.data || []);
 
-      // Fetch previous period if comparison enabled
       if (fetchPrevious && comparisonEnabled) {
         const periodDays = differenceInDays(new Date(endDate), new Date(startDate));
         const prevEnd = format(subDays(new Date(startDate), 1), 'yyyy-MM-dd');
@@ -109,14 +120,12 @@ export default function CostsFunnelDashboard({
           const prevResult = await prevRes.json();
           setPreviousData(prevResult.data || []);
         }
+      } else {
+        setPreviousData([]);
       }
 
       if (result.cached) {
-        toast({ 
-          title: 'Dados do cache', 
-          description: 'Exibindo dados em cache.',
-          duration: 2000
-        });
+        toast({ title: 'Dados do cache', description: 'Exibindo dados em cache.', duration: 2000 });
       }
     } catch (err: any) {
       console.error('Erro ao buscar dados:', err);
@@ -138,19 +147,26 @@ export default function CostsFunnelDashboard({
     setEndDate(format(new Date(), 'yyyy-MM-dd'));
   };
 
-  // Column labels for export
-  const columnLabels: Record<string, string> = {
-    dia: 'Dia',
-    custo_total: 'Custo Total',
-    leads_total: 'Leads',
-    entrada_total: 'Entradas',
-    reuniao_agendada_total: 'Reu. Agendadas',
-    reuniao_realizada_total: 'Reu. Realizadas',
-    venda_total: 'Vendas',
-    falta_total: 'Faltas',
-    desmarque_total: 'Desmarques',
-    cpl: 'CPL',
-    cac: 'CAC',
+  const exportCSV = () => {
+    if (data.length === 0) return;
+    
+    const headers = Object.keys(data[0]);
+    const csvContent = [
+      headers.join(','),
+      ...data.map(row => headers.map(h => {
+        const val = row[h];
+        if (val === null || val === undefined) return '';
+        return typeof val === 'string' && val.includes(',') ? `"${val}"` : val;
+      }).join(','))
+    ].join('\n');
+
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${dashboardName}_${format(new Date(), 'yyyy-MM-dd')}.csv`;
+    link.click();
+    
+    toast({ title: 'Exportado!', description: 'CSV baixado.' });
   };
 
   if (error) {
@@ -208,16 +224,29 @@ export default function CostsFunnelDashboard({
         </div>
         
         <div className="flex items-center gap-2 ml-auto">
-          <ComparisonToggle 
-            enabled={comparisonEnabled} 
-            onChange={setComparisonEnabled} 
-          />
-          <ExportButton
-            data={data}
-            dashboardName={dashboardName}
-            containerId="dashboard-content"
-            columnLabels={columnLabels}
-          />
+          {/* Comparison Toggle */}
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/50">
+            <ArrowLeftRight className="h-4 w-4 text-muted-foreground" />
+            <Label htmlFor="comparison" className="text-sm cursor-pointer">Comparar</Label>
+            <Switch id="comparison" checked={comparisonEnabled} onCheckedChange={setComparisonEnabled} />
+          </div>
+          
+          {/* Export */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                <Download className="mr-2 h-4 w-4" />
+                Exportar
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={exportCSV}>
+                <FileSpreadsheet className="mr-2 h-4 w-4" />
+                CSV
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <Button onClick={() => fetchData(comparisonEnabled)} variant="outline" size="sm" disabled={isLoading}>
             <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
             Atualizar
@@ -236,12 +265,12 @@ export default function CostsFunnelDashboard({
           </div>
           <h3 className="text-lg font-medium mb-1">Sem dados no período</h3>
           <p className="text-muted-foreground text-sm max-w-sm">
-            Não encontramos dados para o período selecionado. Tente expandir o intervalo de datas.
+            Não encontramos dados para o período selecionado. Tente expandir o intervalo.
           </p>
         </div>
       ) : (
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-5 mb-6">
+          <TabsList className="grid w-full grid-cols-4 mb-6">
             <TabsTrigger value="executive" className="flex items-center gap-2">
               <BarChart3 className="h-4 w-4" />
               <span className="hidden sm:inline">Executivo</span>
@@ -253,10 +282,6 @@ export default function CostsFunnelDashboard({
             <TabsTrigger value="efficiency" className="flex items-center gap-2">
               <DollarSign className="h-4 w-4" />
               <span className="hidden sm:inline">Eficiência</span>
-            </TabsTrigger>
-            <TabsTrigger value="insights" className="flex items-center gap-2">
-              <Lightbulb className="h-4 w-4" />
-              <span className="hidden sm:inline">Insights</span>
             </TabsTrigger>
             <TabsTrigger value="table" className="flex items-center gap-2">
               <TableIcon className="h-4 w-4" />
@@ -284,14 +309,6 @@ export default function CostsFunnelDashboard({
 
           <TabsContent value="efficiency" className="mt-0">
             <CostEfficiencyView data={data} spec={dashboardSpec} />
-          </TabsContent>
-
-          <TabsContent value="insights" className="mt-0">
-            <InsightsPanel 
-              data={data} 
-              previousPeriodData={previousData}
-              dashboardId={dashboardId}
-            />
           </TabsContent>
 
           <TabsContent value="table" className="mt-0">
