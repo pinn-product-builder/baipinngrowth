@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
@@ -13,17 +13,21 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
-import { RefreshCw, BarChart3, Target, DollarSign, Table as TableIcon } from 'lucide-react';
-import { format, subDays } from 'date-fns';
+import { RefreshCw, BarChart3, Target, DollarSign, Table as TableIcon, Lightbulb } from 'lucide-react';
+import { format, subDays, differenceInDays } from 'date-fns';
 import ExecutiveView from './templates/ExecutiveView';
 import FunnelView from './templates/FunnelView';
 import CostEfficiencyView from './templates/CostEfficiencyView';
 import DataTableView from './templates/DataTableView';
+import InsightsPanel from './shared/InsightsPanel';
+import ExportButton from './shared/ExportButton';
+import ComparisonToggle from './shared/ComparisonToggle';
 
 interface CostsFunnelDashboardProps {
   dashboardId: string;
   templateKind?: string;
   dashboardSpec?: Record<string, any>;
+  dashboardName?: string;
 }
 
 const datePresets = [
@@ -36,18 +40,21 @@ const datePresets = [
 export default function CostsFunnelDashboard({ 
   dashboardId, 
   templateKind = 'costs_funnel_daily',
-  dashboardSpec = {}
+  dashboardSpec = {},
+  dashboardName = 'Dashboard'
 }: CostsFunnelDashboardProps) {
   const [data, setData] = useState<any[]>([]);
+  const [previousData, setPreviousData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [startDate, setStartDate] = useState(() => format(subDays(new Date(), 60), 'yyyy-MM-dd'));
+  const [startDate, setStartDate] = useState(() => format(subDays(new Date(), 30), 'yyyy-MM-dd'));
   const [endDate, setEndDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
-  const [preset, setPreset] = useState('60');
+  const [preset, setPreset] = useState('30');
   const [activeTab, setActiveTab] = useState('executive');
+  const [comparisonEnabled, setComparisonEnabled] = useState(false);
   const { toast } = useToast();
 
-  const fetchData = async () => {
+  const fetchData = async (fetchPrevious = false) => {
     setIsLoading(true);
     setError(null);
 
@@ -58,6 +65,8 @@ export default function CostsFunnelDashboard({
       }
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      
+      // Fetch current period
       const url = new URL(`${supabaseUrl}/functions/v1/dashboard-data`);
       url.searchParams.set('dashboard_id', dashboardId);
       url.searchParams.set('start', startDate);
@@ -78,6 +87,30 @@ export default function CostsFunnelDashboard({
       const result = await res.json();
       setData(result.data || []);
 
+      // Fetch previous period if comparison enabled
+      if (fetchPrevious && comparisonEnabled) {
+        const periodDays = differenceInDays(new Date(endDate), new Date(startDate));
+        const prevEnd = format(subDays(new Date(startDate), 1), 'yyyy-MM-dd');
+        const prevStart = format(subDays(new Date(prevEnd), periodDays), 'yyyy-MM-dd');
+
+        const prevUrl = new URL(`${supabaseUrl}/functions/v1/dashboard-data`);
+        prevUrl.searchParams.set('dashboard_id', dashboardId);
+        prevUrl.searchParams.set('start', prevStart);
+        prevUrl.searchParams.set('end', prevEnd);
+
+        const prevRes = await fetch(prevUrl.toString(), {
+          headers: {
+            'Authorization': `Bearer ${session.session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (prevRes.ok) {
+          const prevResult = await prevRes.json();
+          setPreviousData(prevResult.data || []);
+        }
+      }
+
       if (result.cached) {
         toast({ 
           title: 'Dados do cache', 
@@ -95,8 +128,8 @@ export default function CostsFunnelDashboard({
   };
 
   useEffect(() => {
-    fetchData();
-  }, [dashboardId, startDate, endDate]);
+    fetchData(comparisonEnabled);
+  }, [dashboardId, startDate, endDate, comparisonEnabled]);
 
   const handlePresetChange = (days: string) => {
     setPreset(days);
@@ -105,11 +138,26 @@ export default function CostsFunnelDashboard({
     setEndDate(format(new Date(), 'yyyy-MM-dd'));
   };
 
+  // Column labels for export
+  const columnLabels: Record<string, string> = {
+    dia: 'Dia',
+    custo_total: 'Custo Total',
+    leads_total: 'Leads',
+    entrada_total: 'Entradas',
+    reuniao_agendada_total: 'Reu. Agendadas',
+    reuniao_realizada_total: 'Reu. Realizadas',
+    venda_total: 'Vendas',
+    falta_total: 'Faltas',
+    desmarque_total: 'Desmarques',
+    cpl: 'CPL',
+    cac: 'CAC',
+  };
+
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <p className="text-destructive mb-4">{error}</p>
-        <Button onClick={fetchData} variant="outline">
+        <Button onClick={() => fetchData(comparisonEnabled)} variant="outline">
           <RefreshCw className="mr-2 h-4 w-4" />
           Tentar novamente
         </Button>
@@ -118,13 +166,13 @@ export default function CostsFunnelDashboard({
   }
 
   return (
-    <div className="space-y-6">
-      {/* Filters */}
-      <div className="flex flex-wrap items-end gap-4 bg-muted/30 p-4 rounded-lg">
+    <div className="space-y-6" id="dashboard-content">
+      {/* Filters Bar */}
+      <div className="flex flex-wrap items-end gap-3 bg-muted/30 p-4 rounded-xl border border-border/50">
         <div className="space-y-1">
-          <Label>Período</Label>
+          <Label className="text-xs">Período</Label>
           <Select value={preset} onValueChange={handlePresetChange}>
-            <SelectTrigger className="w-[180px]">
+            <SelectTrigger className="w-[160px] h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -135,7 +183,7 @@ export default function CostsFunnelDashboard({
           </Select>
         </div>
         <div className="space-y-1">
-          <Label>Data Início</Label>
+          <Label className="text-xs">Início</Label>
           <Input 
             type="date" 
             value={startDate} 
@@ -143,11 +191,11 @@ export default function CostsFunnelDashboard({
               setStartDate(e.target.value);
               setPreset('');
             }}
-            className="w-[150px]"
+            className="w-[140px] h-9"
           />
         </div>
         <div className="space-y-1">
-          <Label>Data Fim</Label>
+          <Label className="text-xs">Fim</Label>
           <Input 
             type="date" 
             value={endDate} 
@@ -155,57 +203,98 @@ export default function CostsFunnelDashboard({
               setEndDate(e.target.value);
               setPreset('');
             }}
-            className="w-[150px]"
+            className="w-[140px] h-9"
           />
         </div>
-        <Button onClick={fetchData} variant="outline" disabled={isLoading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-          Atualizar
-        </Button>
+        
+        <div className="flex items-center gap-2 ml-auto">
+          <ComparisonToggle 
+            enabled={comparisonEnabled} 
+            onChange={setComparisonEnabled} 
+          />
+          <ExportButton
+            data={data}
+            dashboardName={dashboardName}
+            containerId="dashboard-content"
+            columnLabels={columnLabels}
+          />
+          <Button onClick={() => fetchData(comparisonEnabled)} variant="outline" size="sm" disabled={isLoading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+            Atualizar
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
         <div className="flex items-center justify-center py-12">
           <LoadingSpinner />
         </div>
+      ) : data.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="rounded-full bg-muted p-4 mb-4">
+            <BarChart3 className="h-8 w-8 text-muted-foreground" />
+          </div>
+          <h3 className="text-lg font-medium mb-1">Sem dados no período</h3>
+          <p className="text-muted-foreground text-sm max-w-sm">
+            Não encontramos dados para o período selecionado. Tente expandir o intervalo de datas.
+          </p>
+        </div>
       ) : (
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5 mb-6">
             <TabsTrigger value="executive" className="flex items-center gap-2">
               <BarChart3 className="h-4 w-4" />
-              <span className="hidden sm:inline">Visão Executiva</span>
-              <span className="sm:hidden">Executivo</span>
+              <span className="hidden sm:inline">Executivo</span>
             </TabsTrigger>
             <TabsTrigger value="funnel" className="flex items-center gap-2">
               <Target className="h-4 w-4" />
-              <span className="hidden sm:inline">Funil & Conversões</span>
-              <span className="sm:hidden">Funil</span>
+              <span className="hidden sm:inline">Funil</span>
             </TabsTrigger>
             <TabsTrigger value="efficiency" className="flex items-center gap-2">
               <DollarSign className="h-4 w-4" />
-              <span className="hidden sm:inline">Eficiência por Etapa</span>
-              <span className="sm:hidden">Eficiência</span>
+              <span className="hidden sm:inline">Eficiência</span>
+            </TabsTrigger>
+            <TabsTrigger value="insights" className="flex items-center gap-2">
+              <Lightbulb className="h-4 w-4" />
+              <span className="hidden sm:inline">Insights</span>
             </TabsTrigger>
             <TabsTrigger value="table" className="flex items-center gap-2">
               <TableIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Dados Completos</span>
-              <span className="sm:hidden">Tabela</span>
+              <span className="hidden sm:inline">Tabela</span>
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="executive" className="mt-6">
-            <ExecutiveView data={data} spec={dashboardSpec} />
+          <TabsContent value="executive" className="mt-0">
+            <ExecutiveView 
+              data={data} 
+              spec={dashboardSpec} 
+              previousData={previousData}
+              comparisonEnabled={comparisonEnabled}
+            />
           </TabsContent>
 
-          <TabsContent value="funnel" className="mt-6">
-            <FunnelView data={data} spec={dashboardSpec} />
+          <TabsContent value="funnel" className="mt-0">
+            <FunnelView 
+              data={data} 
+              spec={dashboardSpec}
+              previousData={previousData}
+              comparisonEnabled={comparisonEnabled}
+            />
           </TabsContent>
 
-          <TabsContent value="efficiency" className="mt-6">
+          <TabsContent value="efficiency" className="mt-0">
             <CostEfficiencyView data={data} spec={dashboardSpec} />
           </TabsContent>
 
-          <TabsContent value="table" className="mt-6">
+          <TabsContent value="insights" className="mt-0">
+            <InsightsPanel 
+              data={data} 
+              previousPeriodData={previousData}
+              dashboardId={dashboardId}
+            />
+          </TabsContent>
+
+          <TabsContent value="table" className="mt-0">
             <DataTableView data={data} spec={dashboardSpec} />
           </TabsContent>
         </Tabs>
