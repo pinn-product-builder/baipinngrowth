@@ -11,6 +11,7 @@ import { useActivityLogger } from '@/hooks/useActivityLogger';
 import { ArrowLeft, RefreshCw, Clock, AlertCircle, FileText, ExternalLink, AlertTriangle, Copy, CheckCheck } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import DashboardCustosFunil from '@/components/dashboards/DashboardCustosFunil';
 
 // Configure DOMPurify to allow safe HTML tags for dashboard content
 const sanitizeHtml = (html: string): string => {
@@ -28,12 +29,15 @@ interface Dashboard {
   id: string;
   name: string;
   description: string | null;
-  webhook_url: string;
+  webhook_url: string | null;
   display_type: 'auto' | 'iframe' | 'html' | 'json';
+  source_kind: 'webhook' | 'supabase_view';
+  data_source_id: string | null;
+  view_name: string | null;
   last_fetched_at: string | null;
 }
 
-type ContentType = 'iframe' | 'html' | 'json' | 'unknown';
+type ContentType = 'iframe' | 'html' | 'json' | 'supabase_view' | 'unknown';
 type LoadState = 'loading' | 'success' | 'error' | 'empty';
 type ErrorType = 'generic' | 'cors' | 'iframe_blocked' | 'network' | 'timeout';
 
@@ -71,12 +75,20 @@ export default function DashboardView() {
         .single();
 
       if (error) throw error;
-      setDashboard(data);
+      setDashboard(data as any);
       
       // Registrar visualização
       logActivity('view_dashboard', 'dashboard', data.id, { name: data.name });
       
-      loadDashboardContent(data);
+      // Se for supabase_view, não precisa carregar conteúdo da mesma forma
+      if ((data as any).source_kind === 'supabase_view') {
+        setContentType('supabase_view');
+        setLoadState('success');
+        setIsLoading(false);
+        return;
+      }
+      
+      loadDashboardContent(data as any);
     } catch (error) {
       console.error('Erro ao buscar dashboard:', error);
       setLoadState('error');
@@ -318,44 +330,46 @@ export default function DashboardView() {
             )}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {lastUpdated && (
-            <div className="flex items-center gap-1.5 text-sm text-muted-foreground mr-2">
-              <Clock className="h-4 w-4" />
-              <span>Atualizado: {format(lastUpdated, 'HH:mm:ss', { locale: ptBR })}</span>
-            </div>
-          )}
-          {retryCount > 1 && loadState === 'loading' && (
-            <span className="text-xs text-muted-foreground mr-2">
-              Tentativa {retryCount}/{MAX_RETRIES}
-            </span>
-          )}
-          <Button 
-            variant="outline" 
-            size="sm"
-            onClick={handleCopyLink}
-          >
-            {copied ? <CheckCheck className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
-            {copied ? 'Copiado' : 'Copiar link'}
-          </Button>
-          <Button 
-            variant="outline"
-            size="sm"
-            onClick={handleOpenInNewTab}
-          >
-            <ExternalLink className="mr-2 h-4 w-4" />
-            Abrir em nova aba
-          </Button>
-          <Button 
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-          >
-            <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-            Atualizar
-          </Button>
-        </div>
+        {dashboard.source_kind !== 'supabase_view' && (
+          <div className="flex flex-wrap items-center gap-2">
+            {lastUpdated && (
+              <div className="flex items-center gap-1.5 text-sm text-muted-foreground mr-2">
+                <Clock className="h-4 w-4" />
+                <span>Atualizado: {format(lastUpdated, 'HH:mm:ss', { locale: ptBR })}</span>
+              </div>
+            )}
+            {retryCount > 1 && loadState === 'loading' && (
+              <span className="text-xs text-muted-foreground mr-2">
+                Tentativa {retryCount}/{MAX_RETRIES}
+              </span>
+            )}
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={handleCopyLink}
+            >
+              {copied ? <CheckCheck className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+              {copied ? 'Copiado' : 'Copiar link'}
+            </Button>
+            <Button 
+              variant="outline"
+              size="sm"
+              onClick={handleOpenInNewTab}
+            >
+              <ExternalLink className="mr-2 h-4 w-4" />
+              Abrir em nova aba
+            </Button>
+            <Button 
+              variant="outline"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              Atualizar
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Content */}
@@ -406,7 +420,7 @@ export default function DashboardView() {
           />
         )}
 
-        {loadState === 'success' && contentType === 'iframe' && !iframeError && (
+        {loadState === 'success' && contentType === 'iframe' && !iframeError && dashboard.webhook_url && (
           <iframe
             key={lastUpdated?.getTime()}
             src={dashboard.webhook_url}
@@ -434,6 +448,10 @@ export default function DashboardView() {
               <JsonRenderer data={content as object} />
             </CardContent>
           </Card>
+        )}
+
+        {loadState === 'success' && contentType === 'supabase_view' && dashboard && (
+          <DashboardCustosFunil dashboardId={dashboard.id} />
         )}
       </div>
     </div>

@@ -11,7 +11,8 @@ import {
   Menu,
   X,
   ChevronDown,
-  Activity
+  Activity,
+  Database
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -35,6 +36,7 @@ const navItems: NavItem[] = [
   { label: 'Clientes', href: '/admin/tenants', icon: Building2, adminOnly: true },
   { label: 'Usuários', href: '/admin/users', icon: Users, adminOnly: true },
   { label: 'Gerenciar Dashboards', href: '/admin/dashboards', icon: BarChart3, adminOnly: true },
+  { label: 'Data Sources', href: '/admin/data-sources', icon: Database, adminOnly: true },
   { label: 'Logs de Atividade', href: '/admin/activity-logs', icon: Activity, adminOnly: true },
 ];
 

@@ -16,6 +16,7 @@ import Account from "@/pages/Account";
 import Tenants from "@/pages/admin/Tenants";
 import Users from "@/pages/admin/Users";
 import AdminDashboards from "@/pages/admin/AdminDashboards";
+import DataSources from "@/pages/admin/DataSources";
 import ActivityLogs from "@/pages/admin/ActivityLogs";
 import NotFound from "@/pages/NotFound";
 
@@ -63,6 +64,11 @@ const App = () => (
               <Route path="/admin/dashboards" element={
                 <ProtectedRoute requireAdmin>
                   <AdminDashboards />
+                </ProtectedRoute>
+              } />
+              <Route path="/admin/data-sources" element={
+                <ProtectedRoute requireAdmin>
+                  <DataSources />
                 </ProtectedRoute>
               } />
               <Route path="/admin/activity-logs" element={
