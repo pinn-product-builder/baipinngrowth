@@ -67,9 +67,12 @@ export default function CostsFunnelDashboard({
   const [comparisonEnabled, setComparisonEnabled] = useState(false);
   const { toast } = useToast();
 
+  const [errorDetails, setErrorDetails] = useState<{ type?: string; details?: string } | null>(null);
+
   const fetchData = async (fetchPrevious = false) => {
     setIsLoading(true);
     setError(null);
+    setErrorDetails(null);
 
     try {
       const { data: session } = await supabase.auth.getSession();
@@ -91,12 +94,17 @@ export default function CostsFunnelDashboard({
         },
       });
 
+      const result = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Erro ${res.status}`);
+        const errorType = result.error_type || 'generic';
+        const errorMsg = result.error || `Erro ${res.status}`;
+        const errorDetailsText = result.details || '';
+        
+        setErrorDetails({ type: errorType, details: errorDetailsText });
+        throw new Error(errorMsg);
       }
 
-      const result = await res.json();
       setData(result.data || []);
 
       if (fetchPrevious && comparisonEnabled) {
@@ -130,7 +138,6 @@ export default function CostsFunnelDashboard({
     } catch (err: any) {
       console.error('Erro ao buscar dados:', err);
       setError(err.message || 'Erro ao carregar dados');
-      toast({ title: 'Erro', description: err.message, variant: 'destructive' });
     } finally {
       setIsLoading(false);
     }
@@ -169,10 +176,35 @@ export default function CostsFunnelDashboard({
     toast({ title: 'Exportado!', description: 'CSV baixado.' });
   };
 
+  const getErrorInfo = () => {
+    switch (errorDetails?.type) {
+      case 'timeout':
+        return { title: 'Tempo esgotado', description: 'O servidor demorou muito para responder.' };
+      case 'network':
+        return { title: 'Erro de rede', description: 'Não foi possível conectar ao servidor.' };
+      case 'proxy_error':
+        return { title: 'Erro do proxy', description: errorDetails?.details || 'O proxy retornou um erro.' };
+      case 'supabase_error':
+        return { title: 'Erro do Supabase', description: errorDetails?.details || 'Erro ao consultar o banco de dados.' };
+      default:
+        return { title: 'Falha ao obter dados', description: error || 'Erro desconhecido' };
+    }
+  };
+
   if (error) {
+    const errorInfo = getErrorInfo();
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-center">
-        <p className="text-destructive mb-4">{error}</p>
+      <div className="flex flex-col items-center justify-center py-12 text-center border rounded-lg bg-card">
+        <div className="rounded-full bg-destructive/10 p-4 mb-4">
+          <RefreshCw className="h-8 w-8 text-destructive" />
+        </div>
+        <h3 className="text-lg font-medium mb-1">{errorInfo.title}</h3>
+        <p className="text-muted-foreground text-sm max-w-md mb-2">{errorInfo.description}</p>
+        {errorDetails?.details && errorDetails.details !== errorInfo.description && (
+          <p className="text-xs text-muted-foreground bg-muted px-3 py-1 rounded mb-4 max-w-md truncate">
+            {errorDetails.details}
+          </p>
+        )}
         <Button onClick={() => fetchData(comparisonEnabled)} variant="outline">
           <RefreshCw className="mr-2 h-4 w-4" />
           Tentar novamente

@@ -33,7 +33,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import { Database, Plus, Search, MoreHorizontal, Pencil, Power, CheckCircle, XCircle, Loader2, Trash2, Key, Eye, RefreshCw, Lock, Unlock } from 'lucide-react';
+import { Database, Plus, Search, MoreHorizontal, Pencil, Power, CheckCircle, XCircle, Loader2, Trash2, Key, RefreshCw, Lock, Unlock, Globe, Webhook, AlertCircle } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,6 +42,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 interface Tenant {
   id: string;
@@ -55,6 +58,9 @@ interface DataSource {
   name: string;
   project_ref: string;
   project_url: string;
+  base_url: string | null;
+  auth_mode: string | null;
+  bearer_token: string | null;
   anon_key_present: boolean;
   service_role_key_present: boolean;
   allowed_views: string[];
@@ -70,6 +76,7 @@ interface ViewInfo {
 }
 
 type TestStatus = 'idle' | 'testing' | 'success' | 'error';
+type DataSourceType = 'supabase' | 'proxy_webhook';
 
 export default function DataSources() {
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
@@ -83,6 +90,17 @@ export default function DataSources() {
   const [editingDataSource, setEditingDataSource] = useState<DataSource | null>(null);
   const [selectedDataSource, setSelectedDataSource] = useState<DataSource | null>(null);
   
+  // Form data for proxy_webhook
+  const [proxyFormData, setProxyFormData] = useState({
+    name: '',
+    tenantId: '',
+    baseUrl: '',
+    authMode: 'none' as 'none' | 'bearer_token',
+    bearerToken: '',
+    allowedViews: [] as string[]
+  });
+  
+  // Form data for supabase (legacy)
   const [formData, setFormData] = useState({
     name: '',
     tenantId: '',
@@ -90,6 +108,7 @@ export default function DataSources() {
     projectUrl: '',
     allowedViews: [] as string[]
   });
+  
   const [keyFormData, setKeyFormData] = useState({
     anonKey: '',
     serviceRoleKey: ''
@@ -105,6 +124,9 @@ export default function DataSources() {
   const [availableViews, setAvailableViews] = useState<ViewInfo[]>([]);
   const [availableTables, setAvailableTables] = useState<ViewInfo[]>([]);
   
+  // Data source type selection
+  const [selectedType, setSelectedType] = useState<DataSourceType>('proxy_webhook');
+  
   const { toast } = useToast();
 
   useEffect(() => {
@@ -117,7 +139,8 @@ export default function DataSources() {
     if (searchQuery) {
       filtered = filtered.filter(ds => 
         ds.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        ds.project_ref.toLowerCase().includes(searchQuery.toLowerCase())
+        ds.project_ref?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        ds.base_url?.toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
     
@@ -156,7 +179,53 @@ export default function DataSources() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmitProxy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!proxyFormData.name.trim() || !proxyFormData.tenantId || !proxyFormData.baseUrl.trim()) return;
+
+    setIsSubmitting(true);
+    try {
+      const payload: any = {
+        tenant_id: proxyFormData.tenantId,
+        name: proxyFormData.name,
+        type: 'proxy_webhook',
+        base_url: proxyFormData.baseUrl,
+        auth_mode: proxyFormData.authMode,
+        bearer_token: proxyFormData.authMode === 'bearer_token' ? proxyFormData.bearerToken : null,
+        allowed_views: proxyFormData.allowedViews,
+        // Set dummy values for required fields
+        project_ref: 'proxy',
+        project_url: proxyFormData.baseUrl
+      };
+
+      if (editingDataSource) {
+        const { error } = await supabase
+          .from('tenant_data_sources')
+          .update(payload)
+          .eq('id', editingDataSource.id);
+
+        if (error) throw error;
+        toast({ title: 'Data Source atualizado', description: 'Alterações salvas com sucesso.' });
+      } else {
+        const { error } = await supabase
+          .from('tenant_data_sources')
+          .insert(payload);
+
+        if (error) throw error;
+        toast({ title: 'Proxy criado', description: 'Novo proxy/webhook data source adicionado.' });
+      }
+      
+      setIsDialogOpen(false);
+      resetForm();
+      fetchData();
+    } catch (error: any) {
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSubmitSupabase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name.trim() || !formData.tenantId || !formData.projectRef.trim() || !formData.projectUrl.trim()) return;
 
@@ -165,6 +234,7 @@ export default function DataSources() {
       const payload = {
         tenant_id: formData.tenantId,
         name: formData.name,
+        type: 'supabase',
         project_ref: formData.projectRef,
         project_url: formData.projectUrl,
         allowed_views: formData.allowedViews
@@ -205,20 +275,44 @@ export default function DataSources() {
       projectUrl: '',
       allowedViews: []
     });
+    setProxyFormData({
+      name: '',
+      tenantId: '',
+      baseUrl: '',
+      authMode: 'none',
+      bearerToken: '',
+      allowedViews: []
+    });
     setEditingDataSource(null);
     setAvailableViews([]);
     setAvailableTables([]);
+    setSelectedType('proxy_webhook');
   };
 
   const openEditDialog = (ds: DataSource) => {
     setEditingDataSource(ds);
-    setFormData({
-      name: ds.name,
-      tenantId: ds.tenant_id,
-      projectRef: ds.project_ref,
-      projectUrl: ds.project_url,
-      allowedViews: ds.allowed_views
-    });
+    
+    if (ds.type === 'proxy_webhook') {
+      setSelectedType('proxy_webhook');
+      setProxyFormData({
+        name: ds.name,
+        tenantId: ds.tenant_id,
+        baseUrl: ds.base_url || '',
+        authMode: (ds.auth_mode as 'none' | 'bearer_token') || 'none',
+        bearerToken: ds.bearer_token || '',
+        allowedViews: ds.allowed_views
+      });
+    } else {
+      setSelectedType('supabase');
+      setFormData({
+        name: ds.name,
+        tenantId: ds.tenant_id,
+        projectRef: ds.project_ref,
+        projectUrl: ds.project_url,
+        allowedViews: ds.allowed_views
+      });
+    }
+    
     setIsDialogOpen(true);
   };
 
@@ -251,15 +345,57 @@ export default function DataSources() {
     }
   };
 
-  // Helper to extract error message from new response format
-  const getErrorMessage = (result: any): string => {
-    if (result?.error?.message) return result.error.message;
-    if (result?.error?.details) return `${result.error.message}: ${result.error.details}`;
-    if (typeof result?.error === 'string') return result.error;
-    return 'Erro desconhecido';
+  // Test proxy connection via /health endpoint
+  const testProxyConnection = async (ds: DataSource) => {
+    setTestStatus(prev => ({ ...prev, [ds.id]: 'testing' }));
+    setTestResults(prev => ({ ...prev, [ds.id]: '' }));
+
+    try {
+      const healthUrl = `${ds.base_url}/health`;
+      
+      const headers: Record<string, string> = {
+        'Accept': 'application/json',
+      };
+      
+      if (ds.auth_mode === 'bearer_token' && ds.bearer_token) {
+        headers['Authorization'] = `Bearer ${ds.bearer_token}`;
+      }
+
+      const response = await fetch(healthUrl, {
+        method: 'GET',
+        headers
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      
+      if (result.ok) {
+        setTestStatus(prev => ({ ...prev, [ds.id]: 'success' }));
+        setTestResults(prev => ({ ...prev, [ds.id]: result.message || 'Proxy online' }));
+        toast({ title: 'Conexão OK', description: result.message || 'Proxy online e funcionando.' });
+      } else {
+        throw new Error(result.message || 'Proxy retornou erro');
+      }
+    } catch (error: any) {
+      setTestStatus(prev => ({ ...prev, [ds.id]: 'error' }));
+      setTestResults(prev => ({ ...prev, [ds.id]: error.message }));
+      toast({ 
+        title: 'Falha na conexão', 
+        description: error.message, 
+        variant: 'destructive' 
+      });
+    }
+
+    setTimeout(() => {
+      setTestStatus(prev => ({ ...prev, [ds.id]: 'idle' }));
+    }, 5000);
   };
 
-  const testConnection = async (ds: DataSource) => {
+  // Test Supabase connection via edge function
+  const testSupabaseConnection = async (ds: DataSource) => {
     setTestStatus(prev => ({ ...prev, [ds.id]: 'testing' }));
     setTestResults(prev => ({ ...prev, [ds.id]: '' }));
 
@@ -268,20 +404,18 @@ export default function DataSources() {
         body: { data_source_id: ds.id }
       });
 
-      // Edge function errors (network issues, etc.)
       if (response.error) {
         throw new Error(response.error.message || 'Erro ao chamar função');
       }
 
       const result = response.data;
       
-      // New format: ok: true/false
       if (result.ok) {
         setTestStatus(prev => ({ ...prev, [ds.id]: 'success' }));
         setTestResults(prev => ({ ...prev, [ds.id]: result.message }));
         toast({ title: 'Conexão OK', description: result.message });
       } else {
-        const errorMsg = getErrorMessage(result);
+        const errorMsg = result.error?.message || 'Erro desconhecido';
         setTestStatus(prev => ({ ...prev, [ds.id]: 'error' }));
         setTestResults(prev => ({ ...prev, [ds.id]: errorMsg }));
         toast({ 
@@ -301,6 +435,14 @@ export default function DataSources() {
     }, 5000);
   };
 
+  const testConnection = (ds: DataSource) => {
+    if (ds.type === 'proxy_webhook') {
+      testProxyConnection(ds);
+    } else {
+      testSupabaseConnection(ds);
+    }
+  };
+
   const introspectDataSource = async (dsId?: string) => {
     const targetId = dsId || editingDataSource?.id;
     if (!targetId) return;
@@ -317,7 +459,6 @@ export default function DataSources() {
 
       const result = response.data;
       
-      // New format: ok: true/false
       if (result.ok) {
         setAvailableViews(result.views || []);
         setAvailableTables(result.tables || []);
@@ -326,7 +467,7 @@ export default function DataSources() {
           description: `Encontradas ${result.views?.length || 0} views e ${result.tables?.length || 0} tabelas.` 
         });
       } else {
-        const errorMsg = getErrorMessage(result);
+        const errorMsg = result.error?.message || 'Erro desconhecido';
         toast({ 
           title: `Erro: ${result.error?.code || 'FALHA'}`, 
           description: errorMsg, 
@@ -371,14 +512,13 @@ export default function DataSources() {
 
       const result = response.data;
 
-      // New format: ok: true/false
       if (result.ok) {
         toast({ title: 'Credenciais salvas', description: result.message || 'As chaves foram criptografadas e salvas.' });
         setIsKeysDialogOpen(false);
         setKeyFormData({ anonKey: '', serviceRoleKey: '' });
         fetchData();
       } else {
-        const errorMsg = getErrorMessage(result);
+        const errorMsg = result.error?.message || 'Erro desconhecido';
         toast({ 
           title: `Erro: ${result.error?.code || 'FALHA'}`, 
           description: errorMsg, 
@@ -409,14 +549,44 @@ export default function DataSources() {
     }
   };
 
-  const toggleViewSelection = (viewName: string) => {
-    setFormData(prev => ({
-      ...prev,
-      allowedViews: prev.allowedViews.includes(viewName)
-        ? prev.allowedViews.filter(v => v !== viewName)
-        : [...prev.allowedViews, viewName]
-    }));
+  const toggleViewSelection = (viewName: string, isProxy: boolean = false) => {
+    if (isProxy) {
+      setProxyFormData(prev => ({
+        ...prev,
+        allowedViews: prev.allowedViews.includes(viewName)
+          ? prev.allowedViews.filter(v => v !== viewName)
+          : [...prev.allowedViews, viewName]
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        allowedViews: prev.allowedViews.includes(viewName)
+          ? prev.allowedViews.filter(v => v !== viewName)
+          : [...prev.allowedViews, viewName]
+      }));
+    }
   };
+
+  const addViewManually = (viewName: string, isProxy: boolean = false) => {
+    if (!viewName.trim()) return;
+    if (isProxy) {
+      if (!proxyFormData.allowedViews.includes(viewName)) {
+        setProxyFormData(prev => ({
+          ...prev,
+          allowedViews: [...prev.allowedViews, viewName]
+        }));
+      }
+    } else {
+      if (!formData.allowedViews.includes(viewName)) {
+        setFormData(prev => ({
+          ...prev,
+          allowedViews: [...prev.allowedViews, viewName]
+        }));
+      }
+    }
+  };
+
+  const [manualViewName, setManualViewName] = useState('');
 
   if (isLoading) {
     return <LoadingPage message="Carregando data sources..." />;
@@ -426,7 +596,7 @@ export default function DataSources() {
     <div className="space-y-6 animate-fade-in">
       <PageHeader 
         title="Data Sources" 
-        description="Gerencie conexões com bancos de dados Supabase externos"
+        description="Gerencie conexões com fontes de dados externas (Proxy/n8n ou Supabase)"
         actions={
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
@@ -436,166 +606,331 @@ export default function DataSources() {
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl">
-              <form onSubmit={handleSubmit}>
-                <DialogHeader>
-                  <DialogTitle>{editingDataSource ? 'Editar Data Source' : 'Novo Data Source'}</DialogTitle>
-                  <DialogDescription>
-                    {editingDataSource ? 'Atualize a configuração.' : 'Configure uma nova conexão Supabase.'}
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="tenant">Tenant</Label>
-                      <Select 
-                        value={formData.tenantId} 
-                        onValueChange={(v) => setFormData({ ...formData, tenantId: v })}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Selecione o tenant" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {tenants.map((t) => (
-                            <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="name">Nome</Label>
-                      <Input
-                        id="name"
-                        value={formData.name}
-                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                        placeholder="Ex: Afonsina Supabase"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="projectRef">Project Ref</Label>
-                      <Input
-                        id="projectRef"
-                        value={formData.projectRef}
-                        onChange={(e) => setFormData({ ...formData, projectRef: e.target.value })}
-                        placeholder="mpbrjezmxmrdhgtvldvi"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="projectUrl">Project URL</Label>
-                      <Input
-                        id="projectUrl"
-                        value={formData.projectUrl}
-                        onChange={(e) => setFormData({ ...formData, projectUrl: e.target.value })}
-                        placeholder="https://xxx.supabase.co"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label>Views Permitidas</Label>
-                      {editingDataSource && (
-                        <Button 
-                          type="button" 
-                          variant="outline" 
-                          size="sm"
-                          onClick={() => introspectDataSource()}
-                          disabled={isIntrospecting}
-                        >
-                          {isIntrospecting ? (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          ) : (
-                            <RefreshCw className="mr-2 h-4 w-4" />
-                          )}
-                          Buscar Views
-                        </Button>
-                      )}
-                    </div>
-                    
-                    {availableViews.length > 0 || availableTables.length > 0 ? (
-                      <ScrollArea className="h-40 border rounded-lg p-3">
-                        <div className="space-y-1">
-                          {availableViews.length > 0 && (
-                            <>
-                              <p className="text-xs font-medium text-muted-foreground mb-2">Views ({availableViews.length})</p>
-                              {availableViews.map(v => (
-                                <div key={v.name} className="flex items-center gap-2">
-                                  <Checkbox 
-                                    id={v.name}
-                                    checked={formData.allowedViews.includes(v.name)}
-                                    onCheckedChange={() => toggleViewSelection(v.name)}
-                                  />
-                                  <label htmlFor={v.name} className="text-sm cursor-pointer">{v.name}</label>
-                                </div>
+              <DialogHeader>
+                <DialogTitle>{editingDataSource ? 'Editar Data Source' : 'Novo Data Source'}</DialogTitle>
+                <DialogDescription>
+                  {editingDataSource ? 'Atualize a configuração.' : 'Escolha o tipo e configure a conexão.'}
+                </DialogDescription>
+              </DialogHeader>
+              
+              <Tabs value={selectedType} onValueChange={(v) => setSelectedType(v as DataSourceType)} className="w-full">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="proxy_webhook" className="flex items-center gap-2">
+                    <Webhook className="h-4 w-4" />
+                    Proxy / Webhook (n8n)
+                  </TabsTrigger>
+                  <TabsTrigger value="supabase" className="flex items-center gap-2">
+                    <Database className="h-4 w-4" />
+                    Supabase (Direto)
+                  </TabsTrigger>
+                </TabsList>
+                
+                {/* Proxy/Webhook Tab */}
+                <TabsContent value="proxy_webhook">
+                  <form onSubmit={handleSubmitProxy}>
+                    <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
+                      <Alert>
+                        <Globe className="h-4 w-4" />
+                        <AlertTitle>Modo Proxy/Webhook</AlertTitle>
+                        <AlertDescription>
+                          Conecte a um n8n ou outro webhook que faz a query para o Supabase. 
+                          As credenciais ficam no servidor do proxy, não no Lovable.
+                        </AlertDescription>
+                      </Alert>
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="proxy-tenant">Tenant</Label>
+                          <Select 
+                            value={proxyFormData.tenantId} 
+                            onValueChange={(v) => setProxyFormData({ ...proxyFormData, tenantId: v })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Selecione o tenant" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {tenants.map((t) => (
+                                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
                               ))}
-                            </>
-                          )}
-                          {availableTables.length > 0 && (
-                            <>
-                              <p className="text-xs font-medium text-muted-foreground mt-3 mb-2">Tabelas ({availableTables.length})</p>
-                              {availableTables.map(t => (
-                                <div key={t.name} className="flex items-center gap-2">
-                                  <Checkbox 
-                                    id={t.name}
-                                    checked={formData.allowedViews.includes(t.name)}
-                                    onCheckedChange={() => toggleViewSelection(t.name)}
-                                  />
-                                  <label htmlFor={t.name} className="text-sm cursor-pointer">{t.name}</label>
-                                </div>
-                              ))}
-                            </>
-                          )}
+                            </SelectContent>
+                          </Select>
                         </div>
-                      </ScrollArea>
-                    ) : (
-                      <div className="border rounded-lg p-4 text-center text-sm text-muted-foreground">
-                        {editingDataSource ? (
-                          <>Clique em "Buscar Views" para carregar a lista de views/tabelas.</>
-                        ) : (
-                          <>Salve o data source e configure as credenciais para buscar views.</>
+                        <div className="space-y-2">
+                          <Label htmlFor="proxy-name">Nome</Label>
+                          <Input
+                            id="proxy-name"
+                            value={proxyFormData.name}
+                            onChange={(e) => setProxyFormData({ ...proxyFormData, name: e.target.value })}
+                            placeholder="Ex: Afonsina n8n Proxy"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="proxy-baseUrl">Base URL do Proxy</Label>
+                        <Input
+                          id="proxy-baseUrl"
+                          value={proxyFormData.baseUrl}
+                          onChange={(e) => setProxyFormData({ ...proxyFormData, baseUrl: e.target.value })}
+                          placeholder="https://seu-n8n.app.n8n.cloud/webhook/xxx"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          URL base do webhook. O sistema chamará /health e /query automaticamente.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="proxy-authMode">Autenticação</Label>
+                          <Select 
+                            value={proxyFormData.authMode} 
+                            onValueChange={(v) => setProxyFormData({ ...proxyFormData, authMode: v as 'none' | 'bearer_token' })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">Nenhuma</SelectItem>
+                              <SelectItem value="bearer_token">Bearer Token</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {proxyFormData.authMode === 'bearer_token' && (
+                          <div className="space-y-2">
+                            <Label htmlFor="proxy-bearerToken">Bearer Token</Label>
+                            <Input
+                              id="proxy-bearerToken"
+                              type="password"
+                              value={proxyFormData.bearerToken}
+                              onChange={(e) => setProxyFormData({ ...proxyFormData, bearerToken: e.target.value })}
+                              placeholder="Token de autenticação"
+                            />
+                          </div>
                         )}
                       </div>
-                    )}
 
-                    {formData.allowedViews.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {formData.allowedViews.map(v => (
-                          <Badge key={v} variant="secondary" className="text-xs">
-                            {v}
-                            <button 
-                              type="button"
-                              onClick={() => toggleViewSelection(v)}
-                              className="ml-1 hover:text-destructive"
-                            >
-                              ×
-                            </button>
-                          </Badge>
-                        ))}
+                      <div className="space-y-2">
+                        <Label>Views Permitidas (nome da view no Supabase do cliente)</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="Ex: vw_afonsina_custos_funil_dia"
+                            value={manualViewName}
+                            onChange={(e) => setManualViewName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                addViewManually(manualViewName, true);
+                                setManualViewName('');
+                              }
+                            }}
+                          />
+                          <Button 
+                            type="button" 
+                            variant="outline"
+                            onClick={() => {
+                              addViewManually(manualViewName, true);
+                              setManualViewName('');
+                            }}
+                          >
+                            Adicionar
+                          </Button>
+                        </div>
+                        {proxyFormData.allowedViews.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {proxyFormData.allowedViews.map(v => (
+                              <Badge key={v} variant="secondary" className="text-xs">
+                                {v}
+                                <button 
+                                  type="button"
+                                  onClick={() => toggleViewSelection(v, true)}
+                                  className="ml-1 hover:text-destructive"
+                                >
+                                  ×
+                                </button>
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    </div>
+                    <DialogFooter>
+                      <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                        Cancelar
+                      </Button>
+                      <Button type="submit" disabled={isSubmitting}>
+                        {isSubmitting ? 'Salvando...' : (editingDataSource ? 'Salvar Alterações' : 'Criar Proxy')}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </TabsContent>
 
-                  <div className="p-3 bg-muted rounded-lg text-sm">
-                    <p className="font-medium mb-1 flex items-center gap-2">
-                      <Key className="h-4 w-4" /> Chaves de API
-                    </p>
-                    <p className="text-muted-foreground">
-                      As chaves são configuradas separadamente após criar o data source.
-                      Elas são criptografadas e nunca são exibidas.
-                    </p>
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Cancelar
-                  </Button>
-                  <Button type="submit" disabled={isSubmitting}>
-                    {isSubmitting ? 'Salvando...' : (editingDataSource ? 'Salvar Alterações' : 'Criar Data Source')}
-                  </Button>
-                </DialogFooter>
-              </form>
+                {/* Supabase Tab */}
+                <TabsContent value="supabase">
+                  <form onSubmit={handleSubmitSupabase}>
+                    <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
+                      <Alert variant="destructive">
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertTitle>Modo Supabase Direto (com problemas)</AlertTitle>
+                        <AlertDescription>
+                          Este modo requer salvar credenciais criptografadas, que pode apresentar erros. 
+                          Prefira usar o modo Proxy/Webhook.
+                        </AlertDescription>
+                      </Alert>
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="tenant">Tenant</Label>
+                          <Select 
+                            value={formData.tenantId} 
+                            onValueChange={(v) => setFormData({ ...formData, tenantId: v })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Selecione o tenant" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {tenants.map((t) => (
+                                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="name">Nome</Label>
+                          <Input
+                            id="name"
+                            value={formData.name}
+                            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                            placeholder="Ex: Afonsina Supabase"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="projectRef">Project Ref</Label>
+                          <Input
+                            id="projectRef"
+                            value={formData.projectRef}
+                            onChange={(e) => setFormData({ ...formData, projectRef: e.target.value })}
+                            placeholder="mpbrjezmxmrdhgtvldvi"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="projectUrl">Project URL</Label>
+                          <Input
+                            id="projectUrl"
+                            value={formData.projectUrl}
+                            onChange={(e) => setFormData({ ...formData, projectUrl: e.target.value })}
+                            placeholder="https://xxx.supabase.co"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label>Views Permitidas</Label>
+                          {editingDataSource && (
+                            <Button 
+                              type="button" 
+                              variant="outline" 
+                              size="sm"
+                              onClick={() => introspectDataSource()}
+                              disabled={isIntrospecting}
+                            >
+                              {isIntrospecting ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : (
+                                <RefreshCw className="mr-2 h-4 w-4" />
+                              )}
+                              Buscar Views
+                            </Button>
+                          )}
+                        </div>
+                        
+                        {availableViews.length > 0 || availableTables.length > 0 ? (
+                          <ScrollArea className="h-40 border rounded-lg p-3">
+                            <div className="space-y-1">
+                              {availableViews.length > 0 && (
+                                <>
+                                  <p className="text-xs font-medium text-muted-foreground mb-2">Views ({availableViews.length})</p>
+                                  {availableViews.map(v => (
+                                    <div key={v.name} className="flex items-center gap-2">
+                                      <Checkbox 
+                                        id={v.name}
+                                        checked={formData.allowedViews.includes(v.name)}
+                                        onCheckedChange={() => toggleViewSelection(v.name)}
+                                      />
+                                      <label htmlFor={v.name} className="text-sm cursor-pointer">{v.name}</label>
+                                    </div>
+                                  ))}
+                                </>
+                              )}
+                              {availableTables.length > 0 && (
+                                <>
+                                  <p className="text-xs font-medium text-muted-foreground mt-3 mb-2">Tabelas ({availableTables.length})</p>
+                                  {availableTables.map(t => (
+                                    <div key={t.name} className="flex items-center gap-2">
+                                      <Checkbox 
+                                        id={t.name}
+                                        checked={formData.allowedViews.includes(t.name)}
+                                        onCheckedChange={() => toggleViewSelection(t.name)}
+                                      />
+                                      <label htmlFor={t.name} className="text-sm cursor-pointer">{t.name}</label>
+                                    </div>
+                                  ))}
+                                </>
+                              )}
+                            </div>
+                          </ScrollArea>
+                        ) : (
+                          <div className="border rounded-lg p-4 text-center text-sm text-muted-foreground">
+                            {editingDataSource ? (
+                              <>Clique em "Buscar Views" para carregar a lista de views/tabelas.</>
+                            ) : (
+                              <>Salve o data source e configure as credenciais para buscar views.</>
+                            )}
+                          </div>
+                        )}
+
+                        {formData.allowedViews.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {formData.allowedViews.map(v => (
+                              <Badge key={v} variant="secondary" className="text-xs">
+                                {v}
+                                <button 
+                                  type="button"
+                                  onClick={() => toggleViewSelection(v)}
+                                  className="ml-1 hover:text-destructive"
+                                >
+                                  ×
+                                </button>
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="p-3 bg-muted rounded-lg text-sm">
+                        <p className="font-medium mb-1 flex items-center gap-2">
+                          <Key className="h-4 w-4" /> Chaves de API
+                        </p>
+                        <p className="text-muted-foreground">
+                          As chaves são configuradas separadamente após criar o data source.
+                          Elas são criptografadas e nunca são exibidas.
+                        </p>
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                        Cancelar
+                      </Button>
+                      <Button type="submit" disabled={isSubmitting}>
+                        {isSubmitting ? 'Salvando...' : (editingDataSource ? 'Salvar Alterações' : 'Criar Data Source')}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </TabsContent>
+              </Tabs>
             </DialogContent>
           </Dialog>
         }
@@ -715,10 +1050,10 @@ export default function DataSources() {
             <TableHeader>
               <TableRow>
                 <TableHead>Nome</TableHead>
+                <TableHead>Tipo</TableHead>
                 <TableHead>Tenant</TableHead>
-                <TableHead>Project</TableHead>
+                <TableHead>Endpoint</TableHead>
                 <TableHead>Views</TableHead>
-                <TableHead>Credenciais</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Teste</TableHead>
                 <TableHead className="w-[50px]"></TableHead>
@@ -729,11 +1064,21 @@ export default function DataSources() {
                 <TableRow key={ds.id}>
                   <TableCell>
                     <p className="font-medium">{ds.name}</p>
-                    <p className="text-xs text-muted-foreground">{ds.type}</p>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={ds.type === 'proxy_webhook' ? 'default' : 'secondary'} className="text-xs">
+                      {ds.type === 'proxy_webhook' ? (
+                        <><Webhook className="mr-1 h-3 w-3" /> Proxy</>
+                      ) : (
+                        <><Database className="mr-1 h-3 w-3" /> Supabase</>
+                      )}
+                    </Badge>
                   </TableCell>
                   <TableCell>{ds.tenants?.name || '-'}</TableCell>
                   <TableCell>
-                    <code className="text-xs bg-muted px-1 py-0.5 rounded">{ds.project_ref}</code>
+                    <code className="text-xs bg-muted px-1 py-0.5 rounded max-w-[200px] truncate block">
+                      {ds.type === 'proxy_webhook' ? ds.base_url : ds.project_ref}
+                    </code>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
@@ -745,23 +1090,6 @@ export default function DataSources() {
                       )}
                       {ds.allowed_views.length === 0 && (
                         <span className="text-xs text-muted-foreground">Nenhuma</span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex gap-1">
-                      {ds.anon_key_present && (
-                        <Badge variant="secondary" className="text-xs gap-1">
-                          <Unlock className="h-3 w-3" /> anon
-                        </Badge>
-                      )}
-                      {ds.service_role_key_present && (
-                        <Badge variant="secondary" className="text-xs gap-1">
-                          <Lock className="h-3 w-3" /> service
-                        </Badge>
-                      )}
-                      {!ds.anon_key_present && !ds.service_role_key_present && (
-                        <span className="text-xs text-destructive">Não configuradas</span>
                       )}
                     </div>
                   </TableCell>
@@ -796,10 +1124,12 @@ export default function DataSources() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => openKeysDialog(ds)}>
-                          <Key className="mr-2 h-4 w-4" />
-                          Configurar Credenciais
-                        </DropdownMenuItem>
+                        {ds.type === 'supabase' && (
+                          <DropdownMenuItem onClick={() => openKeysDialog(ds)}>
+                            <Key className="mr-2 h-4 w-4" />
+                            Configurar Credenciais
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem onClick={() => openEditDialog(ds)}>
                           <Pencil className="mr-2 h-4 w-4" />
                           Editar

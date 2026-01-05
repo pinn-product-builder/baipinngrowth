@@ -290,6 +290,9 @@ export type Database = {
           allowed_views: string[]
           anon_key_encrypted: string | null
           anon_key_present: boolean
+          auth_mode: string | null
+          base_url: string | null
+          bearer_token: string | null
           created_at: string
           id: string
           is_active: boolean
@@ -306,6 +309,9 @@ export type Database = {
           allowed_views?: string[]
           anon_key_encrypted?: string | null
           anon_key_present?: boolean
+          auth_mode?: string | null
+          base_url?: string | null
+          bearer_token?: string | null
           created_at?: string
           id?: string
           is_active?: boolean
@@ -322,6 +328,9 @@ export type Database = {
           allowed_views?: string[]
           anon_key_encrypted?: string | null
           anon_key_present?: boolean
+          auth_mode?: string | null
+          base_url?: string | null
+          bearer_token?: string | null
           created_at?: string
           id?: string
           is_active?: boolean
