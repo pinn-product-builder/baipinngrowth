@@ -81,6 +81,21 @@ function setCache(key: string, data: any, ttlSeconds: number): void {
   cache.set(key, { data, expiresAt: Date.now() + (ttlSeconds * 1000) })
 }
 
+// Fetch with timeout
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 15000): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal })
+    clearTimeout(timeoutId)
+    return response
+  } catch (error) {
+    clearTimeout(timeoutId)
+    throw error
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
@@ -123,6 +138,7 @@ Deno.serve(async (req) => {
     const dashboardId = url.searchParams.get('dashboard_id')
     const start = url.searchParams.get('start')
     const end = url.searchParams.get('end')
+    const limit = url.searchParams.get('limit') || '1000'
 
     if (!dashboardId) {
       return new Response(JSON.stringify({ error: 'dashboard_id é obrigatório' }), {
@@ -209,83 +225,195 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Get credentials - try encrypted keys first
-    const remoteUrl = dataSource.project_url
-    let remoteKey: string | null = null
+    // Handle different data source types
+    const dataSourceType = dataSource.type || 'supabase'
+    
+    let data: any[]
 
-    // Try anon key first (preferred)
-    if (dataSource.anon_key_encrypted) {
-      try {
-        remoteKey = await decrypt(dataSource.anon_key_encrypted)
-      } catch (e) {
-        console.error('Failed to decrypt anon_key')
-      }
-    }
-
-    // Fallback to service role key
-    if (!remoteKey && dataSource.service_role_key_encrypted) {
-      try {
-        remoteKey = await decrypt(dataSource.service_role_key_encrypted)
-      } catch (e) {
-        console.error('Failed to decrypt service_role_key')
-      }
-    }
-
-    // Fallback to hardcoded Afonsina keys for compatibility
-    if (!remoteKey) {
-      const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
-      const afonsinaServiceKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY')
-      const afonsinaAnonKey = Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
+    if (dataSourceType === 'proxy_webhook') {
+      // ============================================================
+      // PROXY/WEBHOOK MODE - Call the proxy's /query endpoint
+      // ============================================================
+      console.log('Using proxy_webhook mode for data source:', dataSource.name)
       
-      if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
-        remoteKey = afonsinaAnonKey || afonsinaServiceKey || null
+      const baseUrl = dataSource.base_url
+      if (!baseUrl) {
+        return new Response(JSON.stringify({ error: 'Base URL do proxy não configurada' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
       }
-    }
 
-    if (!remoteKey) {
-      return new Response(JSON.stringify({ error: 'Credenciais do data source não configuradas' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
+      // Build query URL
+      const queryUrl = new URL(`${baseUrl}/query`)
+      queryUrl.searchParams.set('view', dashboard.view_name)
+      if (start) queryUrl.searchParams.set('start', start)
+      if (end) queryUrl.searchParams.set('end', end)
+      queryUrl.searchParams.set('limit', limit)
 
-    // Build REST API URL
-    let restUrl = `${remoteUrl}/rest/v1/${dashboard.view_name}?select=*`
-    
-    if (start) {
-      restUrl += `&dia=gte.${start}`
-    }
-    if (end) {
-      restUrl += `&dia=lte.${end}`
-    }
-    
-    restUrl += `&order=dia.asc`
-
-    console.log('Fetching from:', restUrl)
-
-    const response = await fetch(restUrl, {
-      headers: {
-        'apikey': remoteKey,
-        'Authorization': `Bearer ${remoteKey}`,
-        'Content-Type': 'application/json'
+      // Build headers
+      const proxyHeaders: Record<string, string> = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
       }
-    })
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error('Remote Supabase error:', response.status, errorText)
-      return new Response(JSON.stringify({ error: 'Erro ao buscar dados do data source', details: errorText.slice(0, 200) }), {
-        status: response.status,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      if (dataSource.auth_mode === 'bearer_token' && dataSource.bearer_token) {
+        proxyHeaders['Authorization'] = `Bearer ${dataSource.bearer_token}`
+      }
+
+      console.log('Calling proxy:', queryUrl.toString())
+
+      let proxyResponse: Response
+      try {
+        proxyResponse = await fetchWithTimeout(queryUrl.toString(), {
+          method: 'GET',
+          headers: proxyHeaders
+        }, 15000)
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido'
+        console.error('Proxy fetch error:', errorMessage)
+        
+        if (error instanceof Error && error.name === 'AbortError') {
+          return new Response(JSON.stringify({ 
+            error: 'Tempo esgotado', 
+            details: 'O proxy não respondeu em tempo hábil',
+            error_type: 'timeout'
+          }), {
+            status: 504,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          })
+        }
+        
+        return new Response(JSON.stringify({ 
+          error: 'Falha ao conectar ao proxy', 
+          details: errorMessage,
+          error_type: 'network'
+        }), {
+          status: 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      if (!proxyResponse.ok) {
+        const errorText = await proxyResponse.text()
+        console.error('Proxy error:', proxyResponse.status, errorText)
+        return new Response(JSON.stringify({ 
+          error: `Proxy retornou erro ${proxyResponse.status}`, 
+          details: errorText.slice(0, 200),
+          error_type: 'proxy_error'
+        }), {
+          status: proxyResponse.status,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      const proxyResult = await proxyResponse.json()
+      
+      // Handle proxy response format: { ok: true, rows: [...] } or { ok: true, data: [...] }
+      if (proxyResult.ok === false) {
+        return new Response(JSON.stringify({ 
+          error: proxyResult.message || 'Erro do proxy', 
+          details: proxyResult.details,
+          error_type: 'proxy_error'
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      // Extract rows from response
+      data = proxyResult.rows || proxyResult.data || []
+      console.log(`Proxy returned ${data.length} rows`)
+
+    } else {
+      // ============================================================
+      // SUPABASE DIRECT MODE - Use encrypted credentials
+      // ============================================================
+      console.log('Using supabase direct mode for data source:', dataSource.name)
+      
+      // Get credentials - try encrypted keys first
+      const remoteUrl = dataSource.project_url
+      let remoteKey: string | null = null
+
+      // Try anon key first (preferred)
+      if (dataSource.anon_key_encrypted) {
+        try {
+          remoteKey = await decrypt(dataSource.anon_key_encrypted)
+        } catch (e) {
+          console.error('Failed to decrypt anon_key')
+        }
+      }
+
+      // Fallback to service role key
+      if (!remoteKey && dataSource.service_role_key_encrypted) {
+        try {
+          remoteKey = await decrypt(dataSource.service_role_key_encrypted)
+        } catch (e) {
+          console.error('Failed to decrypt service_role_key')
+        }
+      }
+
+      // Fallback to hardcoded Afonsina keys for compatibility
+      if (!remoteKey) {
+        const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
+        const afonsinaServiceKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY')
+        const afonsinaAnonKey = Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
+        
+        if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
+          remoteKey = afonsinaAnonKey || afonsinaServiceKey || null
+        }
+      }
+
+      if (!remoteKey) {
+        return new Response(JSON.stringify({ error: 'Credenciais do data source não configuradas' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      // Build REST API URL
+      let restUrl = `${remoteUrl}/rest/v1/${dashboard.view_name}?select=*`
+      
+      if (start) {
+        restUrl += `&dia=gte.${start}`
+      }
+      if (end) {
+        restUrl += `&dia=lte.${end}`
+      }
+      
+      restUrl += `&order=dia.asc`
+      restUrl += `&limit=${limit}`
+
+      console.log('Fetching from Supabase:', restUrl)
+
+      const response = await fetch(restUrl, {
+        headers: {
+          'apikey': remoteKey,
+          'Authorization': `Bearer ${remoteKey}`,
+          'Content-Type': 'application/json'
+        }
       })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Remote Supabase error:', response.status, errorText)
+        return new Response(JSON.stringify({ 
+          error: 'Erro ao buscar dados do Supabase', 
+          details: errorText.slice(0, 200),
+          error_type: 'supabase_error'
+        }), {
+          status: response.status,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      data = await response.json()
+      console.log(`Supabase returned ${data.length} rows`)
     }
 
-    const data = await response.json()
-
+    // Cache the result
     const ttl = dashboard.cache_ttl_seconds || 300
     setCache(cacheKey, data, ttl)
-
-    console.log(`Fetched ${data.length} rows from ${dashboard.view_name}`)
 
     return new Response(JSON.stringify({ data, cached: false }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -293,7 +421,11 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     console.error('Error in dashboard-data:', error)
-    return new Response(JSON.stringify({ error: 'Erro interno', details: String(error) }), {
+    return new Response(JSON.stringify({ 
+      error: 'Erro interno', 
+      details: String(error),
+      error_type: 'internal'
+    }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
