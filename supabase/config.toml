@@ -19,22 +19,22 @@ verify_jwt = false
 verify_jwt = true
 
 [functions.test-data-source]
-verify_jwt = true
+verify_jwt = false
 
 [functions.detect-template]
-verify_jwt = true
+verify_jwt = false
 
 [functions.dashboard-proxy]
-verify_jwt = true
+verify_jwt = false
 
 [functions.send-scheduled-report]
-verify_jwt = true
+verify_jwt = false
 
 [functions.manage-datasource-keys]
-verify_jwt = true
+verify_jwt = false
 
 [functions.introspect-datasource]
-verify_jwt = true
+verify_jwt = false
 
 [functions.generate-insights]
-verify_jwt = true
+verify_jwt = false
