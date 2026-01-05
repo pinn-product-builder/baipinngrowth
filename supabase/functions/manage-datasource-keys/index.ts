@@ -5,6 +5,25 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Standard response helper - ALWAYS returns 200 with JSON
+function jsonResponse(data: Record<string, any>, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status: 200, // Always 200 to avoid generic client errors
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  })
+}
+
+function errorResponse(code: string, message: string, details?: string) {
+  return jsonResponse({
+    ok: false,
+    error: { code, message, details }
+  })
+}
+
+function successResponse(data: Record<string, any>) {
+  return jsonResponse({ ok: true, ...data })
+}
+
 // Encryption helpers using Web Crypto API
 async function getEncryptionKey(): Promise<CryptoKey> {
   const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
@@ -62,22 +81,33 @@ async function decrypt(ciphertext: string): Promise<string> {
 }
 
 Deno.serve(async (req) => {
+  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
 
   try {
+    // Validate authorization header
     const authHeader = req.headers.get('authorization')
     if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'Não autorizado' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      return errorResponse('UNAUTHORIZED', 'Token de autorização não fornecido')
     }
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    // Get environment variables
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+
+    if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
+      console.error('Missing Supabase environment variables')
+      return errorResponse('CONFIG_ERROR', 'Configuração do servidor incompleta')
+    }
+
+    // Check MASTER_ENCRYPTION_KEY exists
+    if (!Deno.env.get('MASTER_ENCRYPTION_KEY')) {
+      console.error('MASTER_ENCRYPTION_KEY not set')
+      return errorResponse('CONFIG_ERROR', 'Chave de criptografia não configurada. Configure MASTER_ENCRYPTION_KEY nos secrets.')
+    }
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
@@ -86,36 +116,45 @@ Deno.serve(async (req) => {
     // Authenticate user
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError || !user) {
-      return new Response(JSON.stringify({ error: 'Usuário não autenticado' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      console.log('Auth failed:', userError?.message)
+      return errorResponse('AUTH_FAILED', 'Usuário não autenticado', userError?.message)
     }
 
-    // Check user is admin
+    // Check user is admin using service role
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
     
-    const { data: adminRole } = await adminClient
+    const { data: adminRole, error: roleError } = await adminClient
       .from('user_roles')
       .select('role')
       .eq('user_id', user.id)
       .eq('role', 'admin')
       .maybeSingle()
 
-    if (!adminRole) {
-      return new Response(JSON.stringify({ error: 'Apenas administradores podem gerenciar credenciais' }), {
-        status: 403,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+    if (roleError) {
+      console.error('Role check error:', roleError)
+      return errorResponse('DB_ERROR', 'Erro ao verificar permissões', roleError.message)
     }
 
-    const { data_source_id, anon_key, service_role_key, action } = await req.json()
+    if (!adminRole) {
+      return errorResponse('FORBIDDEN', 'Apenas administradores podem gerenciar credenciais')
+    }
+
+    // Parse and validate request body
+    let body: any
+    try {
+      body = await req.json()
+    } catch (e) {
+      return errorResponse('INVALID_JSON', 'Corpo da requisição inválido')
+    }
+
+    const { data_source_id, anon_key, service_role_key, action } = body
 
     if (!data_source_id) {
-      return new Response(JSON.stringify({ error: 'data_source_id é obrigatório' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      return errorResponse('VALIDATION_ERROR', 'data_source_id é obrigatório')
+    }
+
+    if (!action) {
+      return errorResponse('VALIDATION_ERROR', 'action é obrigatório (set_keys, remove_keys, get_decrypted)')
     }
 
     // Verify data source exists
@@ -125,25 +164,36 @@ Deno.serve(async (req) => {
       .eq('id', data_source_id)
       .maybeSingle()
 
-    if (dsError || !dataSource) {
-      return new Response(JSON.stringify({ error: 'Data source não encontrado' }), {
-        status: 404,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+    if (dsError) {
+      console.error('Data source fetch error:', dsError)
+      return errorResponse('DB_ERROR', 'Erro ao buscar data source', dsError.message)
+    }
+
+    if (!dataSource) {
+      return errorResponse('NOT_FOUND', 'Data source não encontrado')
     }
 
     // Handle actions
     if (action === 'set_keys') {
-      const updates: Record<string, any> = { updated_at: new Date().toISOString() }
-
-      if (anon_key) {
-        updates.anon_key_encrypted = await encrypt(anon_key)
-        updates.anon_key_present = true
+      if (!anon_key && !service_role_key) {
+        return errorResponse('VALIDATION_ERROR', 'Informe pelo menos uma chave (anon_key ou service_role_key)')
       }
 
-      if (service_role_key) {
-        updates.service_role_key_encrypted = await encrypt(service_role_key)
-        updates.service_role_key_present = true
+      const updates: Record<string, any> = { updated_at: new Date().toISOString() }
+
+      try {
+        if (anon_key) {
+          updates.anon_key_encrypted = await encrypt(anon_key)
+          updates.anon_key_present = true
+        }
+
+        if (service_role_key) {
+          updates.service_role_key_encrypted = await encrypt(service_role_key)
+          updates.service_role_key_present = true
+        }
+      } catch (encryptError: any) {
+        console.error('Encryption error:', encryptError)
+        return errorResponse('ENCRYPTION_ERROR', 'Erro ao criptografar credenciais', encryptError.message)
       }
 
       const { error: updateError } = await adminClient
@@ -152,21 +202,15 @@ Deno.serve(async (req) => {
         .eq('id', data_source_id)
 
       if (updateError) {
-        console.error('Error updating keys:', updateError)
-        return new Response(JSON.stringify({ error: 'Erro ao salvar credenciais' }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
+        console.error('Update error:', updateError)
+        return errorResponse('DB_ERROR', 'Erro ao salvar credenciais', updateError.message)
       }
 
       console.log(`Keys updated for data source ${data_source_id}`)
-      return new Response(JSON.stringify({ 
-        success: true, 
+      return successResponse({ 
         message: 'Credenciais salvas com sucesso',
         anon_key_present: !!anon_key || dataSource.anon_key_present,
         service_role_key_present: !!service_role_key || dataSource.service_role_key_present
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
@@ -189,34 +233,23 @@ Deno.serve(async (req) => {
         .eq('id', data_source_id)
 
       if (updateError) {
-        return new Response(JSON.stringify({ error: 'Erro ao remover credenciais' }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
+        console.error('Remove keys error:', updateError)
+        return errorResponse('DB_ERROR', 'Erro ao remover credenciais', updateError.message)
       }
 
-      return new Response(JSON.stringify({ 
-        success: true, 
-        message: 'Credenciais removidas' 
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      return successResponse({ message: 'Credenciais removidas' })
     }
 
     if (action === 'get_decrypted') {
       // This is only for internal use by other edge functions
-      // Never expose this to frontend
-      const { data: ds } = await adminClient
+      const { data: ds, error: fetchError } = await adminClient
         .from('tenant_data_sources')
         .select('anon_key_encrypted, service_role_key_encrypted')
         .eq('id', data_source_id)
         .single()
 
-      if (!ds) {
-        return new Response(JSON.stringify({ error: 'Data source não encontrado' }), {
-          status: 404,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
+      if (fetchError || !ds) {
+        return errorResponse('NOT_FOUND', 'Data source não encontrado')
       }
 
       const result: Record<string, string | null> = {
@@ -240,21 +273,13 @@ Deno.serve(async (req) => {
         }
       }
 
-      return new Response(JSON.stringify(result), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      return successResponse(result)
     }
 
-    return new Response(JSON.stringify({ error: 'Ação inválida' }), {
-      status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    })
+    return errorResponse('INVALID_ACTION', `Ação inválida: ${action}. Use set_keys, remove_keys ou get_decrypted`)
 
-  } catch (error) {
-    console.error('Error in manage-datasource-keys:', error)
-    return new Response(JSON.stringify({ error: 'Erro interno' }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    })
+  } catch (error: any) {
+    console.error('Unhandled error in manage-datasource-keys:', error)
+    return errorResponse('INTERNAL_ERROR', 'Erro interno do servidor', error.message)
   }
 })
