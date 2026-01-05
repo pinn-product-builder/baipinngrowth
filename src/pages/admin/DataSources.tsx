@@ -33,7 +33,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import { Database, Plus, Search, MoreHorizontal, Pencil, Power, CheckCircle, XCircle, Loader2, Trash2, Key, RefreshCw, Lock, Unlock, Globe, Webhook, AlertCircle, Bug, Copy } from 'lucide-react';
+import { Database, Plus, Search, MoreHorizontal, Pencil, Power, CheckCircle, XCircle, Loader2, Trash2, Key, RefreshCw, Lock, Unlock, Globe, Webhook, AlertCircle } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,24 +77,6 @@ interface ViewInfo {
 
 type TestStatus = 'idle' | 'testing' | 'success' | 'error';
 type DataSourceType = 'supabase' | 'proxy_webhook';
-
-interface DiagnosticsResult {
-  ok: boolean;
-  error?: {
-    code: string;
-    message: string;
-    details?: string;
-    suggestion?: string;
-  };
-  rows?: unknown[];
-  meta?: {
-    view: string;
-    schema: string;
-    row_count: number;
-    key_source: string;
-  };
-  columns?: { name: string; type: string }[];
-}
 
 export default function DataSources() {
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
@@ -145,13 +127,6 @@ export default function DataSources() {
   // Data source type selection
   const [selectedType, setSelectedType] = useState<DataSourceType>('proxy_webhook');
   
-  // Diagnostics state
-  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
-  const [diagnosticsDataSource, setDiagnosticsDataSource] = useState<DataSource | null>(null);
-  const [diagnosticsResult, setDiagnosticsResult] = useState<DiagnosticsResult | null>(null);
-  const [isRunningDiagnostics, setIsRunningDiagnostics] = useState(false);
-  const [diagnosticsViewName, setDiagnosticsViewName] = useState('');
-
   const { toast } = useToast();
 
   useEffect(() => {
@@ -419,56 +394,33 @@ export default function DataSources() {
     }, 5000);
   };
 
-  // Test Supabase connection via external-supabase-query edge function
+  // Test Supabase connection via edge function
   const testSupabaseConnection = async (ds: DataSource) => {
     setTestStatus(prev => ({ ...prev, [ds.id]: 'testing' }));
     setTestResults(prev => ({ ...prev, [ds.id]: '' }));
 
-    // Need at least one view to test
-    const testView = ds.allowed_views?.[0];
-    if (!testView) {
-      setTestStatus(prev => ({ ...prev, [ds.id]: 'error' }));
-      setTestResults(prev => ({ ...prev, [ds.id]: 'Adicione pelo menos uma view para testar' }));
-      toast({ 
-        title: 'Erro', 
-        description: 'Adicione pelo menos uma view à lista de views permitidas antes de testar.', 
-        variant: 'destructive' 
-      });
-      return;
-    }
-
     try {
-      const response = await supabase.functions.invoke('external-supabase-query', {
-        body: { 
-          data_source_id: ds.id,
-          view_name: testView,
-          limit: 1
-        }
+      const response = await supabase.functions.invoke('test-data-source', {
+        body: { data_source_id: ds.id }
       });
 
       if (response.error) {
         throw new Error(response.error.message || 'Erro ao chamar função');
       }
 
-      const result = response.data as DiagnosticsResult;
+      const result = response.data;
       
       if (result.ok) {
-        const rowCount = result.meta?.row_count || 0;
-        const colCount = result.columns?.length || 0;
         setTestStatus(prev => ({ ...prev, [ds.id]: 'success' }));
-        setTestResults(prev => ({ ...prev, [ds.id]: `OK! View "${testView}" acessível (${colCount} colunas)` }));
-        toast({ 
-          title: 'Conexão OK', 
-          description: `View "${testView}" acessível. ${rowCount} linha(s) retornada(s).` 
-        });
+        setTestResults(prev => ({ ...prev, [ds.id]: result.message }));
+        toast({ title: 'Conexão OK', description: result.message });
       } else {
         const errorMsg = result.error?.message || 'Erro desconhecido';
-        const suggestion = result.error?.suggestion;
         setTestStatus(prev => ({ ...prev, [ds.id]: 'error' }));
         setTestResults(prev => ({ ...prev, [ds.id]: errorMsg }));
         toast({ 
           title: `Falha: ${result.error?.code || 'ERRO'}`, 
-          description: suggestion ? `${errorMsg}. ${suggestion}` : errorMsg, 
+          description: errorMsg, 
           variant: 'destructive' 
         });
       }
@@ -488,55 +440,6 @@ export default function DataSources() {
       testProxyConnection(ds);
     } else {
       testSupabaseConnection(ds);
-    }
-  };
-
-  // Open diagnostics dialog
-  const openDiagnostics = (ds: DataSource) => {
-    setDiagnosticsDataSource(ds);
-    setDiagnosticsResult(null);
-    setDiagnosticsViewName(ds.allowed_views?.[0] || '');
-    setIsDiagnosticsOpen(true);
-  };
-
-  // Run diagnostics test
-  const runDiagnostics = async () => {
-    if (!diagnosticsDataSource || !diagnosticsViewName) return;
-
-    setIsRunningDiagnostics(true);
-    setDiagnosticsResult(null);
-
-    try {
-      const response = await supabase.functions.invoke('external-supabase-query', {
-        body: { 
-          data_source_id: diagnosticsDataSource.id,
-          view_name: diagnosticsViewName,
-          limit: 10
-        }
-      });
-
-      if (response.error) {
-        setDiagnosticsResult({
-          ok: false,
-          error: {
-            code: 'EDGE_FUNCTION_ERROR',
-            message: response.error.message || 'Erro ao chamar edge function',
-            details: JSON.stringify(response.error)
-          }
-        });
-      } else {
-        setDiagnosticsResult(response.data as DiagnosticsResult);
-      }
-    } catch (error: any) {
-      setDiagnosticsResult({
-        ok: false,
-        error: {
-          code: 'NETWORK_ERROR',
-          message: error.message || 'Erro de rede'
-        }
-      });
-    } finally {
-      setIsRunningDiagnostics(false);
     }
   };
 
@@ -1105,218 +1008,6 @@ export default function DataSources() {
         </DialogContent>
       </Dialog>
 
-      {/* Diagnostics Dialog */}
-      <Dialog open={isDiagnosticsOpen} onOpenChange={setIsDiagnosticsOpen}>
-        <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Bug className="h-5 w-5" />
-              Diagnósticos - {diagnosticsDataSource?.name}
-            </DialogTitle>
-            <DialogDescription>
-              Teste a conexão com o Supabase externo e visualize informações de debug.
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="flex-1 overflow-y-auto space-y-4 py-4">
-            {/* Data Source Info */}
-            <Card>
-              <CardHeader className="py-3">
-                <CardTitle className="text-sm">Informações do Data Source</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="text-muted-foreground">Project Ref:</span>
-                    <code className="ml-2 bg-muted px-1 py-0.5 rounded text-xs">
-                      {diagnosticsDataSource?.project_ref}
-                    </code>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Project URL:</span>
-                    <code className="ml-2 bg-muted px-1 py-0.5 rounded text-xs">
-                      {diagnosticsDataSource?.project_url}
-                    </code>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">anon_key:</span>
-                    <Badge variant={diagnosticsDataSource?.anon_key_present ? 'default' : 'destructive'} className="ml-2">
-                      {diagnosticsDataSource?.anon_key_present ? 'Configurada' : 'Não configurada'}
-                    </Badge>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">service_role_key:</span>
-                    <Badge variant={diagnosticsDataSource?.service_role_key_present ? 'default' : 'secondary'} className="ml-2">
-                      {diagnosticsDataSource?.service_role_key_present ? 'Configurada' : 'Não configurada'}
-                    </Badge>
-                  </div>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Views Permitidas:</span>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {diagnosticsDataSource?.allowed_views?.map((v, i) => (
-                      <Badge 
-                        key={i} 
-                        variant={v === diagnosticsViewName ? 'default' : 'outline'} 
-                        className="text-xs cursor-pointer"
-                        onClick={() => setDiagnosticsViewName(v)}
-                      >
-                        {v}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Test Configuration */}
-            <Card>
-              <CardHeader className="py-3">
-                <CardTitle className="text-sm">Testar Query</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex gap-2">
-                  <Input
-                    value={diagnosticsViewName}
-                    onChange={(e) => setDiagnosticsViewName(e.target.value)}
-                    placeholder="Nome da view (ex: vw_afonsina_custos_funil_dia)"
-                    className="flex-1"
-                  />
-                  <Button 
-                    onClick={runDiagnostics} 
-                    disabled={isRunningDiagnostics || !diagnosticsViewName}
-                  >
-                    {isRunningDiagnostics ? (
-                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                    ) : (
-                      <RefreshCw className="h-4 w-4 mr-2" />
-                    )}
-                    Run Debug Test
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Results */}
-            {diagnosticsResult && (
-              <Card className={diagnosticsResult.ok ? 'border-green-500' : 'border-destructive'}>
-                <CardHeader className="py-3">
-                  <CardTitle className="text-sm flex items-center gap-2">
-                    {diagnosticsResult.ok ? (
-                      <CheckCircle className="h-4 w-4 text-green-500" />
-                    ) : (
-                      <XCircle className="h-4 w-4 text-destructive" />
-                    )}
-                    Resultado do Teste
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {diagnosticsResult.ok ? (
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-2 gap-2 text-sm">
-                        <div>
-                          <span className="text-muted-foreground">View:</span>
-                          <code className="ml-2 bg-muted px-1 py-0.5 rounded">
-                            {diagnosticsResult.meta?.view}
-                          </code>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Linhas:</span>
-                          <span className="ml-2 font-medium">{diagnosticsResult.meta?.row_count}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Key Source:</span>
-                          <code className="ml-2 bg-muted px-1 py-0.5 rounded text-xs">
-                            {diagnosticsResult.meta?.key_source}
-                          </code>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Colunas:</span>
-                          <span className="ml-2 font-medium">{diagnosticsResult.columns?.length}</span>
-                        </div>
-                      </div>
-
-                      {diagnosticsResult.columns && diagnosticsResult.columns.length > 0 && (
-                        <div>
-                          <p className="text-xs text-muted-foreground mb-1">Colunas detectadas:</p>
-                          <div className="flex flex-wrap gap-1">
-                            {diagnosticsResult.columns.map((col, i) => (
-                              <Badge key={i} variant="outline" className="text-xs">
-                                {col.name}: <span className="text-muted-foreground">{col.type}</span>
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {diagnosticsResult.rows && diagnosticsResult.rows.length > 0 && (
-                        <div>
-                          <p className="text-xs text-muted-foreground mb-1">Amostra de dados (primeiras {diagnosticsResult.rows.length} linhas):</p>
-                          <ScrollArea className="h-40 border rounded-md">
-                            <pre className="text-xs p-2 overflow-x-auto">
-                              {JSON.stringify(diagnosticsResult.rows, null, 2)}
-                            </pre>
-                          </ScrollArea>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <Alert variant="destructive">
-                        <AlertCircle className="h-4 w-4" />
-                        <AlertTitle>Erro: {diagnosticsResult.error?.code}</AlertTitle>
-                        <AlertDescription>
-                          {diagnosticsResult.error?.message}
-                        </AlertDescription>
-                      </Alert>
-                      
-                      {diagnosticsResult.error?.details && (
-                        <div>
-                          <p className="text-xs text-muted-foreground mb-1">Detalhes:</p>
-                          <pre className="text-xs bg-muted p-2 rounded overflow-x-auto whitespace-pre-wrap">
-                            {diagnosticsResult.error.details}
-                          </pre>
-                        </div>
-                      )}
-
-                      {diagnosticsResult.error?.suggestion && (
-                        <Alert>
-                          <AlertCircle className="h-4 w-4" />
-                          <AlertTitle>Sugestão de correção</AlertTitle>
-                          <AlertDescription className="mt-2">
-                            <pre className="text-xs bg-muted p-2 rounded whitespace-pre-wrap">
-                              {diagnosticsResult.error.suggestion}
-                            </pre>
-                            <Button 
-                              variant="outline" 
-                              size="sm" 
-                              className="mt-2"
-                              onClick={() => {
-                                navigator.clipboard.writeText(diagnosticsResult.error?.suggestion || '');
-                                toast({ title: 'Copiado!', description: 'Sugestão copiada para a área de transferência.' });
-                              }}
-                            >
-                              <Copy className="h-3 w-3 mr-1" />
-                              Copiar
-                            </Button>
-                          </AlertDescription>
-                        </Alert>
-                      )}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsDiagnosticsOpen(false)}>
-              Fechar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* Filters */}
       <div className="flex flex-col gap-3 sm:flex-row">
         <div className="relative flex-1 max-w-sm">
@@ -1434,16 +1125,10 @@ export default function DataSources() {
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
                         {ds.type === 'supabase' && (
-                          <>
-                            <DropdownMenuItem onClick={() => openKeysDialog(ds)}>
-                              <Key className="mr-2 h-4 w-4" />
-                              Configurar Credenciais
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openDiagnostics(ds)}>
-                              <Bug className="mr-2 h-4 w-4" />
-                              Diagnósticos
-                            </DropdownMenuItem>
-                          </>
+                          <DropdownMenuItem onClick={() => openKeysDialog(ds)}>
+                            <Key className="mr-2 h-4 w-4" />
+                            Configurar Credenciais
+                          </DropdownMenuItem>
                         )}
                         <DropdownMenuItem onClick={() => openEditDialog(ds)}>
                           <Pencil className="mr-2 h-4 w-4" />

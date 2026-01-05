@@ -38,6 +38,3 @@ verify_jwt = false
 
 [functions.generate-insights]
 verify_jwt = false
-
-[functions.external-supabase-query]
-verify_jwt = false
