@@ -5,6 +5,39 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Encryption helpers
+async function getEncryptionKey(): Promise<CryptoKey> {
+  const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
+  if (!masterKey) {
+    throw new Error('MASTER_ENCRYPTION_KEY not configured')
+  }
+  
+  const encoder = new TextEncoder()
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(masterKey.padEnd(32, '0').slice(0, 32)),
+    { name: 'AES-GCM' },
+    false,
+    ['decrypt']
+  )
+  return keyMaterial
+}
+
+async function decrypt(ciphertext: string): Promise<string> {
+  const key = await getEncryptionKey()
+  const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
+  const iv = combined.slice(0, 12)
+  const encrypted = combined.slice(12)
+  
+  const decrypted = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    encrypted
+  )
+  
+  return new TextDecoder().decode(decrypted)
+}
+
 interface ColumnInfo {
   name: string;
   type: string;
@@ -232,13 +265,34 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Get credentials
-    let remoteKey = '';
-    const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL');
-    const afonsinaServiceKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY');
-    
-    if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
-      remoteKey = afonsinaServiceKey || '';
+    // Get credentials - try encrypted keys first
+    let remoteKey: string | null = null;
+
+    if (dataSource.anon_key_encrypted) {
+      try {
+        remoteKey = await decrypt(dataSource.anon_key_encrypted);
+      } catch (e) {
+        console.error('Failed to decrypt anon_key');
+      }
+    }
+
+    if (!remoteKey && dataSource.service_role_key_encrypted) {
+      try {
+        remoteKey = await decrypt(dataSource.service_role_key_encrypted);
+      } catch (e) {
+        console.error('Failed to decrypt service_role_key');
+      }
+    }
+
+    // Fallback to hardcoded Afonsina keys
+    if (!remoteKey) {
+      const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL');
+      const afonsinaServiceKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY');
+      const afonsinaAnonKey = Deno.env.get('AFONSINA_SUPABASE_ANON_KEY');
+      
+      if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
+        remoteKey = afonsinaAnonKey || afonsinaServiceKey || null;
+      }
     }
 
     if (!remoteKey) {

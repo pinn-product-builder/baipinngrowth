@@ -29,3 +29,9 @@ verify_jwt = true
 
 [functions.send-scheduled-report]
 verify_jwt = true
+
+[functions.manage-datasource-keys]
+verify_jwt = true
+
+[functions.introspect-datasource]
+verify_jwt = true

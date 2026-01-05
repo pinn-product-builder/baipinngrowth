@@ -38,6 +38,12 @@ async function decrypt(ciphertext: string): Promise<string> {
   return new TextDecoder().decode(decrypted)
 }
 
+interface ViewInfo {
+  name: string
+  schema: string
+  type: 'view' | 'table'
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
@@ -68,6 +74,7 @@ Deno.serve(async (req) => {
       })
     }
 
+    // Check user is admin
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
     
     const { data: adminRole } = await adminClient
@@ -78,14 +85,13 @@ Deno.serve(async (req) => {
       .maybeSingle()
 
     if (!adminRole) {
-      return new Response(JSON.stringify({ error: 'Apenas administradores podem testar data sources' }), {
+      return new Response(JSON.stringify({ error: 'Apenas administradores podem introspeccionar data sources' }), {
         status: 403,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    const body = await req.json()
-    const { data_source_id, view_name } = body
+    const { data_source_id, schema = 'public' } = await req.json()
 
     if (!data_source_id) {
       return new Response(JSON.stringify({ error: 'data_source_id é obrigatório' }), {
@@ -94,11 +100,12 @@ Deno.serve(async (req) => {
       })
     }
 
+    // Get data source with encrypted keys
     const { data: dataSource, error: dsError } = await adminClient
       .from('tenant_data_sources')
       .select('*')
       .eq('id', data_source_id)
-      .maybeSingle()
+      .single()
 
     if (dsError || !dataSource) {
       return new Response(JSON.stringify({ error: 'Data source não encontrado' }), {
@@ -107,121 +114,128 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Get credentials - try encrypted keys first
-    let remoteUrl = dataSource.project_url
-    let remoteKey: string | null = null
+    // Determine which key to use
+    let apiKey: string | null = null
 
-    // Try anon key first (preferred)
+    // Try anon key first (preferred for readonly)
     if (dataSource.anon_key_encrypted) {
       try {
-        remoteKey = await decrypt(dataSource.anon_key_encrypted)
+        apiKey = await decrypt(dataSource.anon_key_encrypted)
       } catch (e) {
         console.error('Failed to decrypt anon_key')
       }
     }
 
-    // Fallback to service role key
-    if (!remoteKey && dataSource.service_role_key_encrypted) {
+    // Fallback to service role if no anon key
+    if (!apiKey && dataSource.service_role_key_encrypted) {
       try {
-        remoteKey = await decrypt(dataSource.service_role_key_encrypted)
+        apiKey = await decrypt(dataSource.service_role_key_encrypted)
       } catch (e) {
         console.error('Failed to decrypt service_role_key')
       }
     }
 
     // Fallback to hardcoded Afonsina keys for compatibility
-    if (!remoteKey) {
+    if (!apiKey) {
       const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
-      const afonsinaServiceKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY')
-      const afonsinaAnonKey = Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
+      const afonsinaKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
       
       if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
-        remoteKey = afonsinaAnonKey || afonsinaServiceKey || null
+        apiKey = afonsinaKey || null
       }
     }
 
-    if (!remoteKey) {
+    if (!apiKey) {
       return new Response(JSON.stringify({ 
-        success: false, 
         error: 'Credenciais não configuradas. Configure a anon_key ou service_role_key.' 
       }), {
+        status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    // Test view if provided, otherwise test connection
-    const testView = view_name || (dataSource.allowed_views.length > 0 ? dataSource.allowed_views[0] : null)
+    // Query the remote Supabase for views and tables
+    // Using the REST API to query pg_catalog
+    const introspectUrl = `${dataSource.project_url}/rest/v1/rpc/get_schema_objects`
     
-    if (!testView) {
-      const testUrl = `${remoteUrl}/rest/v1/`
-      const response = await fetch(testUrl, {
-        headers: {
-          'apikey': remoteKey,
-          'Authorization': `Bearer ${remoteKey}`,
-        }
-      })
+    // First try with RPC function (if exists)
+    let views: ViewInfo[] = []
+    let tables: ViewInfo[] = []
 
-      if (response.ok || response.status === 404) {
-        return new Response(JSON.stringify({ 
-          success: true, 
-          message: 'Conexão estabelecida com sucesso (nenhuma view para testar)' 
-        }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      } else {
-        return new Response(JSON.stringify({ 
-          success: false, 
-          error: `Erro de conexão: ${response.status}` 
-        }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      }
-    }
+    // Alternative: Query information_schema via REST
+    // We'll use a direct approach - fetch the OpenAPI spec which lists all endpoints
+    const openApiUrl = `${dataSource.project_url}/rest/v1/`
+    
+    console.log('Introspecting:', openApiUrl)
 
-    // Test the specific view
-    const restUrl = `${remoteUrl}/rest/v1/${testView}?select=*&limit=1`
-    console.log('Testing:', restUrl)
-
-    const response = await fetch(restUrl, {
+    const response = await fetch(openApiUrl, {
       headers: {
-        'apikey': remoteKey,
-        'Authorization': `Bearer ${remoteKey}`,
-        'Content-Type': 'application/json'
+        'apikey': apiKey,
+        'Authorization': `Bearer ${apiKey}`,
+        'Accept': 'application/json'
       }
     })
 
     if (!response.ok) {
       const errorText = await response.text()
-      console.error('Test failed:', response.status, errorText)
+      console.error('Introspection failed:', response.status, errorText)
       return new Response(JSON.stringify({ 
-        success: false, 
-        error: `Erro ao acessar view: ${response.status}`,
+        error: `Erro ao conectar: ${response.status}`,
         details: errorText.slice(0, 200)
       }), {
+        status: response.status,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    const data = await response.json()
-    const rowCount = Array.isArray(data) ? data.length : 0
-    const columns = rowCount > 0 ? Object.keys(data[0]) : []
+    // The REST API root returns an object with all available endpoints
+    // Format: { "definitions": {...}, "paths": { "/tablename": {...}, ... } }
+    const apiSpec = await response.json()
+    
+    // Extract table/view names from paths or definitions
+    if (apiSpec.definitions) {
+      for (const name of Object.keys(apiSpec.definitions)) {
+        // Skip internal tables
+        if (name.startsWith('_') || name.startsWith('pg_') || name === 'spatial_ref_sys') continue
+        
+        // Heuristic: views often start with 'vw_' or 'v_'
+        if (name.startsWith('vw_') || name.startsWith('v_')) {
+          views.push({ name, schema, type: 'view' })
+        } else {
+          tables.push({ name, schema, type: 'table' })
+        }
+      }
+    } else if (apiSpec.paths) {
+      for (const path of Object.keys(apiSpec.paths)) {
+        const name = path.replace(/^\//, '')
+        if (!name || name.startsWith('_') || name.startsWith('rpc/')) continue
+        
+        if (name.startsWith('vw_') || name.startsWith('v_')) {
+          views.push({ name, schema, type: 'view' })
+        } else {
+          tables.push({ name, schema, type: 'table' })
+        }
+      }
+    }
+
+    // Sort alphabetically
+    views.sort((a, b) => a.name.localeCompare(b.name))
+    tables.sort((a, b) => a.name.localeCompare(b.name))
+
+    console.log(`Found ${views.length} views and ${tables.length} tables`)
 
     return new Response(JSON.stringify({ 
-      success: true, 
-      message: `Conexão OK! View "${testView}" acessível.`,
-      sample_row_count: rowCount,
-      columns: columns
+      views,
+      tables,
+      schema,
+      total: views.length + tables.length
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
 
   } catch (error) {
-    console.error('Error in test-data-source:', error)
-    return new Response(JSON.stringify({ 
-      success: false, 
-      error: 'Erro interno', 
-      details: String(error) 
-    }), {
+    console.error('Error in introspect-datasource:', error)
+    return new Response(JSON.stringify({ error: 'Erro interno', details: String(error) }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })

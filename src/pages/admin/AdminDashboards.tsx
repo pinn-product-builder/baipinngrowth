@@ -35,7 +35,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
-import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown, Copy, Database, Wand2 } from 'lucide-react';
+import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown, Copy, Database, Wand2, Upload } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -55,6 +55,7 @@ interface DataSource {
   project_url: string;
   allowed_views: string[];
   tenant_id: string;
+  is_active: boolean;
 }
 
 interface Dashboard {
@@ -110,6 +111,15 @@ export default function AdminDashboards() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [healthChecks, setHealthChecks] = useState<Record<string, HealthStatus>>({});
   const [detectingTemplate, setDetectingTemplate] = useState<Record<string, boolean>>({});
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [importStep, setImportStep] = useState<'select' | 'configure' | 'done'>('select');
+  const [importData, setImportData] = useState({
+    dataSourceId: '',
+    viewName: '',
+    detectedTemplate: '',
+    dashboardName: ''
+  });
+  const [isImporting, setIsImporting] = useState(false);
   const { toast } = useToast();
   const { logActivity } = useActivityLogger();
 
@@ -464,6 +474,95 @@ export default function AdminDashboards() {
     }
   };
 
+  // Import from View workflow
+  const handleImportFromView = async () => {
+    if (!importData.dataSourceId || !importData.viewName) {
+      toast({ title: 'Erro', description: 'Selecione um data source e uma view.', variant: 'destructive' });
+      return;
+    }
+
+    setIsImporting(true);
+    try {
+      const selectedDs = dataSources.find(ds => ds.id === importData.dataSourceId);
+      if (!selectedDs) throw new Error('Data source não encontrado');
+
+      // Detect template
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const { data: session } = await supabase.auth.getSession();
+      if (!session.session) throw new Error('Não autenticado');
+
+      const detectResponse = await fetch(`${supabaseUrl}/functions/v1/detect-template`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          data_source_id: importData.dataSourceId,
+          view_name: importData.viewName
+        })
+      });
+
+      if (!detectResponse.ok) {
+        const err = await detectResponse.json();
+        throw new Error(err.error || 'Erro ao detectar template');
+      }
+
+      const detectResult = await detectResponse.json();
+      
+      // Create dashboard
+      const dashboardName = importData.dashboardName || `Dashboard - ${importData.viewName}`;
+      
+      const { data: newDashboard, error: createError } = await supabase
+        .from('dashboards')
+        .insert({
+          tenant_id: selectedDs.tenant_id,
+          name: dashboardName,
+          source_kind: 'supabase_view',
+          data_source_id: importData.dataSourceId,
+          view_name: importData.viewName,
+          template_kind: detectResult.template_kind,
+          dashboard_spec: detectResult.dashboard_spec || {},
+          detected_columns: detectResult.columns || [],
+          is_active: true,
+          display_order: dashboards.length
+        })
+        .select()
+        .single();
+
+      if (createError) throw createError;
+
+      logActivity('create_dashboard', 'dashboard', newDashboard.id, { 
+        name: dashboardName, 
+        imported_from_view: importData.viewName,
+        template: detectResult.template_kind
+      });
+
+      toast({ 
+        title: 'Dashboard criado com sucesso!', 
+        description: `Template "${detectResult.template_kind}" aplicado com ${detectResult.confidence}% de confiança.` 
+      });
+
+      setIsImportDialogOpen(false);
+      setImportStep('select');
+      setImportData({ dataSourceId: '', viewName: '', detectedTemplate: '', dashboardName: '' });
+      fetchData();
+
+    } catch (error: any) {
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const openImportDialog = () => {
+    setImportStep('select');
+    setImportData({ dataSourceId: '', viewName: '', detectedTemplate: '', dashboardName: '' });
+    setIsImportDialogOpen(true);
+  };
+
+  const importSelectedDataSource = dataSources.find(ds => ds.id === importData.dataSourceId);
+
   // Data sources filtrados pelo tenant selecionado
   const filteredDataSources = dataSources.filter(ds => ds.tenant_id === formData.tenantId);
   const selectedDataSource = dataSources.find(ds => ds.id === formData.dataSourceId);
@@ -478,28 +577,33 @@ export default function AdminDashboards() {
         title="Gerenciar Dashboards" 
         description="Configure e gerencie dashboards de clientes"
         actions={
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={openCreateDialog}>
-                <Plus className="mr-2 h-4 w-4" />
-                Adicionar Dashboard
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-lg">
-              <form onSubmit={handleSubmit}>
-                <DialogHeader>
-                  <DialogTitle>{editingDashboard ? 'Editar Dashboard' : 'Criar Dashboard'}</DialogTitle>
-                  <DialogDescription>
-                    {editingDashboard ? 'Atualize a configuração do dashboard.' : 'Adicione um novo dashboard para um cliente.'}
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
-                  <div className="space-y-2">
-                    <Label htmlFor="tenant">Tenant</Label>
-                    <Select 
-                      value={formData.tenantId} 
-                      onValueChange={(v) => setFormData({ ...formData, tenantId: v, dataSourceId: '', viewName: '' })}
-                    >
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={openImportDialog}>
+              <Upload className="mr-2 h-4 w-4" />
+              Importar de View
+            </Button>
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button onClick={openCreateDialog}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Adicionar Dashboard
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-lg">
+                <form onSubmit={handleSubmit}>
+                  <DialogHeader>
+                    <DialogTitle>{editingDashboard ? 'Editar Dashboard' : 'Criar Dashboard'}</DialogTitle>
+                    <DialogDescription>
+                      {editingDashboard ? 'Atualize a configuração do dashboard.' : 'Adicione um novo dashboard para um cliente.'}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
+                    <div className="space-y-2">
+                      <Label htmlFor="tenant">Tenant</Label>
+                      <Select 
+                        value={formData.tenantId} 
+                        onValueChange={(v) => setFormData({ ...formData, tenantId: v, dataSourceId: '', viewName: '' })}
+                      >
                       <SelectTrigger>
                         <SelectValue placeholder="Selecione o tenant" />
                       </SelectTrigger>
@@ -677,10 +781,104 @@ export default function AdminDashboards() {
               </form>
             </DialogContent>
           </Dialog>
+        </div>
         }
       />
 
-      {/* Filtros */}
+      {/* Import Dialog */}
+      <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="h-5 w-5" />
+              Importar Dashboard de View
+            </DialogTitle>
+            <DialogDescription>
+              Selecione um data source e uma view para criar um dashboard automaticamente.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Data Source</Label>
+              <Select 
+                value={importData.dataSourceId} 
+                onValueChange={(v) => setImportData({ ...importData, dataSourceId: v, viewName: '' })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione o data source" />
+                </SelectTrigger>
+                <SelectContent>
+                  {dataSources.filter(ds => ds.is_active && ds.allowed_views.length > 0).map((ds) => (
+                    <SelectItem key={ds.id} value={ds.id}>
+                      {ds.name} ({ds.allowed_views.length} views)
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {importSelectedDataSource && (
+              <div className="space-y-2">
+                <Label>View</Label>
+                <Select 
+                  value={importData.viewName} 
+                  onValueChange={(v) => setImportData({ ...importData, viewName: v, dashboardName: `Dashboard - ${v}` })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione a view" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {importSelectedDataSource.allowed_views.map((view) => (
+                      <SelectItem key={view} value={view}>{view}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {importData.viewName && (
+              <div className="space-y-2">
+                <Label>Nome do Dashboard</Label>
+                <Input
+                  value={importData.dashboardName}
+                  onChange={(e) => setImportData({ ...importData, dashboardName: e.target.value })}
+                  placeholder="Nome do dashboard"
+                />
+              </div>
+            )}
+
+            <div className="p-3 bg-muted rounded-lg text-sm text-muted-foreground">
+              <p className="font-medium mb-1">O que acontece:</p>
+              <ol className="list-decimal list-inside space-y-1">
+                <li>A view será analisada (colunas + tipos)</li>
+                <li>O sistema detectará o template apropriado</li>
+                <li>O dashboard será criado automaticamente</li>
+              </ol>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsImportDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button 
+              onClick={handleImportFromView} 
+              disabled={isImporting || !importData.dataSourceId || !importData.viewName}
+            >
+              {isImporting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Importando...
+                </>
+              ) : (
+                <>
+                  <Wand2 className="mr-2 h-4 w-4" />
+                  Criar Dashboard
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <div className="flex flex-col gap-3 sm:flex-row">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
