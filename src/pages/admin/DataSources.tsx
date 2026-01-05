@@ -7,6 +7,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Select,
   SelectContent,
@@ -32,7 +33,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
-import { Database, Plus, Search, MoreHorizontal, Pencil, Power, CheckCircle, XCircle, Loader2, Trash2 } from 'lucide-react';
+import { Database, Plus, Search, MoreHorizontal, Pencil, Power, CheckCircle, XCircle, Loader2, Trash2, Key, Eye, RefreshCw, Lock, Unlock } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,6 +41,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 interface Tenant {
   id: string;
@@ -61,6 +63,12 @@ interface DataSource {
   tenants?: { name: string } | null;
 }
 
+interface ViewInfo {
+  name: string;
+  schema: string;
+  type: 'view' | 'table';
+}
+
 type TestStatus = 'idle' | 'testing' | 'success' | 'error';
 
 export default function DataSources() {
@@ -71,17 +79,32 @@ export default function DataSources() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTenant, setFilterTenant] = useState<string>('all');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isKeysDialogOpen, setIsKeysDialogOpen] = useState(false);
   const [editingDataSource, setEditingDataSource] = useState<DataSource | null>(null);
+  const [selectedDataSource, setSelectedDataSource] = useState<DataSource | null>(null);
+  
   const [formData, setFormData] = useState({
     name: '',
     tenantId: '',
     projectRef: '',
     projectUrl: '',
-    allowedViews: ''
+    allowedViews: [] as string[]
   });
+  const [keyFormData, setKeyFormData] = useState({
+    anonKey: '',
+    serviceRoleKey: ''
+  });
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingKeys, setIsSavingKeys] = useState(false);
   const [testStatus, setTestStatus] = useState<Record<string, TestStatus>>({});
   const [testResults, setTestResults] = useState<Record<string, string>>({});
+  
+  // Introspection state
+  const [isIntrospecting, setIsIntrospecting] = useState(false);
+  const [availableViews, setAvailableViews] = useState<ViewInfo[]>([]);
+  const [availableTables, setAvailableTables] = useState<ViewInfo[]>([]);
+  
   const { toast } = useToast();
 
   useEffect(() => {
@@ -139,19 +162,12 @@ export default function DataSources() {
 
     setIsSubmitting(true);
     try {
-      const allowedViews = formData.allowedViews
-        .split(',')
-        .map(v => v.trim())
-        .filter(v => v.length > 0);
-
       const payload = {
         tenant_id: formData.tenantId,
         name: formData.name,
         project_ref: formData.projectRef,
         project_url: formData.projectUrl,
-        allowed_views: allowedViews,
-        service_role_key_present: true, // We use secrets
-        anon_key_present: true
+        allowed_views: formData.allowedViews
       };
 
       if (editingDataSource) {
@@ -168,7 +184,7 @@ export default function DataSources() {
           .insert(payload);
 
         if (error) throw error;
-        toast({ title: 'Data Source criado', description: 'Novo data source adicionado com sucesso.' });
+        toast({ title: 'Data Source criado', description: 'Novo data source adicionado. Configure as credenciais.' });
       }
       
       setIsDialogOpen(false);
@@ -187,9 +203,11 @@ export default function DataSources() {
       tenantId: '',
       projectRef: '',
       projectUrl: '',
-      allowedViews: ''
+      allowedViews: []
     });
     setEditingDataSource(null);
+    setAvailableViews([]);
+    setAvailableTables([]);
   };
 
   const openEditDialog = (ds: DataSource) => {
@@ -199,7 +217,7 @@ export default function DataSources() {
       tenantId: ds.tenant_id,
       projectRef: ds.project_ref,
       projectUrl: ds.project_url,
-      allowedViews: ds.allowed_views.join(', ')
+      allowedViews: ds.allowed_views
     });
     setIsDialogOpen(true);
   };
@@ -207,6 +225,12 @@ export default function DataSources() {
   const openCreateDialog = () => {
     resetForm();
     setIsDialogOpen(true);
+  };
+
+  const openKeysDialog = (ds: DataSource) => {
+    setSelectedDataSource(ds);
+    setKeyFormData({ anonKey: '', serviceRoleKey: '' });
+    setIsKeysDialogOpen(true);
   };
 
   const toggleStatus = async (ds: DataSource) => {
@@ -232,18 +256,11 @@ export default function DataSources() {
     setTestResults(prev => ({ ...prev, [ds.id]: '' }));
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        throw new Error('Não autenticado');
-      }
-
       const response = await supabase.functions.invoke('test-data-source', {
         body: { data_source_id: ds.id }
       });
 
-      if (response.error) {
-        throw new Error(response.error.message);
-      }
+      if (response.error) throw new Error(response.error.message);
 
       const result = response.data;
       
@@ -262,10 +279,78 @@ export default function DataSources() {
       toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     }
 
-    // Reset after 5 seconds
     setTimeout(() => {
       setTestStatus(prev => ({ ...prev, [ds.id]: 'idle' }));
     }, 5000);
+  };
+
+  const introspectDataSource = async (dsId?: string) => {
+    const targetId = dsId || editingDataSource?.id;
+    if (!targetId) return;
+
+    setIsIntrospecting(true);
+    try {
+      const response = await supabase.functions.invoke('introspect-datasource', {
+        body: { data_source_id: targetId, schema: 'public' }
+      });
+
+      if (response.error) throw new Error(response.error.message);
+
+      const result = response.data;
+      
+      if (result.error) {
+        toast({ title: 'Erro', description: result.error, variant: 'destructive' });
+      } else {
+        setAvailableViews(result.views || []);
+        setAvailableTables(result.tables || []);
+        toast({ 
+          title: 'Introspecção concluída', 
+          description: `Encontradas ${result.views?.length || 0} views e ${result.tables?.length || 0} tabelas.` 
+        });
+      }
+    } catch (error: any) {
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    } finally {
+      setIsIntrospecting(false);
+    }
+  };
+
+  const saveKeys = async () => {
+    if (!selectedDataSource) return;
+
+    setIsSavingKeys(true);
+    try {
+      const body: any = {
+        data_source_id: selectedDataSource.id,
+        action: 'set_keys'
+      };
+
+      if (keyFormData.anonKey.trim()) {
+        body.anon_key = keyFormData.anonKey.trim();
+      }
+      if (keyFormData.serviceRoleKey.trim()) {
+        body.service_role_key = keyFormData.serviceRoleKey.trim();
+      }
+
+      if (!body.anon_key && !body.service_role_key) {
+        toast({ title: 'Erro', description: 'Informe pelo menos uma chave.', variant: 'destructive' });
+        return;
+      }
+
+      const response = await supabase.functions.invoke('manage-datasource-keys', { body });
+
+      if (response.error) throw new Error(response.error.message);
+      if (response.data.error) throw new Error(response.data.error);
+
+      toast({ title: 'Credenciais salvas', description: 'As chaves foram criptografadas e salvas.' });
+      setIsKeysDialogOpen(false);
+      setKeyFormData({ anonKey: '', serviceRoleKey: '' });
+      fetchData();
+    } catch (error: any) {
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    } finally {
+      setIsSavingKeys(false);
+    }
   };
 
   const deleteDataSource = async (ds: DataSource) => {
@@ -285,6 +370,15 @@ export default function DataSources() {
     }
   };
 
+  const toggleViewSelection = (viewName: string) => {
+    setFormData(prev => ({
+      ...prev,
+      allowedViews: prev.allowedViews.includes(viewName)
+        ? prev.allowedViews.filter(v => v !== viewName)
+        : [...prev.allowedViews, viewName]
+    }));
+  };
+
   if (isLoading) {
     return <LoadingPage message="Carregando data sources..." />;
   }
@@ -293,7 +387,7 @@ export default function DataSources() {
     <div className="space-y-6 animate-fade-in">
       <PageHeader 
         title="Data Sources" 
-        description="Gerencie conexões com bancos de dados externos (Supabase)"
+        description="Gerencie conexões com bancos de dados Supabase externos"
         actions={
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
@@ -302,75 +396,155 @@ export default function DataSources() {
                 Adicionar Data Source
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="max-w-2xl">
               <form onSubmit={handleSubmit}>
                 <DialogHeader>
                   <DialogTitle>{editingDataSource ? 'Editar Data Source' : 'Novo Data Source'}</DialogTitle>
                   <DialogDescription>
-                    {editingDataSource ? 'Atualize a configuração do data source.' : 'Configure uma nova conexão Supabase.'}
+                    {editingDataSource ? 'Atualize a configuração.' : 'Configure uma nova conexão Supabase.'}
                   </DialogDescription>
                 </DialogHeader>
-                <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
+                <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="tenant">Tenant</Label>
+                      <Select 
+                        value={formData.tenantId} 
+                        onValueChange={(v) => setFormData({ ...formData, tenantId: v })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione o tenant" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {tenants.map((t) => (
+                            <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="name">Nome</Label>
+                      <Input
+                        id="name"
+                        value={formData.name}
+                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                        placeholder="Ex: Afonsina Supabase"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="projectRef">Project Ref</Label>
+                      <Input
+                        id="projectRef"
+                        value={formData.projectRef}
+                        onChange={(e) => setFormData({ ...formData, projectRef: e.target.value })}
+                        placeholder="mpbrjezmxmrdhgtvldvi"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="projectUrl">Project URL</Label>
+                      <Input
+                        id="projectUrl"
+                        value={formData.projectUrl}
+                        onChange={(e) => setFormData({ ...formData, projectUrl: e.target.value })}
+                        placeholder="https://xxx.supabase.co"
+                      />
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
-                    <Label htmlFor="tenant">Tenant</Label>
-                    <Select 
-                      value={formData.tenantId} 
-                      onValueChange={(v) => setFormData({ ...formData, tenantId: v })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Selecione o tenant" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {tenants.map((t) => (
-                          <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                    <div className="flex items-center justify-between">
+                      <Label>Views Permitidas</Label>
+                      {editingDataSource && (
+                        <Button 
+                          type="button" 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => introspectDataSource()}
+                          disabled={isIntrospecting}
+                        >
+                          {isIntrospecting ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                          )}
+                          Buscar Views
+                        </Button>
+                      )}
+                    </div>
+                    
+                    {availableViews.length > 0 || availableTables.length > 0 ? (
+                      <ScrollArea className="h-40 border rounded-lg p-3">
+                        <div className="space-y-1">
+                          {availableViews.length > 0 && (
+                            <>
+                              <p className="text-xs font-medium text-muted-foreground mb-2">Views ({availableViews.length})</p>
+                              {availableViews.map(v => (
+                                <div key={v.name} className="flex items-center gap-2">
+                                  <Checkbox 
+                                    id={v.name}
+                                    checked={formData.allowedViews.includes(v.name)}
+                                    onCheckedChange={() => toggleViewSelection(v.name)}
+                                  />
+                                  <label htmlFor={v.name} className="text-sm cursor-pointer">{v.name}</label>
+                                </div>
+                              ))}
+                            </>
+                          )}
+                          {availableTables.length > 0 && (
+                            <>
+                              <p className="text-xs font-medium text-muted-foreground mt-3 mb-2">Tabelas ({availableTables.length})</p>
+                              {availableTables.map(t => (
+                                <div key={t.name} className="flex items-center gap-2">
+                                  <Checkbox 
+                                    id={t.name}
+                                    checked={formData.allowedViews.includes(t.name)}
+                                    onCheckedChange={() => toggleViewSelection(t.name)}
+                                  />
+                                  <label htmlFor={t.name} className="text-sm cursor-pointer">{t.name}</label>
+                                </div>
+                              ))}
+                            </>
+                          )}
+                        </div>
+                      </ScrollArea>
+                    ) : (
+                      <div className="border rounded-lg p-4 text-center text-sm text-muted-foreground">
+                        {editingDataSource ? (
+                          <>Clique em "Buscar Views" para carregar a lista de views/tabelas.</>
+                        ) : (
+                          <>Salve o data source e configure as credenciais para buscar views.</>
+                        )}
+                      </div>
+                    )}
+
+                    {formData.allowedViews.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {formData.allowedViews.map(v => (
+                          <Badge key={v} variant="secondary" className="text-xs">
+                            {v}
+                            <button 
+                              type="button"
+                              onClick={() => toggleViewSelection(v)}
+                              className="ml-1 hover:text-destructive"
+                            >
+                              ×
+                            </button>
+                          </Badge>
                         ))}
-                      </SelectContent>
-                    </Select>
+                      </div>
+                    )}
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="name">Nome</Label>
-                    <Input
-                      id="name"
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      placeholder="Ex: Afonsina Supabase"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="projectRef">Project Ref</Label>
-                    <Input
-                      id="projectRef"
-                      value={formData.projectRef}
-                      onChange={(e) => setFormData({ ...formData, projectRef: e.target.value })}
-                      placeholder="Ex: mpbrjezmxmrdhgtvldvi"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="projectUrl">Project URL</Label>
-                    <Input
-                      id="projectUrl"
-                      value={formData.projectUrl}
-                      onChange={(e) => setFormData({ ...formData, projectUrl: e.target.value })}
-                      placeholder="Ex: https://mpbrjezmxmrdhgtvldvi.supabase.co"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="allowedViews">Views Permitidas (separadas por vírgula)</Label>
-                    <Input
-                      id="allowedViews"
-                      value={formData.allowedViews}
-                      onChange={(e) => setFormData({ ...formData, allowedViews: e.target.value })}
-                      placeholder="Ex: vw_afonsina_custos_funil_dia, vw_outra_view"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Somente estas views poderão ser acessadas por dashboards.
-                    </p>
-                  </div>
+
                   <div className="p-3 bg-muted rounded-lg text-sm">
-                    <p className="font-medium mb-1">⚠️ Chaves de API</p>
+                    <p className="font-medium mb-1 flex items-center gap-2">
+                      <Key className="h-4 w-4" /> Chaves de API
+                    </p>
                     <p className="text-muted-foreground">
-                      As chaves (anon_key, service_role_key) devem ser configuradas nos Secrets do Cloud.
-                      Não são armazenadas no banco de dados.
+                      As chaves são configuradas separadamente após criar o data source.
+                      Elas são criptografadas e nunca são exibidas.
                     </p>
                   </div>
                 </div>
@@ -387,6 +561,78 @@ export default function DataSources() {
           </Dialog>
         }
       />
+
+      {/* Keys Dialog */}
+      <Dialog open={isKeysDialogOpen} onOpenChange={setIsKeysDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Key className="h-5 w-5" />
+              Configurar Credenciais
+            </DialogTitle>
+            <DialogDescription>
+              {selectedDataSource?.name} - As chaves serão criptografadas e nunca serão exibidas novamente.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="anonKey" className="flex items-center gap-2">
+                <Unlock className="h-4 w-4" />
+                Anon Key (recomendado para leitura)
+              </Label>
+              <Input
+                id="anonKey"
+                type="password"
+                value={keyFormData.anonKey}
+                onChange={(e) => setKeyFormData({ ...keyFormData, anonKey: e.target.value })}
+                placeholder="eyJhbGciOiJIUzI1NiIs..."
+              />
+              {selectedDataSource?.anon_key_present && (
+                <p className="text-xs text-green-600 flex items-center gap-1">
+                  <CheckCircle className="h-3 w-3" /> Já configurada
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="serviceRoleKey" className="flex items-center gap-2">
+                <Lock className="h-4 w-4" />
+                Service Role Key (avançado)
+              </Label>
+              <Input
+                id="serviceRoleKey"
+                type="password"
+                value={keyFormData.serviceRoleKey}
+                onChange={(e) => setKeyFormData({ ...keyFormData, serviceRoleKey: e.target.value })}
+                placeholder="eyJhbGciOiJIUzI1NiIs..."
+              />
+              {selectedDataSource?.service_role_key_present && (
+                <p className="text-xs text-green-600 flex items-center gap-1">
+                  <CheckCircle className="h-3 w-3" /> Já configurada
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Use apenas se precisar de acesso administrativo. A anon_key é preferível.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsKeysDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={saveKeys} disabled={isSavingKeys}>
+              {isSavingKeys ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Salvando...
+                </>
+              ) : (
+                'Salvar Credenciais'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Filters */}
       <div className="flex flex-col gap-3 sm:flex-row">
@@ -431,8 +677,9 @@ export default function DataSources() {
               <TableRow>
                 <TableHead>Nome</TableHead>
                 <TableHead>Tenant</TableHead>
-                <TableHead>Project Ref</TableHead>
+                <TableHead>Project</TableHead>
                 <TableHead>Views</TableHead>
+                <TableHead>Credenciais</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Teste</TableHead>
                 <TableHead className="w-[50px]"></TableHead>
@@ -456,6 +703,26 @@ export default function DataSources() {
                       ))}
                       {ds.allowed_views.length > 2 && (
                         <Badge variant="outline" className="text-xs">+{ds.allowed_views.length - 2}</Badge>
+                      )}
+                      {ds.allowed_views.length === 0 && (
+                        <span className="text-xs text-muted-foreground">Nenhuma</span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      {ds.anon_key_present && (
+                        <Badge variant="secondary" className="text-xs gap-1">
+                          <Unlock className="h-3 w-3" /> anon
+                        </Badge>
+                      )}
+                      {ds.service_role_key_present && (
+                        <Badge variant="secondary" className="text-xs gap-1">
+                          <Lock className="h-3 w-3" /> service
+                        </Badge>
+                      )}
+                      {!ds.anon_key_present && !ds.service_role_key_present && (
+                        <span className="text-xs text-destructive">Não configuradas</span>
                       )}
                     </div>
                   </TableCell>
@@ -490,6 +757,10 @@ export default function DataSources() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => openKeysDialog(ds)}>
+                          <Key className="mr-2 h-4 w-4" />
+                          Configurar Credenciais
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => openEditDialog(ds)}>
                           <Pencil className="mr-2 h-4 w-4" />
                           Editar
@@ -498,10 +769,7 @@ export default function DataSources() {
                           <Power className="mr-2 h-4 w-4" />
                           {ds.is_active ? 'Desativar' : 'Ativar'}
                         </DropdownMenuItem>
-                        <DropdownMenuItem 
-                          onClick={() => deleteDataSource(ds)}
-                          className="text-destructive"
-                        >
+                        <DropdownMenuItem onClick={() => deleteDataSource(ds)} className="text-destructive">
                           <Trash2 className="mr-2 h-4 w-4" />
                           Excluir
                         </DropdownMenuItem>
