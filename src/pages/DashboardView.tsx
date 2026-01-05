@@ -492,6 +492,8 @@ export default function DashboardView() {
               dashboardId={dashboard.id} 
               templateKind={dashboard.template_kind || 'costs_funnel_daily'}
               dashboardSpec={dashboard.dashboard_spec || {}}
+              dashboardName={dashboard.name}
+              detectedColumns={Array.isArray(dashboard.detected_columns) ? dashboard.detected_columns : []}
             />
             {canEditSpec && (
               <DashboardSpecEditor
