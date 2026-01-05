@@ -104,7 +104,8 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get('authorization')
     if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'Não autorizado' }), {
+      console.log('No authorization header provided')
+      return new Response(JSON.stringify({ error: 'Não autorizado', error_type: 'auth' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
@@ -114,13 +115,15 @@ Deno.serve(async (req) => {
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
+    // Create client with the user's JWT
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
     })
 
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError || !user) {
-      return new Response(JSON.stringify({ error: 'Usuário não autenticado' }), {
+      console.log('User auth failed:', userError?.message)
+      return new Response(JSON.stringify({ error: 'Usuário não autenticado', error_type: 'auth' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
@@ -134,11 +137,33 @@ Deno.serve(async (req) => {
       })
     }
 
-    const url = new URL(req.url)
-    const dashboardId = url.searchParams.get('dashboard_id')
-    const start = url.searchParams.get('start')
-    const end = url.searchParams.get('end')
-    const limit = url.searchParams.get('limit') || '1000'
+    // Parse parameters from body (POST) or query string (GET)
+    let dashboardId: string | null = null
+    let start: string | null = null
+    let end: string | null = null
+    let limit: string = '1000'
+
+    if (req.method === 'POST') {
+      try {
+        const body = await req.json()
+        dashboardId = body.dashboard_id
+        start = body.start
+        end = body.end
+        limit = body.limit || '1000'
+      } catch (e) {
+        console.error('Failed to parse request body:', e)
+        return new Response(JSON.stringify({ error: 'Corpo da requisição inválido' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+    } else {
+      const url = new URL(req.url)
+      dashboardId = url.searchParams.get('dashboard_id')
+      start = url.searchParams.get('start')
+      end = url.searchParams.get('end')
+      limit = url.searchParams.get('limit') || '1000'
+    }
 
     if (!dashboardId) {
       return new Response(JSON.stringify({ error: 'dashboard_id é obrigatório' }), {
@@ -146,6 +171,8 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
+
+    console.log(`Fetching dashboard ${dashboardId} for user ${user.id}, period: ${start} to ${end}`)
 
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
 

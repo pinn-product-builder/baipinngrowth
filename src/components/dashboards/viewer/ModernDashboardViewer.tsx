@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { format, subDays, differenceInDays, parseISO } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { RefreshCw, BarChart3 } from 'lucide-react';
+import { RefreshCw, BarChart3, LogIn } from 'lucide-react';
 
 import DashboardFilterBar, { DateRange } from './DashboardFilterBar';
 import DashboardTabs, { TabsContent, TabType } from './DashboardTabs';
@@ -33,6 +33,27 @@ interface AggregatedData {
   [key: string]: number;
 }
 
+// Session expired error component
+function SessionExpiredView({ onLogin }: { onLogin: () => void }) {
+  return (
+    <Card>
+      <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+        <div className="rounded-full bg-warning/10 p-4 mb-4">
+          <LogIn className="h-8 w-8 text-warning" />
+        </div>
+        <h3 className="text-lg font-medium mb-1">Sessão expirada</h3>
+        <p className="text-muted-foreground text-sm max-w-md mb-4">
+          Sua sessão expirou ou você foi deslogado. Faça login novamente para continuar.
+        </p>
+        <Button onClick={onLogin}>
+          <LogIn className="mr-2 h-4 w-4" />
+          Fazer login
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ModernDashboardViewer({
   dashboardId,
   dashboardSpec = {},
@@ -41,6 +62,7 @@ export default function ModernDashboardViewer({
   dashboardName = 'Dashboard',
 }: ModernDashboardViewerProps) {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   
   // State
@@ -48,6 +70,7 @@ export default function ModernDashboardViewer({
   const [previousData, setPreviousData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [error, setError] = useState<{ message: string; type?: string; details?: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [comparisonEnabled, setComparisonEnabled] = useState(false);
@@ -139,65 +162,91 @@ export default function ModernDashboardViewer({
     return sums;
   }, [previousData]);
 
-  // Fetch data
+  // Fetch data using supabase.functions.invoke
   const fetchData = useCallback(async (fetchPrev = false) => {
     setIsRefreshing(true);
     setError(null);
+    setSessionExpired(false);
 
     try {
-      const { data: session } = await supabase.auth.getSession();
-      if (!session.session) {
-        throw new Error('Não autenticado');
+      // Check session first
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !sessionData.session) {
+        console.warn('Session invalid or expired');
+        setSessionExpired(true);
+        setIsLoading(false);
+        setIsRefreshing(false);
+        return;
       }
 
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const startStr = format(dateRange.start, 'yyyy-MM-dd');
       const endStr = format(dateRange.end, 'yyyy-MM-dd');
       
-      const url = new URL(`${supabaseUrl}/functions/v1/dashboard-data`);
-      url.searchParams.set('dashboard_id', dashboardId);
-      url.searchParams.set('start', startStr);
-      url.searchParams.set('end', endStr);
-
-      const res = await fetch(url.toString(), {
-        headers: {
-          'Authorization': `Bearer ${session.session.access_token}`,
-          'Content-Type': 'application/json',
+      // Use supabase.functions.invoke instead of raw fetch
+      // This automatically sends the user's JWT
+      const { data: result, error: fnError } = await supabase.functions.invoke('dashboard-data', {
+        body: {
+          dashboard_id: dashboardId,
+          start: startStr,
+          end: endStr,
         },
       });
 
-      const result = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
+      // Handle errors
+      if (fnError) {
+        console.error('Edge function error:', fnError);
+        
+        // Check for auth errors (401)
+        if (fnError.message?.includes('401') || fnError.message?.includes('Unauthorized') || fnError.message?.includes('Invalid JWT')) {
+          setSessionExpired(true);
+          toast({ 
+            title: 'Sessão expirada', 
+            description: 'Faça login novamente para continuar.',
+            variant: 'destructive'
+          });
+          return;
+        }
+        
         throw {
-          message: result.error || `Erro ${res.status}`,
+          message: fnError.message || 'Erro ao carregar dados',
+          type: 'edge_function_error',
+          details: fnError.context?.message,
+        };
+      }
+
+      // Check for error in response body
+      if (result?.error) {
+        // Check if it's an auth error
+        if (result.error.includes('autenticado') || result.error.includes('autorizado')) {
+          setSessionExpired(true);
+          return;
+        }
+        
+        throw {
+          message: result.error,
           type: result.error_type || 'generic',
           details: result.details,
         };
       }
 
-      setData(result.data || []);
+      setData(result?.data || []);
 
       // Fetch previous period if comparison enabled
       if (fetchPrev && previousRange) {
         const prevStartStr = format(previousRange.start, 'yyyy-MM-dd');
         const prevEndStr = format(previousRange.end, 'yyyy-MM-dd');
 
-        const prevUrl = new URL(`${supabaseUrl}/functions/v1/dashboard-data`);
-        prevUrl.searchParams.set('dashboard_id', dashboardId);
-        prevUrl.searchParams.set('start', prevStartStr);
-        prevUrl.searchParams.set('end', prevEndStr);
-
-        const prevRes = await fetch(prevUrl.toString(), {
-          headers: {
-            'Authorization': `Bearer ${session.session.access_token}`,
-            'Content-Type': 'application/json',
+        const { data: prevResult, error: prevError } = await supabase.functions.invoke('dashboard-data', {
+          body: {
+            dashboard_id: dashboardId,
+            start: prevStartStr,
+            end: prevEndStr,
           },
         });
 
-        if (prevRes.ok) {
-          const prevResult = await prevRes.json();
-          setPreviousData(prevResult.data || []);
+        if (!prevError && prevResult?.data) {
+          setPreviousData(prevResult.data);
         }
       } else {
         setPreviousData([]);
@@ -214,7 +263,7 @@ export default function ModernDashboardViewer({
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [dashboardId, dateRange, previousRange]);
+  }, [dashboardId, dateRange, previousRange, toast]);
 
   // Initial fetch
   useEffect(() => {
@@ -310,6 +359,16 @@ export default function ModernDashboardViewer({
     });
     return result;
   }, [data, templateConfig.kpis]);
+
+  // Handle login redirect
+  const handleLoginRedirect = useCallback(() => {
+    navigate('/auth');
+  }, [navigate]);
+
+  // Session expired state
+  if (sessionExpired) {
+    return <SessionExpiredView onLogin={handleLoginRedirect} />;
+  }
 
   // Loading skeleton
   if (isLoading) {
