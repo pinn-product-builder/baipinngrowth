@@ -14,3 +14,12 @@ verify_jwt = false
 
 [functions.verify-invite]
 verify_jwt = false
+
+[functions.dashboard-data]
+verify_jwt = true
+
+[functions.test-data-source]
+verify_jwt = true
+
+[functions.detect-template]
+verify_jwt = true

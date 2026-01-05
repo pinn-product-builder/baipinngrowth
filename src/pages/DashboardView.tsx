@@ -8,10 +8,12 @@ import { LoadingPage, LoadingSpinner } from '@/components/ui/loading-spinner';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useToast } from '@/hooks/use-toast';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
-import { ArrowLeft, RefreshCw, Clock, AlertCircle, FileText, ExternalLink, AlertTriangle, Copy, CheckCheck } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
+import { ArrowLeft, RefreshCw, Clock, AlertCircle, FileText, ExternalLink, AlertTriangle, Copy, CheckCheck, Settings } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import DashboardCustosFunil from '@/components/dashboards/DashboardCustosFunil';
+import CostsFunnelDashboard from '@/components/dashboards/CostsFunnelDashboard';
+import DashboardSpecEditor from '@/components/dashboards/DashboardSpecEditor';
 
 // Configure DOMPurify to allow safe HTML tags for dashboard content
 const sanitizeHtml = (html: string): string => {
@@ -35,6 +37,9 @@ interface Dashboard {
   data_source_id: string | null;
   view_name: string | null;
   last_fetched_at: string | null;
+  template_kind: string | null;
+  dashboard_spec: Record<string, any> | null;
+  detected_columns: any[] | null;
 }
 
 type ContentType = 'iframe' | 'html' | 'json' | 'supabase_view' | 'unknown';
@@ -49,6 +54,7 @@ export default function DashboardView() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { logActivity } = useActivityLogger();
+  const { userRole } = useAuth();
 
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -61,6 +67,9 @@ export default function DashboardView() {
   const [errorType, setErrorType] = useState<ErrorType>('generic');
   const [retryCount, setRetryCount] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [specEditorOpen, setSpecEditorOpen] = useState(false);
+
+  const canEditSpec = userRole === 'admin' || userRole === 'manager';
 
   useEffect(() => {
     fetchDashboard();
@@ -330,46 +339,58 @@ export default function DashboardView() {
             )}
           </div>
         </div>
-        {dashboard.source_kind !== 'supabase_view' && (
-          <div className="flex flex-wrap items-center gap-2">
-            {lastUpdated && (
-              <div className="flex items-center gap-1.5 text-sm text-muted-foreground mr-2">
-                <Clock className="h-4 w-4" />
-                <span>Atualizado: {format(lastUpdated, 'HH:mm:ss', { locale: ptBR })}</span>
-              </div>
-            )}
-            {retryCount > 1 && loadState === 'loading' && (
-              <span className="text-xs text-muted-foreground mr-2">
-                Tentativa {retryCount}/{MAX_RETRIES}
-              </span>
-            )}
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={handleCopyLink}
-            >
-              {copied ? <CheckCheck className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
-              {copied ? 'Copiado' : 'Copiar link'}
-            </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {dashboard.source_kind !== 'supabase_view' && (
+            <>
+              {lastUpdated && (
+                <div className="flex items-center gap-1.5 text-sm text-muted-foreground mr-2">
+                  <Clock className="h-4 w-4" />
+                  <span>Atualizado: {format(lastUpdated, 'HH:mm:ss', { locale: ptBR })}</span>
+                </div>
+              )}
+              {retryCount > 1 && loadState === 'loading' && (
+                <span className="text-xs text-muted-foreground mr-2">
+                  Tentativa {retryCount}/{MAX_RETRIES}
+                </span>
+              )}
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={handleCopyLink}
+              >
+                {copied ? <CheckCheck className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+                {copied ? 'Copiado' : 'Copiar link'}
+              </Button>
+              <Button 
+                variant="outline"
+                size="sm"
+                onClick={handleOpenInNewTab}
+              >
+                <ExternalLink className="mr-2 h-4 w-4" />
+                Abrir em nova aba
+              </Button>
+              <Button 
+                variant="outline"
+                size="sm"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                Atualizar
+              </Button>
+            </>
+          )}
+          {dashboard.source_kind === 'supabase_view' && canEditSpec && (
             <Button 
               variant="outline"
               size="sm"
-              onClick={handleOpenInNewTab}
+              onClick={() => setSpecEditorOpen(true)}
             >
-              <ExternalLink className="mr-2 h-4 w-4" />
-              Abrir em nova aba
+              <Settings className="mr-2 h-4 w-4" />
+              Editar Layout
             </Button>
-            <Button 
-              variant="outline"
-              size="sm"
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-            >
-              <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-              Atualizar
-            </Button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Content */}
@@ -451,7 +472,25 @@ export default function DashboardView() {
         )}
 
         {loadState === 'success' && contentType === 'supabase_view' && dashboard && (
-          <DashboardCustosFunil dashboardId={dashboard.id} />
+          <>
+            <CostsFunnelDashboard 
+              dashboardId={dashboard.id} 
+              templateKind={dashboard.template_kind || 'costs_funnel_daily'}
+              dashboardSpec={dashboard.dashboard_spec || {}}
+            />
+            {canEditSpec && (
+              <DashboardSpecEditor
+                dashboardId={dashboard.id}
+                currentSpec={dashboard.dashboard_spec || {}}
+                detectedColumns={dashboard.detected_columns}
+                open={specEditorOpen}
+                onOpenChange={setSpecEditorOpen}
+                onSave={(newSpec) => {
+                  setDashboard(prev => prev ? { ...prev, dashboard_spec: newSpec } : null);
+                }}
+              />
+            )}
+          </>
         )}
       </div>
     </div>
