@@ -6,6 +6,27 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Rate limiter keyed by user ID
+const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(userId: string, limit: number, windowMs: number): { allowed: boolean; remaining: number; resetAt: number } {
+  const now = Date.now();
+  let entry = rateLimitStore.get(userId);
+  
+  if (!entry || entry.resetAt < now) {
+    entry = { count: 1, resetAt: now + windowMs };
+    rateLimitStore.set(userId, entry);
+    return { allowed: true, remaining: limit - 1, resetAt: entry.resetAt };
+  }
+  
+  entry.count++;
+  if (entry.count > limit) {
+    return { allowed: false, remaining: 0, resetAt: entry.resetAt };
+  }
+  
+  return { allowed: true, remaining: limit - entry.count, resetAt: entry.resetAt };
+}
+
 interface InviteRequest {
   email: string
   fullName?: string
@@ -52,6 +73,25 @@ Deno.serve(async (req) => {
       )
     }
 
+    // Rate limit: 50 invites per user per hour
+    const rateLimit = checkRateLimit(user.id, 50, 3600000);
+    
+    if (!rateLimit.allowed) {
+      const retryAfter = Math.ceil((rateLimit.resetAt - Date.now()) / 1000);
+      console.log(`Rate limit exceeded for send-invite by user: ${user.id}`);
+      return new Response(
+        JSON.stringify({ error: 'Too many invitations sent. Please try again later.', retryAfter }),
+        { 
+          status: 429, 
+          headers: { 
+            ...corsHeaders, 
+            'Content-Type': 'application/json',
+            'Retry-After': retryAfter.toString()
+          } 
+        }
+      );
+    }
+
     // Check if user is admin or manager
     const { data: roleData } = await supabase
       .from('user_roles')
@@ -69,11 +109,40 @@ Deno.serve(async (req) => {
       )
     }
 
-    const { email, fullName, tenantId, role }: InviteRequest = await req.json()
+    const body = await req.json() as InviteRequest;
+    const { email, fullName, tenantId, role } = body;
 
-    if (!email || !role) {
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || typeof email !== 'string' || !emailRegex.test(email) || email.length > 255) {
       return new Response(
-        JSON.stringify({ error: 'Email and role are required' }),
+        JSON.stringify({ error: 'Valid email is required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Validate role
+    const validRoles = ['admin', 'manager', 'viewer'];
+    if (!role || !validRoles.includes(role)) {
+      return new Response(
+        JSON.stringify({ error: 'Valid role is required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Validate fullName if provided
+    if (fullName && (typeof fullName !== 'string' || fullName.length > 200)) {
+      return new Response(
+        JSON.stringify({ error: 'Full name must be less than 200 characters' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Validate tenantId format if provided
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (tenantId && !uuidRegex.test(tenantId)) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid tenant ID format' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -207,7 +276,7 @@ Deno.serve(async (req) => {
           </div>
           <div style="background: #f8fafc; padding: 30px; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 12px 12px;">
             <h2 style="color: #1e293b; margin-top: 0;">You've been invited!</h2>
-            <p>Hi${fullName ? ` ${fullName}` : ''},</p>
+            <p>Hi${fullName ? ` ${fullName.slice(0, 100)}` : ''},</p>
             <p><strong>${inviterName}</strong> has invited you to join <strong>${tenantName}</strong> as a <strong>${role}</strong>.</p>
             <p>Click the button below to set up your account:</p>
             <div style="text-align: center; margin: 30px 0;">
