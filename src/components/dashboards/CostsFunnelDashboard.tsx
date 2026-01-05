@@ -67,7 +67,7 @@ export default function CostsFunnelDashboard({
   const [comparisonEnabled, setComparisonEnabled] = useState(false);
   const { toast } = useToast();
 
-  const [errorDetails, setErrorDetails] = useState<{ type?: string; details?: string } | null>(null);
+  const [errorDetails, setErrorDetails] = useState<{ type?: string; details?: string; suggestion?: string } | null>(null);
 
   const fetchData = async (fetchPrevious = false) => {
     setIsLoading(true);
@@ -94,18 +94,26 @@ export default function CostsFunnelDashboard({
         },
       });
 
-      const result = await res.json().catch(() => ({}));
+      const result = await res.json().catch(() => ({ ok: false, error: { message: 'Resposta inválida' } }));
 
-      if (!res.ok) {
-        const errorType = result.error_type || 'generic';
-        const errorMsg = result.error || `Erro ${res.status}`;
-        const errorDetailsText = result.details || '';
+      // New format: always check ok field
+      if (result.ok === false || !res.ok) {
+        const errorCode = result.error?.code || 'UNKNOWN';
+        const errorType = result.error?.code?.toLowerCase() || result.error_type || 'generic';
+        const errorMsg = result.error?.message || result.error || `Erro ${res.status}`;
+        const errorDetailsText = result.error?.details || '';
+        const errorSuggestion = result.error?.suggestion || '';
         
-        setErrorDetails({ type: errorType, details: errorDetailsText });
+        setErrorDetails({ 
+          type: errorType, 
+          details: errorDetailsText,
+          suggestion: errorSuggestion
+        });
         throw new Error(errorMsg);
       }
 
-      setData(result.data || []);
+      const fetchedData = result.data || result.rows || [];
+      setData(fetchedData);
 
       if (fetchPrevious && comparisonEnabled) {
         const periodDays = differenceInDays(new Date(endDate), new Date(startDate));
@@ -177,34 +185,58 @@ export default function CostsFunnelDashboard({
   };
 
   const getErrorInfo = () => {
-    switch (errorDetails?.type) {
-      case 'timeout':
-        return { title: 'Tempo esgotado', description: 'O servidor demorou muito para responder.' };
-      case 'network':
-        return { title: 'Erro de rede', description: 'Não foi possível conectar ao servidor.' };
-      case 'proxy_error':
-        return { title: 'Erro do proxy', description: errorDetails?.details || 'O proxy retornou um erro.' };
-      case 'supabase_error':
-        return { title: 'Erro do Supabase', description: errorDetails?.details || 'Erro ao consultar o banco de dados.' };
-      default:
-        return { title: 'Falha ao obter dados', description: error || 'Erro desconhecido' };
+    const errorType = errorDetails?.type?.toLowerCase() || '';
+    
+    if (errorType.includes('timeout')) {
+      return { title: 'Tempo esgotado', description: 'O servidor demorou muito para responder.' };
     }
+    if (errorType.includes('network')) {
+      return { title: 'Erro de rede', description: 'Não foi possível conectar ao servidor.' };
+    }
+    if (errorType.includes('proxy')) {
+      return { title: 'Erro do proxy', description: errorDetails?.details || 'O proxy retornou um erro.' };
+    }
+    if (errorType.includes('upstream_401') || errorType.includes('decrypt') || errorType.includes('invalid_key')) {
+      return { title: 'Credenciais inválidas', description: 'A chave de API pode estar expirada ou incorreta.' };
+    }
+    if (errorType.includes('upstream_403') || errorType.includes('forbidden')) {
+      return { title: 'Acesso negado', description: 'Sem permissão para acessar os dados. Verifique os GRANTs.' };
+    }
+    if (errorType.includes('upstream_404') || errorType.includes('not_found') || errorType.includes('view_not')) {
+      return { title: 'View não encontrada', description: 'A view especificada não existe ou não está acessível.' };
+    }
+    if (errorType.includes('config') || errorType.includes('datasource')) {
+      return { title: 'Configuração incorreta', description: 'O data source não está configurado corretamente.' };
+    }
+    
+    return { title: 'Falha ao obter dados', description: error || 'Erro desconhecido' };
   };
 
   if (error) {
     const errorInfo = getErrorInfo();
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-center border rounded-lg bg-card">
+      <div className="flex flex-col items-center justify-center py-12 text-center border rounded-lg bg-card max-w-2xl mx-auto">
         <div className="rounded-full bg-destructive/10 p-4 mb-4">
           <RefreshCw className="h-8 w-8 text-destructive" />
         </div>
         <h3 className="text-lg font-medium mb-1">{errorInfo.title}</h3>
         <p className="text-muted-foreground text-sm max-w-md mb-2">{errorInfo.description}</p>
+        
         {errorDetails?.details && errorDetails.details !== errorInfo.description && (
-          <p className="text-xs text-muted-foreground bg-muted px-3 py-1 rounded mb-4 max-w-md truncate">
+          <p className="text-xs text-muted-foreground bg-muted px-3 py-1 rounded mb-4 max-w-md">
             {errorDetails.details}
           </p>
         )}
+        
+        {errorDetails?.suggestion && (
+          <div className="bg-muted/50 border rounded-lg p-4 mb-4 max-w-md text-left">
+            <p className="text-xs font-medium mb-2">💡 Sugestão de correção:</p>
+            <pre className="text-xs bg-background p-2 rounded overflow-x-auto whitespace-pre-wrap">
+              {errorDetails.suggestion}
+            </pre>
+          </div>
+        )}
+        
         <Button onClick={() => fetchData(comparisonEnabled)} variant="outline">
           <RefreshCw className="mr-2 h-4 w-4" />
           Tentar novamente
