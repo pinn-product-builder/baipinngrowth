@@ -13,10 +13,13 @@ import {
 import { DollarSign, Users, TrendingUp, Target, ArrowRightLeft, Briefcase } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import KpiCard from '../shared/KpiCard';
 
 interface ExecutiveViewProps {
   data: any[];
   spec: Record<string, any>;
+  previousData?: any[];
+  comparisonEnabled?: boolean;
 }
 
 const formatCurrency = (value: number) => {
@@ -47,7 +50,22 @@ const KPI_LABELS: Record<string, string> = {
   cac: 'CAC do Período',
 };
 
-export default function ExecutiveView({ data, spec }: ExecutiveViewProps) {
+const KPI_TOOLTIPS: Record<string, string> = {
+  custo_total: 'Total investido em marketing no período selecionado.',
+  leads_total: 'Total de leads gerados pelos canais de aquisição.',
+  entrada_total: 'Leads que entraram no funil de vendas.',
+  reuniao_realizada_total: 'Reuniões efetivamente realizadas com prospects.',
+  venda_total: 'Vendas fechadas no período.',
+  cpl: 'Custo Por Lead: investimento dividido pelo número de leads.',
+  cac: 'Custo de Aquisição de Cliente: investimento dividido pelo número de vendas.',
+};
+
+export default function ExecutiveView({ 
+  data, 
+  spec, 
+  previousData = [],
+  comparisonEnabled = false 
+}: ExecutiveViewProps) {
   // Calculate aggregated KPIs for the period
   const aggregatedKpis = useMemo(() => {
     if (data.length === 0) return {};
@@ -77,13 +95,52 @@ export default function ExecutiveView({ data, spec }: ExecutiveViewProps) {
     return sums;
   }, [data, spec]);
 
+  // Calculate previous period aggregates
+  const previousAggregates = useMemo(() => {
+    if (!previousData || previousData.length === 0) return {};
+
+    const sums: Record<string, number> = {};
+    const kpiList = spec?.kpis || ['custo_total', 'leads_total', 'entrada_total', 'reuniao_realizada_total', 'venda_total'];
+    
+    previousData.forEach(row => {
+      kpiList.forEach((key: string) => {
+        if (typeof row[key] === 'number') {
+          sums[key] = (sums[key] || 0) + row[key];
+        }
+      });
+    });
+
+    if (sums.custo_total !== undefined) {
+      if (sums.leads_total && sums.leads_total > 0) {
+        sums.cpl = sums.custo_total / sums.leads_total;
+      }
+      if (sums.venda_total && sums.venda_total > 0) {
+        sums.cac = sums.custo_total / sums.venda_total;
+      }
+    }
+
+    return sums;
+  }, [previousData, spec]);
+
+  // Get sparkline data for each KPI
+  const sparklineData = useMemo(() => {
+    const sparklines: Record<string, number[]> = {};
+    const kpiList = ['custo_total', 'leads_total', 'cpl', 'cac', 'venda_total', 'entrada_total', 'reuniao_realizada_total'];
+    
+    kpiList.forEach(key => {
+      sparklines[key] = data.map(row => row[key] || 0);
+    });
+    
+    return sparklines;
+  }, [data]);
+
   const formatting = spec?.formatting || {};
   const kpiList = [...(spec?.kpis || ['custo_total', 'leads_total', 'entrada_total', 'reuniao_realizada_total', 'venda_total']), 'cpl', 'cac'];
   const uniqueKpis = [...new Set(kpiList)];
 
   const formatValue = (key: string, value: number) => {
-    const format = formatting[key];
-    if (format === 'currency' || key === 'cpl' || key === 'cac' || key.includes('custo')) {
+    const fmt = formatting[key];
+    if (fmt === 'currency' || key === 'cpl' || key === 'cac' || key.includes('custo')) {
       return formatCurrency(value);
     }
     return formatInteger(value);
@@ -105,118 +162,148 @@ export default function ExecutiveView({ data, spec }: ExecutiveViewProps) {
     }
   };
 
+  // Determine format type for KpiCard
+  const getFormatType = (key: string): 'currency' | 'percent' | 'integer' => {
+    if (key === 'cpl' || key === 'cac' || key.includes('custo')) return 'currency';
+    if (key.startsWith('taxa_')) return 'percent';
+    return 'integer';
+  };
+
   return (
     <div className="space-y-6">
-      {/* KPI Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+      {/* KPI Cards - Grid with enterprise styling */}
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
         {uniqueKpis.map((key) => {
           if (aggregatedKpis[key] === undefined) return null;
           const Icon = KPI_ICONS[key] || TrendingUp;
+          const showComparison = comparisonEnabled && previousAggregates[key] !== undefined;
+          
           return (
-            <Card key={key}>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">{KPI_LABELS[key] || key}</CardTitle>
-                <Icon className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{formatValue(key, aggregatedKpis[key])}</div>
-              </CardContent>
-            </Card>
+            <KpiCard
+              key={key}
+              label={KPI_LABELS[key] || key}
+              value={formatValue(key, aggregatedKpis[key])}
+              icon={Icon}
+              tooltip={KPI_TOOLTIPS[key]}
+              currentValue={showComparison ? aggregatedKpis[key] : undefined}
+              previousValue={showComparison ? previousAggregates[key] : undefined}
+              sparklineData={sparklineData[key]}
+              format={getFormatType(key)}
+            />
           );
         })}
       </div>
 
-      {/* Chart: Custo e Leads por Dia */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Custo e Leads por Dia</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                <XAxis 
-                  dataKey="dia" 
-                  tickFormatter={formatDate}
-                  className="text-xs"
-                />
-                <YAxis yAxisId="left" className="text-xs" />
-                <YAxis yAxisId="right" orientation="right" className="text-xs" />
-                <Tooltip 
-                  labelFormatter={formatDateFull}
-                  formatter={(value: number, name: string) => {
-                    if (name === 'Custo') return formatCurrency(value);
-                    return formatInteger(value);
-                  }}
-                />
-                <Legend />
-                <Line 
-                  yAxisId="left"
-                  type="monotone" 
-                  dataKey="custo_total" 
-                  name="Custo"
-                  stroke="hsl(var(--primary))" 
-                  strokeWidth={2}
-                  dot={false}
-                />
-                <Line 
-                  yAxisId="right"
-                  type="monotone" 
-                  dataKey="leads_total" 
-                  name="Leads"
-                  stroke="hsl(var(--chart-2))" 
-                  strokeWidth={2}
-                  dot={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Charts */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Chart: Custo e Leads por Dia */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Custo e Leads por Dia</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[280px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                  <XAxis 
+                    dataKey="dia" 
+                    tickFormatter={formatDate}
+                    className="text-xs"
+                    tick={{ fontSize: 11 }}
+                  />
+                  <YAxis yAxisId="left" className="text-xs" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="right" orientation="right" className="text-xs" tick={{ fontSize: 11 }} />
+                  <Tooltip 
+                    labelFormatter={formatDateFull}
+                    formatter={(value: number, name: string) => {
+                      if (name === 'Custo') return formatCurrency(value);
+                      return formatInteger(value);
+                    }}
+                    contentStyle={{
+                      backgroundColor: 'hsl(var(--card))',
+                      border: '1px solid hsl(var(--border))',
+                      borderRadius: '8px',
+                    }}
+                  />
+                  <Legend />
+                  <Line 
+                    yAxisId="left"
+                    type="monotone" 
+                    dataKey="custo_total" 
+                    name="Custo"
+                    stroke="hsl(var(--primary))" 
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                  />
+                  <Line 
+                    yAxisId="right"
+                    type="monotone" 
+                    dataKey="leads_total" 
+                    name="Leads"
+                    stroke="hsl(var(--accent))" 
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
 
-      {/* Chart: CPL e CAC por Dia */}
-      <Card>
-        <CardHeader>
-          <CardTitle>CPL e CAC por Dia</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                <XAxis 
-                  dataKey="dia" 
-                  tickFormatter={formatDate}
-                  className="text-xs"
-                />
-                <YAxis className="text-xs" />
-                <Tooltip 
-                  labelFormatter={formatDateFull}
-                  formatter={(value: number) => formatCurrency(value)}
-                />
-                <Legend />
-                <Line 
-                  type="monotone" 
-                  dataKey="cpl" 
-                  name="CPL"
-                  stroke="hsl(var(--chart-3))" 
-                  strokeWidth={2}
-                  dot={false}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="cac" 
-                  name="CAC"
-                  stroke="hsl(var(--chart-4))" 
-                  strokeWidth={2}
-                  dot={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </CardContent>
-      </Card>
+        {/* Chart: CPL e CAC por Dia */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">CPL e CAC por Dia</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[280px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                  <XAxis 
+                    dataKey="dia" 
+                    tickFormatter={formatDate}
+                    className="text-xs"
+                    tick={{ fontSize: 11 }}
+                  />
+                  <YAxis className="text-xs" tick={{ fontSize: 11 }} />
+                  <Tooltip 
+                    labelFormatter={formatDateFull}
+                    formatter={(value: number) => formatCurrency(value)}
+                    contentStyle={{
+                      backgroundColor: 'hsl(var(--card))',
+                      border: '1px solid hsl(var(--border))',
+                      borderRadius: '8px',
+                    }}
+                  />
+                  <Legend />
+                  <Line 
+                    type="monotone" 
+                    dataKey="cpl" 
+                    name="CPL"
+                    stroke="hsl(var(--warning))" 
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="cac" 
+                    name="CAC"
+                    stroke="hsl(var(--destructive))" 
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
