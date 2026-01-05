@@ -188,3 +188,45 @@
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.5);
 }
+
+/* Recharts tooltip styling */
+.recharts-tooltip-wrapper {
+  z-index: 50 !important;
+}
+
+.recharts-default-tooltip {
+  background-color: hsl(var(--popover)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 0.5rem !important;
+  box-shadow: var(--shadow-lg) !important;
+}
+
+.recharts-tooltip-label {
+  color: hsl(var(--foreground)) !important;
+  font-weight: 500 !important;
+  margin-bottom: 0.25rem !important;
+}
+
+.recharts-tooltip-item {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.recharts-tooltip-item-name {
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Legend styling */
+.recharts-legend-item-text {
+  color: hsl(var(--foreground)) !important;
+}
+
+/* Chart animations */
+.recharts-line-curve,
+.recharts-area-curve {
+  transition: stroke-width 0.2s ease;
+}
+
+.recharts-line:hover .recharts-line-curve,
+.recharts-area:hover .recharts-area-curve {
+  stroke-width: 3px;
+}
