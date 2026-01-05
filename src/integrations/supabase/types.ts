@@ -78,8 +78,11 @@ export type Database = {
       }
       dashboards: {
         Row: {
+          cache_ttl_seconds: number | null
           category_id: string | null
           created_at: string
+          data_source_id: string | null
+          default_filters: Json | null
           description: string | null
           display_order: number
           display_type: Database["public"]["Enums"]["dashboard_type"]
@@ -90,15 +93,20 @@ export type Database = {
           last_health_check_at: string | null
           last_health_status: string | null
           name: string
+          source_kind: Database["public"]["Enums"]["dashboard_source_kind"]
           tags: string[] | null
           tenant_id: string
           updated_at: string
           use_proxy: boolean | null
-          webhook_url: string
+          view_name: string | null
+          webhook_url: string | null
         }
         Insert: {
+          cache_ttl_seconds?: number | null
           category_id?: string | null
           created_at?: string
+          data_source_id?: string | null
+          default_filters?: Json | null
           description?: string | null
           display_order?: number
           display_type?: Database["public"]["Enums"]["dashboard_type"]
@@ -109,15 +117,20 @@ export type Database = {
           last_health_check_at?: string | null
           last_health_status?: string | null
           name: string
+          source_kind?: Database["public"]["Enums"]["dashboard_source_kind"]
           tags?: string[] | null
           tenant_id: string
           updated_at?: string
           use_proxy?: boolean | null
-          webhook_url: string
+          view_name?: string | null
+          webhook_url?: string | null
         }
         Update: {
+          cache_ttl_seconds?: number | null
           category_id?: string | null
           created_at?: string
+          data_source_id?: string | null
+          default_filters?: Json | null
           description?: string | null
           display_order?: number
           display_type?: Database["public"]["Enums"]["dashboard_type"]
@@ -128,11 +141,13 @@ export type Database = {
           last_health_check_at?: string | null
           last_health_status?: string | null
           name?: string
+          source_kind?: Database["public"]["Enums"]["dashboard_source_kind"]
           tags?: string[] | null
           tenant_id?: string
           updated_at?: string
           use_proxy?: boolean | null
-          webhook_url?: string
+          view_name?: string | null
+          webhook_url?: string | null
         }
         Relationships: [
           {
@@ -140,6 +155,13 @@ export type Database = {
             columns: ["category_id"]
             isOneToOne: false
             referencedRelation: "dashboard_categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dashboards_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "tenant_data_sources"
             referencedColumns: ["id"]
           },
           {
@@ -238,6 +260,65 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "scheduled_reports_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tenant_data_sources: {
+        Row: {
+          allowed_views: string[]
+          anon_key_encrypted: string | null
+          anon_key_present: boolean
+          created_at: string
+          id: string
+          is_active: boolean
+          name: string
+          project_ref: string
+          project_url: string
+          service_role_key_encrypted: string | null
+          service_role_key_present: boolean
+          tenant_id: string
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          allowed_views?: string[]
+          anon_key_encrypted?: string | null
+          anon_key_present?: boolean
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name: string
+          project_ref: string
+          project_url: string
+          service_role_key_encrypted?: string | null
+          service_role_key_present?: boolean
+          tenant_id: string
+          type?: string
+          updated_at?: string
+        }
+        Update: {
+          allowed_views?: string[]
+          anon_key_encrypted?: string | null
+          anon_key_present?: boolean
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name?: string
+          project_ref?: string
+          project_url?: string
+          service_role_key_encrypted?: string | null
+          service_role_key_present?: boolean
+          tenant_id?: string
+          type?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_data_sources_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -353,6 +434,7 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "client" | "manager" | "viewer"
+      dashboard_source_kind: "webhook" | "supabase_view"
       dashboard_type: "auto" | "iframe" | "html" | "json"
     }
     CompositeTypes: {
@@ -482,6 +564,7 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "client", "manager", "viewer"],
+      dashboard_source_kind: ["webhook", "supabase_view"],
       dashboard_type: ["auto", "iframe", "html", "json"],
     },
   },

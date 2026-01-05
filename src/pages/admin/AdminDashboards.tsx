@@ -34,18 +34,26 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
-import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown, Copy } from 'lucide-react';
+import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown, Copy, Database } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { format } from 'date-fns';
+import { Badge } from '@/components/ui/badge';
 
 interface Tenant {
   id: string;
   name: string;
+}
+
+interface DataSource {
+  id: string;
+  name: string;
+  project_url: string;
+  allowed_views: string[];
+  tenant_id: string;
 }
 
 interface Dashboard {
@@ -53,14 +61,20 @@ interface Dashboard {
   tenant_id: string;
   name: string;
   description: string | null;
-  webhook_url: string;
+  webhook_url: string | null;
   display_type: 'auto' | 'iframe' | 'html' | 'json';
+  source_kind: 'webhook' | 'supabase_view';
+  data_source_id: string | null;
+  view_name: string | null;
+  default_filters: Record<string, any> | null;
+  cache_ttl_seconds: number | null;
   is_active: boolean;
   display_order: number;
   created_at: string;
   last_health_status: string | null;
   last_health_check_at: string | null;
   tenants?: { name: string } | null;
+  tenant_data_sources?: { name: string } | null;
 }
 
 type HealthStatus = 'idle' | 'checking' | 'success' | 'error';
@@ -69,6 +83,7 @@ export default function AdminDashboards() {
   const [dashboards, setDashboards] = useState<Dashboard[]>([]);
   const [filteredDashboards, setFilteredDashboards] = useState<Dashboard[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTenant, setFilterTenant] = useState<string>('all');
@@ -78,8 +93,13 @@ export default function AdminDashboards() {
     name: '',
     description: '',
     tenantId: '',
+    sourceKind: 'webhook' as 'webhook' | 'supabase_view',
     webhookUrl: '',
     displayType: 'auto' as 'auto' | 'iframe' | 'html' | 'json',
+    dataSourceId: '',
+    viewName: '',
+    defaultFilters: '{}',
+    cacheTtlSeconds: 300,
     displayOrder: 0
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -118,19 +138,28 @@ export default function AdminDashboards() {
       
       setTenants(tenantsData || []);
 
+      const { data: dsData } = await supabase
+        .from('tenant_data_sources')
+        .select('id, name, project_url, allowed_views, tenant_id')
+        .eq('is_active', true)
+        .order('name');
+      
+      setDataSources((dsData as any) || []);
+
       const { data: dashboardsData, error } = await supabase
         .from('dashboards')
         .select(`
           *,
-          tenants (name)
+          tenants (name),
+          tenant_data_sources (name)
         `)
         .order('display_order', { ascending: true });
 
       if (error) throw error;
-      setDashboards(dashboardsData || []);
+      setDashboards((dashboardsData as any) || []);
     } catch (error) {
-      console.error('Error fetching data:', error);
-      toast({ title: 'Error', description: 'Failed to load dashboards.', variant: 'destructive' });
+      console.error('Erro ao carregar dados:', error);
+      toast({ title: 'Erro', description: 'Falha ao carregar dashboards.', variant: 'destructive' });
     } finally {
       setIsLoading(false);
     }
@@ -138,18 +167,41 @@ export default function AdminDashboards() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name.trim() || !formData.tenantId || !formData.webhookUrl.trim()) return;
+    
+    // Validação condicional
+    if (!formData.name.trim() || !formData.tenantId) return;
+    if (formData.sourceKind === 'webhook' && !formData.webhookUrl.trim()) return;
+    if (formData.sourceKind === 'supabase_view' && (!formData.dataSourceId || !formData.viewName)) return;
 
     setIsSubmitting(true);
     try {
-      const payload = {
+      let defaultFilters = {};
+      try {
+        defaultFilters = JSON.parse(formData.defaultFilters || '{}');
+      } catch (e) {
+        // ignore parse error
+      }
+
+      const payload: any = {
         tenant_id: formData.tenantId,
         name: formData.name,
         description: formData.description || null,
-        webhook_url: formData.webhookUrl,
-        display_type: formData.displayType,
+        source_kind: formData.sourceKind,
         display_order: formData.displayOrder
       };
+
+      if (formData.sourceKind === 'webhook') {
+        payload.webhook_url = formData.webhookUrl;
+        payload.display_type = formData.displayType;
+        payload.data_source_id = null;
+        payload.view_name = null;
+      } else {
+        payload.data_source_id = formData.dataSourceId;
+        payload.view_name = formData.viewName;
+        payload.default_filters = defaultFilters;
+        payload.cache_ttl_seconds = formData.cacheTtlSeconds;
+        payload.webhook_url = null;
+      }
 
       if (editingDashboard) {
         const { error } = await supabase
@@ -159,7 +211,7 @@ export default function AdminDashboards() {
 
         if (error) throw error;
         logActivity('update_dashboard', 'dashboard', editingDashboard.id, { name: formData.name });
-        toast({ title: 'Dashboard updated', description: 'Changes saved successfully.' });
+        toast({ title: 'Dashboard atualizado', description: 'Alterações salvas com sucesso.' });
       } else {
         const { data, error } = await supabase
           .from('dashboards')
@@ -169,14 +221,14 @@ export default function AdminDashboards() {
 
         if (error) throw error;
         logActivity('create_dashboard', 'dashboard', data.id, { name: formData.name });
-        toast({ title: 'Dashboard created', description: 'New dashboard added successfully.' });
+        toast({ title: 'Dashboard criado', description: 'Novo dashboard adicionado com sucesso.' });
       }
       
       setIsDialogOpen(false);
       resetForm();
       fetchData();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     } finally {
       setIsSubmitting(false);
     }
@@ -187,8 +239,13 @@ export default function AdminDashboards() {
       name: '',
       description: '',
       tenantId: '',
+      sourceKind: 'webhook',
       webhookUrl: '',
       displayType: 'auto',
+      dataSourceId: '',
+      viewName: '',
+      defaultFilters: '{}',
+      cacheTtlSeconds: 300,
       displayOrder: 0
     });
     setEditingDashboard(null);
@@ -200,8 +257,13 @@ export default function AdminDashboards() {
       name: dashboard.name,
       description: dashboard.description || '',
       tenantId: dashboard.tenant_id,
-      webhookUrl: dashboard.webhook_url,
+      sourceKind: dashboard.source_kind || 'webhook',
+      webhookUrl: dashboard.webhook_url || '',
       displayType: dashboard.display_type,
+      dataSourceId: dashboard.data_source_id || '',
+      viewName: dashboard.view_name || '',
+      defaultFilters: JSON.stringify(dashboard.default_filters || {}),
+      cacheTtlSeconds: dashboard.cache_ttl_seconds || 300,
       displayOrder: dashboard.display_order
     });
     setIsDialogOpen(true);
@@ -220,14 +282,14 @@ export default function AdminDashboards() {
         .eq('id', dashboard.id);
 
       if (error) throw error;
-      logActivity(dashboard.is_active ? 'deactivate_dashboard' : 'create_dashboard', 'dashboard', dashboard.id, { name: dashboard.name });
+      logActivity(dashboard.is_active ? 'deactivate_dashboard' : 'activate_dashboard', 'dashboard', dashboard.id, { name: dashboard.name });
       toast({ 
-        title: dashboard.is_active ? 'Dashboard deactivated' : 'Dashboard activated',
-        description: `${dashboard.name} is now ${dashboard.is_active ? 'inactive' : 'active'}.`
+        title: dashboard.is_active ? 'Dashboard desativado' : 'Dashboard ativado',
+        description: `${dashboard.name} está agora ${dashboard.is_active ? 'inativo' : 'ativo'}.`
       });
       fetchData();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     }
   };
 
@@ -237,10 +299,15 @@ export default function AdminDashboards() {
         .from('dashboards')
         .insert({
           tenant_id: dashboard.tenant_id,
-          name: `${dashboard.name} (Copy)`,
+          name: `${dashboard.name} (Cópia)`,
           description: dashboard.description,
           webhook_url: dashboard.webhook_url,
           display_type: dashboard.display_type,
+          source_kind: dashboard.source_kind,
+          data_source_id: dashboard.data_source_id,
+          view_name: dashboard.view_name,
+          default_filters: dashboard.default_filters,
+          cache_ttl_seconds: dashboard.cache_ttl_seconds,
           display_order: dashboard.display_order + 1,
           is_active: false
         })
@@ -249,32 +316,65 @@ export default function AdminDashboards() {
 
       if (error) throw error;
       logActivity('create_dashboard', 'dashboard', data.id, { name: data.name, duplicated_from: dashboard.id });
-      toast({ title: 'Dashboard duplicated', description: 'Copy created successfully. Edit and activate when ready.' });
+      toast({ title: 'Dashboard duplicado', description: 'Cópia criada com sucesso. Edite e ative quando pronto.' });
       fetchData();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     }
   };
 
   const checkHealth = async (dashboard: Dashboard) => {
+    if (dashboard.source_kind === 'supabase_view') {
+      // Para supabase_view, testar via edge function
+      setHealthChecks(prev => ({ ...prev, [dashboard.id]: 'checking' }));
+      
+      try {
+        const response = await supabase.functions.invoke('test-data-source', {
+          body: { 
+            data_source_id: dashboard.data_source_id,
+            view_name: dashboard.view_name 
+          }
+        });
+
+        const status = response.data?.success ? 'ok' : 'error';
+        
+        await supabase
+          .from('dashboards')
+          .update({ 
+            last_health_status: status,
+            last_health_check_at: new Date().toISOString()
+          })
+          .eq('id', dashboard.id);
+
+        setHealthChecks(prev => ({ ...prev, [dashboard.id]: status === 'ok' ? 'success' : 'error' }));
+        fetchData();
+      } catch (error) {
+        setHealthChecks(prev => ({ ...prev, [dashboard.id]: 'error' }));
+      }
+
+      setTimeout(() => {
+        setHealthChecks(prev => ({ ...prev, [dashboard.id]: 'idle' }));
+      }, 3000);
+      return;
+    }
+
+    // Para webhook
     setHealthChecks(prev => ({ ...prev, [dashboard.id]: 'checking' }));
     
     let status: 'ok' | 'error' = 'error';
     
     try {
-      const response = await fetch(dashboard.webhook_url, { method: 'HEAD' });
+      const response = await fetch(dashboard.webhook_url!, { method: 'HEAD' });
       status = response.ok ? 'ok' : 'error';
     } catch {
-      // Try GET as fallback
       try {
-        const response = await fetch(dashboard.webhook_url);
+        const response = await fetch(dashboard.webhook_url!);
         status = response.ok ? 'ok' : 'error';
       } catch {
         status = 'error';
       }
     }
 
-    // Save health check result to database
     await supabase
       .from('dashboards')
       .update({ 
@@ -286,7 +386,6 @@ export default function AdminDashboards() {
     setHealthChecks(prev => ({ ...prev, [dashboard.id]: status === 'ok' ? 'success' : 'error' }));
     fetchData();
 
-    // Reset visual after 3 seconds
     setTimeout(() => {
       setHealthChecks(prev => ({ ...prev, [dashboard.id]: 'idle' }));
     }, 3000);
@@ -305,33 +404,37 @@ export default function AdminDashboards() {
       await supabase.from('dashboards').update({ display_order: dashboard.display_order }).eq('id', swapDashboard.id);
       fetchData();
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     }
   };
 
+  // Data sources filtrados pelo tenant selecionado
+  const filteredDataSources = dataSources.filter(ds => ds.tenant_id === formData.tenantId);
+  const selectedDataSource = dataSources.find(ds => ds.id === formData.dataSourceId);
+
   if (isLoading) {
-    return <LoadingPage message="Loading dashboards..." />;
+    return <LoadingPage message="Carregando dashboards..." />;
   }
 
   return (
     <div className="space-y-6 animate-fade-in">
       <PageHeader 
-        title="Manage Dashboards" 
-        description="Configure and manage client dashboards"
+        title="Gerenciar Dashboards" 
+        description="Configure e gerencie dashboards de clientes"
         actions={
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button onClick={openCreateDialog}>
                 <Plus className="mr-2 h-4 w-4" />
-                Add Dashboard
+                Adicionar Dashboard
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-lg">
               <form onSubmit={handleSubmit}>
                 <DialogHeader>
-                  <DialogTitle>{editingDashboard ? 'Edit Dashboard' : 'Create Dashboard'}</DialogTitle>
+                  <DialogTitle>{editingDashboard ? 'Editar Dashboard' : 'Criar Dashboard'}</DialogTitle>
                   <DialogDescription>
-                    {editingDashboard ? 'Update dashboard configuration.' : 'Add a new dashboard for a client.'}
+                    {editingDashboard ? 'Atualize a configuração do dashboard.' : 'Adicione um novo dashboard para um cliente.'}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
@@ -339,10 +442,10 @@ export default function AdminDashboards() {
                     <Label htmlFor="tenant">Tenant</Label>
                     <Select 
                       value={formData.tenantId} 
-                      onValueChange={(v) => setFormData({ ...formData, tenantId: v })}
+                      onValueChange={(v) => setFormData({ ...formData, tenantId: v, dataSourceId: '', viewName: '' })}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select tenant" />
+                        <SelectValue placeholder="Selecione o tenant" />
                       </SelectTrigger>
                       <SelectContent>
                         {tenants.map((t) => (
@@ -351,70 +454,153 @@ export default function AdminDashboards() {
                       </SelectContent>
                     </Select>
                   </div>
+
                   <div className="space-y-2">
-                    <Label htmlFor="name">Dashboard Name</Label>
+                    <Label htmlFor="name">Nome do Dashboard</Label>
                     <Input
                       id="name"
                       value={formData.name}
                       onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      placeholder="e.g., Funil de Vendas"
+                      placeholder="Ex: Custos x Funil por Dia"
                     />
                   </div>
+
                   <div className="space-y-2">
-                    <Label htmlFor="description">Description (optional)</Label>
+                    <Label htmlFor="description">Descrição (opcional)</Label>
                     <Textarea
                       id="description"
                       value={formData.description}
                       onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                      placeholder="Brief description of the dashboard"
+                      placeholder="Breve descrição do dashboard"
                       rows={2}
                     />
                   </div>
+
                   <div className="space-y-2">
-                    <Label htmlFor="webhookUrl">Webhook URL</Label>
-                    <Input
-                      id="webhookUrl"
-                      value={formData.webhookUrl}
-                      onChange={(e) => setFormData({ ...formData, webhookUrl: e.target.value })}
-                      placeholder="https://n8n.example.com/webhook/..."
-                    />
+                    <Label>Tipo de Fonte</Label>
+                    <Select 
+                      value={formData.sourceKind} 
+                      onValueChange={(v) => setFormData({ ...formData, sourceKind: v as any })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="webhook">Webhook (iframe/HTML)</SelectItem>
+                        <SelectItem value="supabase_view">Supabase View</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="displayType">Display Type</Label>
-                      <Select 
-                        value={formData.displayType} 
-                        onValueChange={(v) => setFormData({ ...formData, displayType: v as any })}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="auto">Auto-detect</SelectItem>
-                          <SelectItem value="iframe">iFrame</SelectItem>
-                          <SelectItem value="html">HTML</SelectItem>
-                          <SelectItem value="json">JSON</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="displayOrder">Display Order</Label>
-                      <Input
-                        id="displayOrder"
-                        type="number"
-                        value={formData.displayOrder}
-                        onChange={(e) => setFormData({ ...formData, displayOrder: parseInt(e.target.value) || 0 })}
-                        min={0}
-                      />
-                    </div>
+
+                  {formData.sourceKind === 'webhook' ? (
+                    <>
+                      <div className="space-y-2">
+                        <Label htmlFor="webhookUrl">URL do Webhook</Label>
+                        <Input
+                          id="webhookUrl"
+                          value={formData.webhookUrl}
+                          onChange={(e) => setFormData({ ...formData, webhookUrl: e.target.value })}
+                          placeholder="https://n8n.example.com/webhook/..."
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="displayType">Tipo de Exibição</Label>
+                        <Select 
+                          value={formData.displayType} 
+                          onValueChange={(v) => setFormData({ ...formData, displayType: v as any })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="auto">Auto-detectar</SelectItem>
+                            <SelectItem value="iframe">iFrame</SelectItem>
+                            <SelectItem value="html">HTML</SelectItem>
+                            <SelectItem value="json">JSON</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="space-y-2">
+                        <Label>Data Source</Label>
+                        <Select 
+                          value={formData.dataSourceId} 
+                          onValueChange={(v) => setFormData({ ...formData, dataSourceId: v, viewName: '' })}
+                          disabled={!formData.tenantId}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder={formData.tenantId ? "Selecione o data source" : "Selecione um tenant primeiro"} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {filteredDataSources.map((ds) => (
+                              <SelectItem key={ds.id} value={ds.id}>{ds.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {formData.dataSourceId && (
+                        <div className="space-y-2">
+                          <Label>View</Label>
+                          <Select 
+                            value={formData.viewName} 
+                            onValueChange={(v) => setFormData({ ...formData, viewName: v })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Selecione a view" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {selectedDataSource?.allowed_views.map((view) => (
+                                <SelectItem key={view} value={view}>{view}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="cacheTtl">Cache TTL (segundos)</Label>
+                          <Input
+                            id="cacheTtl"
+                            type="number"
+                            value={formData.cacheTtlSeconds}
+                            onChange={(e) => setFormData({ ...formData, cacheTtlSeconds: parseInt(e.target.value) || 300 })}
+                            min={0}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="defaultFilters">Filtros Padrão (JSON)</Label>
+                          <Input
+                            id="defaultFilters"
+                            value={formData.defaultFilters}
+                            onChange={(e) => setFormData({ ...formData, defaultFilters: e.target.value })}
+                            placeholder='{"range": "last_60_days"}'
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  <div className="space-y-2">
+                    <Label htmlFor="displayOrder">Ordem de Exibição</Label>
+                    <Input
+                      id="displayOrder"
+                      type="number"
+                      value={formData.displayOrder}
+                      onChange={(e) => setFormData({ ...formData, displayOrder: parseInt(e.target.value) || 0 })}
+                      min={0}
+                    />
                   </div>
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Cancel
+                    Cancelar
                   </Button>
                   <Button type="submit" disabled={isSubmitting}>
-                    {isSubmitting ? 'Saving...' : (editingDashboard ? 'Save Changes' : 'Create Dashboard')}
+                    {isSubmitting ? 'Salvando...' : (editingDashboard ? 'Salvar Alterações' : 'Criar Dashboard')}
                   </Button>
                 </DialogFooter>
               </form>
@@ -423,12 +609,12 @@ export default function AdminDashboards() {
         }
       />
 
-      {/* Filters */}
+      {/* Filtros */}
       <div className="flex flex-col gap-3 sm:flex-row">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search dashboards..."
+            placeholder="Buscar dashboards..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
@@ -436,10 +622,10 @@ export default function AdminDashboards() {
         </div>
         <Select value={filterTenant} onValueChange={setFilterTenant}>
           <SelectTrigger className="w-[200px]">
-            <SelectValue placeholder="Filter by tenant" />
+            <SelectValue placeholder="Filtrar por tenant" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Tenants</SelectItem>
+            <SelectItem value="all">Todos os Tenants</SelectItem>
             {tenants.map((t) => (
               <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
             ))}
@@ -450,12 +636,12 @@ export default function AdminDashboards() {
       {filteredDashboards.length === 0 ? (
         <EmptyState
           icon={<BarChart3 className="h-6 w-6 text-muted-foreground" />}
-          title={searchQuery || filterTenant !== 'all' ? 'No dashboards found' : 'No dashboards yet'}
-          description={searchQuery || filterTenant !== 'all' ? 'Try adjusting your filters.' : 'Create your first dashboard to get started.'}
+          title={searchQuery || filterTenant !== 'all' ? 'Nenhum dashboard encontrado' : 'Nenhum dashboard'}
+          description={searchQuery || filterTenant !== 'all' ? 'Tente ajustar os filtros.' : 'Crie seu primeiro dashboard para começar.'}
           action={!searchQuery && filterTenant === 'all' && (
             <Button onClick={openCreateDialog}>
               <Plus className="mr-2 h-4 w-4" />
-              Add Dashboard
+              Adicionar Dashboard
             </Button>
           )}
         />
@@ -464,12 +650,13 @@ export default function AdminDashboards() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
+                <TableHead>Nome</TableHead>
                 <TableHead>Tenant</TableHead>
-                <TableHead>Type</TableHead>
+                <TableHead>Tipo</TableHead>
+                <TableHead>Fonte</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Health</TableHead>
-                <TableHead>Order</TableHead>
+                <TableHead>Ordem</TableHead>
                 <TableHead className="w-[50px]"></TableHead>
               </TableRow>
             </TableHeader>
@@ -484,45 +671,58 @@ export default function AdminDashboards() {
                       )}
                     </div>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {dashboard.tenants?.name || '-'}
+                  <TableCell>{dashboard.tenants?.name || '-'}</TableCell>
+                  <TableCell>
+                    {dashboard.source_kind === 'supabase_view' ? (
+                      <Badge variant="outline" className="gap-1">
+                        <Database className="h-3 w-3" />
+                        View
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary">{dashboard.display_type}</Badge>
+                    )}
                   </TableCell>
-                  <TableCell className="capitalize text-sm">{dashboard.display_type}</TableCell>
+                  <TableCell>
+                    {dashboard.source_kind === 'supabase_view' ? (
+                      <span className="text-xs text-muted-foreground">
+                        {dashboard.view_name}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground truncate max-w-[150px] block">
+                        {dashboard.webhook_url}
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <StatusBadge variant={dashboard.is_active ? 'active' : 'inactive'}>
-                      {dashboard.is_active ? 'Active' : 'Inactive'}
+                      {dashboard.is_active ? 'Ativo' : 'Inativo'}
                     </StatusBadge>
                   </TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-2">
-                      <Button 
-                        variant="ghost" 
-                        size="sm"
-                        onClick={() => checkHealth(dashboard)}
-                        disabled={healthChecks[dashboard.id] === 'checking'}
-                      >
-                        {healthChecks[dashboard.id] === 'checking' && (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        )}
-                        {healthChecks[dashboard.id] === 'success' && (
-                          <CheckCircle className="h-4 w-4 text-success" />
-                        )}
-                        {healthChecks[dashboard.id] === 'error' && (
-                          <XCircle className="h-4 w-4 text-destructive" />
-                        )}
-                        {(!healthChecks[dashboard.id] || healthChecks[dashboard.id] === 'idle') && (
-                          <>
-                            {dashboard.last_health_status === 'ok' && <CheckCircle className="h-4 w-4 text-success" />}
-                            {dashboard.last_health_status === 'error' && <XCircle className="h-4 w-4 text-destructive" />}
-                            {!dashboard.last_health_status && <span className="text-xs">Check</span>}
-                          </>
-                        )}
-                      </Button>
-                    </div>
+                    <Button 
+                      variant="ghost" 
+                      size="sm"
+                      onClick={() => checkHealth(dashboard)}
+                      disabled={healthChecks[dashboard.id] === 'checking'}
+                    >
+                      {healthChecks[dashboard.id] === 'checking' ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : healthChecks[dashboard.id] === 'success' ? (
+                        <CheckCircle className="h-4 w-4 text-green-500" />
+                      ) : healthChecks[dashboard.id] === 'error' ? (
+                        <XCircle className="h-4 w-4 text-destructive" />
+                      ) : dashboard.last_health_status === 'ok' ? (
+                        <CheckCircle className="h-4 w-4 text-green-500" />
+                      ) : dashboard.last_health_status === 'error' ? (
+                        <XCircle className="h-4 w-4 text-destructive" />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">-</span>
+                      )}
+                    </Button>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
-                      <span className="text-muted-foreground">{dashboard.display_order}</span>
+                      <span className="text-sm">{dashboard.display_order}</span>
                       <div className="flex flex-col">
                         <Button
                           variant="ghost"
@@ -555,19 +755,21 @@ export default function AdminDashboards() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => openEditDialog(dashboard)}>
                           <Pencil className="mr-2 h-4 w-4" />
-                          Edit
+                          Editar
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => window.open(dashboard.webhook_url, '_blank')}>
-                          <ExternalLink className="mr-2 h-4 w-4" />
-                          Open URL
-                        </DropdownMenuItem>
+                        {dashboard.source_kind === 'webhook' && dashboard.webhook_url && (
+                          <DropdownMenuItem onClick={() => window.open(dashboard.webhook_url!, '_blank')}>
+                            <ExternalLink className="mr-2 h-4 w-4" />
+                            Abrir URL
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem onClick={() => duplicateDashboard(dashboard)}>
                           <Copy className="mr-2 h-4 w-4" />
-                          Duplicate
+                          Duplicar
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => toggleDashboardStatus(dashboard)}>
                           <Power className="mr-2 h-4 w-4" />
-                          {dashboard.is_active ? 'Deactivate' : 'Activate'}
+                          {dashboard.is_active ? 'Desativar' : 'Ativar'}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
