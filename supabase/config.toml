@@ -16,7 +16,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.dashboard-data]
-verify_jwt = true
+verify_jwt = false
 
 [functions.test-data-source]
 verify_jwt = false
