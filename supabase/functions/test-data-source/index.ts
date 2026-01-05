@@ -5,6 +5,25 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Standard response helper - ALWAYS returns 200 with JSON
+function jsonResponse(data: Record<string, any>) {
+  return new Response(JSON.stringify(data), {
+    status: 200, // Always 200 to avoid generic client errors
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  })
+}
+
+function errorResponse(code: string, message: string, details?: string) {
+  return jsonResponse({
+    ok: false,
+    error: { code, message, details }
+  })
+}
+
+function successResponse(data: Record<string, any>) {
+  return jsonResponse({ ok: true, ...data })
+}
+
 // Encryption helpers
 async function getEncryptionKey(): Promise<CryptoKey> {
   const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
@@ -38,77 +57,118 @@ async function decrypt(ciphertext: string): Promise<string> {
   return new TextDecoder().decode(decrypted)
 }
 
+// Fetch with timeout
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 10000): Promise<Response> {
+  const controller = new AbortController()
+  const id = setTimeout(() => controller.abort(), timeoutMs)
+  
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    })
+    clearTimeout(id)
+    return response
+  } catch (error: any) {
+    clearTimeout(id)
+    if (error.name === 'AbortError') {
+      throw new Error('Timeout: A requisição demorou mais de 10 segundos')
+    }
+    throw error
+  }
+}
+
 Deno.serve(async (req) => {
+  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
 
   try {
+    // Validate authorization header
     const authHeader = req.headers.get('authorization')
     if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'Não autorizado' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      return errorResponse('UNAUTHORIZED', 'Token de autorização não fornecido')
     }
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    // Get environment variables
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+
+    if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
+      console.error('Missing Supabase environment variables')
+      return errorResponse('CONFIG_ERROR', 'Configuração do servidor incompleta')
+    }
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
     })
 
+    // Authenticate user
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError || !user) {
-      return new Response(JSON.stringify({ error: 'Usuário não autenticado' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      console.log('Auth failed:', userError?.message)
+      return errorResponse('AUTH_FAILED', 'Usuário não autenticado', userError?.message)
     }
 
+    // Check user is admin using service role
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
     
-    const { data: adminRole } = await adminClient
+    const { data: adminRole, error: roleError } = await adminClient
       .from('user_roles')
       .select('role')
       .eq('user_id', user.id)
       .eq('role', 'admin')
       .maybeSingle()
 
-    if (!adminRole) {
-      return new Response(JSON.stringify({ error: 'Apenas administradores podem testar data sources' }), {
-        status: 403,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+    if (roleError) {
+      console.error('Role check error:', roleError)
+      return errorResponse('DB_ERROR', 'Erro ao verificar permissões', roleError.message)
     }
 
-    const body = await req.json()
+    if (!adminRole) {
+      return errorResponse('FORBIDDEN', 'Apenas administradores podem testar data sources')
+    }
+
+    // Parse and validate request body
+    let body: any
+    try {
+      body = await req.json()
+    } catch (e) {
+      return errorResponse('INVALID_JSON', 'Corpo da requisição inválido')
+    }
+
     const { data_source_id, view_name } = body
 
     if (!data_source_id) {
-      return new Response(JSON.stringify({ error: 'data_source_id é obrigatório' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      return errorResponse('VALIDATION_ERROR', 'data_source_id é obrigatório')
     }
 
+    // Fetch data source
     const { data: dataSource, error: dsError } = await adminClient
       .from('tenant_data_sources')
       .select('*')
       .eq('id', data_source_id)
       .maybeSingle()
 
-    if (dsError || !dataSource) {
-      return new Response(JSON.stringify({ error: 'Data source não encontrado' }), {
-        status: 404,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+    if (dsError) {
+      console.error('Data source fetch error:', dsError)
+      return errorResponse('DB_ERROR', 'Erro ao buscar data source', dsError.message)
+    }
+
+    if (!dataSource) {
+      return errorResponse('NOT_FOUND', 'Data source não encontrado')
+    }
+
+    // Check MASTER_ENCRYPTION_KEY
+    if (!Deno.env.get('MASTER_ENCRYPTION_KEY')) {
+      console.error('MASTER_ENCRYPTION_KEY not set')
+      return errorResponse('CONFIG_ERROR', 'Chave de criptografia não configurada. Configure MASTER_ENCRYPTION_KEY nos secrets.')
     }
 
     // Get credentials - try encrypted keys first
-    let remoteUrl = dataSource.project_url
+    const remoteUrl = dataSource.project_url
     let remoteKey: string | null = null
 
     // Try anon key first (preferred)
@@ -116,7 +176,7 @@ Deno.serve(async (req) => {
       try {
         remoteKey = await decrypt(dataSource.anon_key_encrypted)
       } catch (e) {
-        console.error('Failed to decrypt anon_key')
+        console.error('Failed to decrypt anon_key:', e)
       }
     }
 
@@ -125,7 +185,7 @@ Deno.serve(async (req) => {
       try {
         remoteKey = await decrypt(dataSource.service_role_key_encrypted)
       } catch (e) {
-        console.error('Failed to decrypt service_role_key')
+        console.error('Failed to decrypt service_role_key:', e)
       }
     }
 
@@ -141,89 +201,97 @@ Deno.serve(async (req) => {
     }
 
     if (!remoteKey) {
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: 'Credenciais não configuradas. Configure a anon_key ou service_role_key.' 
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      return errorResponse(
+        'NO_CREDENTIALS', 
+        'Credenciais não configuradas',
+        'Configure a anon_key ou service_role_key para este data source.'
+      )
     }
 
     // Test view if provided, otherwise test connection
-    const testView = view_name || (dataSource.allowed_views.length > 0 ? dataSource.allowed_views[0] : null)
+    const testView = view_name || (dataSource.allowed_views?.length > 0 ? dataSource.allowed_views[0] : null)
     
     if (!testView) {
+      // Just test basic connectivity
       const testUrl = `${remoteUrl}/rest/v1/`
-      const response = await fetch(testUrl, {
-        headers: {
-          'apikey': remoteKey,
-          'Authorization': `Bearer ${remoteKey}`,
-        }
-      })
+      console.log('Testing basic connectivity:', testUrl)
 
-      if (response.ok || response.status === 404) {
-        return new Response(JSON.stringify({ 
-          success: true, 
-          message: 'Conexão estabelecida com sucesso (nenhuma view para testar)' 
-        }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      try {
+        const response = await fetchWithTimeout(testUrl, {
+          headers: {
+            'apikey': remoteKey,
+            'Authorization': `Bearer ${remoteKey}`,
+            'Accept': 'application/json'
+          }
         })
-      } else {
-        return new Response(JSON.stringify({ 
-          success: false, 
-          error: `Erro de conexão: ${response.status}` 
-        }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
+
+        if (response.ok || response.status === 404) {
+          return successResponse({ 
+            message: 'Conexão estabelecida com sucesso (nenhuma view para testar)',
+            status: response.status
+          })
+        } else if (response.status === 401) {
+          return errorResponse('INVALID_KEY', 'anon_key inválida ou sem permissão', `Status: ${response.status}`)
+        } else if (response.status === 403) {
+          return errorResponse('FORBIDDEN', 'Acesso negado pelo servidor remoto', `Status: ${response.status}`)
+        } else {
+          const errorText = await response.text().catch(() => '')
+          return errorResponse('CONNECTION_ERROR', `Erro de conexão: ${response.status}`, errorText.slice(0, 200))
+        }
+      } catch (fetchError: any) {
+        console.error('Fetch error:', fetchError)
+        return errorResponse('NETWORK_ERROR', 'Erro de rede ao conectar', fetchError.message)
       }
     }
 
     // Test the specific view
     const restUrl = `${remoteUrl}/rest/v1/${testView}?select=*&limit=1`
-    console.log('Testing:', restUrl)
+    console.log('Testing view:', restUrl)
 
-    const response = await fetch(restUrl, {
-      headers: {
-        'apikey': remoteKey,
-        'Authorization': `Bearer ${remoteKey}`,
-        'Content-Type': 'application/json'
-      }
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error('Test failed:', response.status, errorText)
-      return new Response(JSON.stringify({ 
-        success: false, 
-        error: `Erro ao acessar view: ${response.status}`,
-        details: errorText.slice(0, 200)
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    try {
+      const response = await fetchWithTimeout(restUrl, {
+        headers: {
+          'apikey': remoteKey,
+          'Authorization': `Bearer ${remoteKey}`,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        }
       })
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '')
+        console.error('Test failed:', response.status, errorText)
+        
+        if (response.status === 401) {
+          return errorResponse('INVALID_KEY', 'anon_key inválida ou sem permissão para esta view', errorText.slice(0, 200))
+        } else if (response.status === 404) {
+          return errorResponse('VIEW_NOT_FOUND', `View "${testView}" não encontrada`, 'Verifique o nome da view e o schema.')
+        } else if (response.status === 403) {
+          return errorResponse('FORBIDDEN', 'Acesso negado à view', errorText.slice(0, 200))
+        } else {
+          return errorResponse('VIEW_ERROR', `Erro ao acessar view: ${response.status}`, errorText.slice(0, 200))
+        }
+      }
+
+      const data = await response.json()
+      const rowCount = Array.isArray(data) ? data.length : 0
+      const columns = rowCount > 0 ? Object.keys(data[0]) : []
+
+      return successResponse({ 
+        message: `Conexão OK! View "${testView}" acessível.`,
+        view: testView,
+        sample_row_count: rowCount,
+        columns: columns,
+        has_data: rowCount > 0
+      })
+
+    } catch (fetchError: any) {
+      console.error('Fetch error:', fetchError)
+      return errorResponse('NETWORK_ERROR', 'Erro de rede ao acessar view', fetchError.message)
     }
 
-    const data = await response.json()
-    const rowCount = Array.isArray(data) ? data.length : 0
-    const columns = rowCount > 0 ? Object.keys(data[0]) : []
-
-    return new Response(JSON.stringify({ 
-      success: true, 
-      message: `Conexão OK! View "${testView}" acessível.`,
-      sample_row_count: rowCount,
-      columns: columns
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    })
-
-  } catch (error) {
-    console.error('Error in test-data-source:', error)
-    return new Response(JSON.stringify({ 
-      success: false, 
-      error: 'Erro interno', 
-      details: String(error) 
-    }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    })
+  } catch (error: any) {
+    console.error('Unhandled error in test-data-source:', error)
+    return errorResponse('INTERNAL_ERROR', 'Erro interno do servidor', error.message)
   }
 })

@@ -251,6 +251,14 @@ export default function DataSources() {
     }
   };
 
+  // Helper to extract error message from new response format
+  const getErrorMessage = (result: any): string => {
+    if (result?.error?.message) return result.error.message;
+    if (result?.error?.details) return `${result.error.message}: ${result.error.details}`;
+    if (typeof result?.error === 'string') return result.error;
+    return 'Erro desconhecido';
+  };
+
   const testConnection = async (ds: DataSource) => {
     setTestStatus(prev => ({ ...prev, [ds.id]: 'testing' }));
     setTestResults(prev => ({ ...prev, [ds.id]: '' }));
@@ -260,23 +268,32 @@ export default function DataSources() {
         body: { data_source_id: ds.id }
       });
 
-      if (response.error) throw new Error(response.error.message);
+      // Edge function errors (network issues, etc.)
+      if (response.error) {
+        throw new Error(response.error.message || 'Erro ao chamar função');
+      }
 
       const result = response.data;
       
-      if (result.success) {
+      // New format: ok: true/false
+      if (result.ok) {
         setTestStatus(prev => ({ ...prev, [ds.id]: 'success' }));
         setTestResults(prev => ({ ...prev, [ds.id]: result.message }));
         toast({ title: 'Conexão OK', description: result.message });
       } else {
+        const errorMsg = getErrorMessage(result);
         setTestStatus(prev => ({ ...prev, [ds.id]: 'error' }));
-        setTestResults(prev => ({ ...prev, [ds.id]: result.error }));
-        toast({ title: 'Falha na conexão', description: result.error, variant: 'destructive' });
+        setTestResults(prev => ({ ...prev, [ds.id]: errorMsg }));
+        toast({ 
+          title: `Falha: ${result.error?.code || 'ERRO'}`, 
+          description: errorMsg, 
+          variant: 'destructive' 
+        });
       }
     } catch (error: any) {
       setTestStatus(prev => ({ ...prev, [ds.id]: 'error' }));
       setTestResults(prev => ({ ...prev, [ds.id]: error.message }));
-      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+      toast({ title: 'Erro de conexão', description: error.message, variant: 'destructive' });
     }
 
     setTimeout(() => {
@@ -294,18 +311,26 @@ export default function DataSources() {
         body: { data_source_id: targetId, schema: 'public' }
       });
 
-      if (response.error) throw new Error(response.error.message);
+      if (response.error) {
+        throw new Error(response.error.message || 'Erro ao chamar função');
+      }
 
       const result = response.data;
       
-      if (result.error) {
-        toast({ title: 'Erro', description: result.error, variant: 'destructive' });
-      } else {
+      // New format: ok: true/false
+      if (result.ok) {
         setAvailableViews(result.views || []);
         setAvailableTables(result.tables || []);
         toast({ 
           title: 'Introspecção concluída', 
           description: `Encontradas ${result.views?.length || 0} views e ${result.tables?.length || 0} tabelas.` 
+        });
+      } else {
+        const errorMsg = getErrorMessage(result);
+        toast({ 
+          title: `Erro: ${result.error?.code || 'FALHA'}`, 
+          description: errorMsg, 
+          variant: 'destructive' 
         });
       }
     } catch (error: any) {
@@ -334,18 +359,32 @@ export default function DataSources() {
 
       if (!body.anon_key && !body.service_role_key) {
         toast({ title: 'Erro', description: 'Informe pelo menos uma chave.', variant: 'destructive' });
+        setIsSavingKeys(false);
         return;
       }
 
       const response = await supabase.functions.invoke('manage-datasource-keys', { body });
 
-      if (response.error) throw new Error(response.error.message);
-      if (response.data.error) throw new Error(response.data.error);
+      if (response.error) {
+        throw new Error(response.error.message || 'Erro ao chamar função');
+      }
 
-      toast({ title: 'Credenciais salvas', description: 'As chaves foram criptografadas e salvas.' });
-      setIsKeysDialogOpen(false);
-      setKeyFormData({ anonKey: '', serviceRoleKey: '' });
-      fetchData();
+      const result = response.data;
+
+      // New format: ok: true/false
+      if (result.ok) {
+        toast({ title: 'Credenciais salvas', description: result.message || 'As chaves foram criptografadas e salvas.' });
+        setIsKeysDialogOpen(false);
+        setKeyFormData({ anonKey: '', serviceRoleKey: '' });
+        fetchData();
+      } else {
+        const errorMsg = getErrorMessage(result);
+        toast({ 
+          title: `Erro: ${result.error?.code || 'FALHA'}`, 
+          description: errorMsg, 
+          variant: 'destructive' 
+        });
+      }
     } catch (error: any) {
       toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     } finally {
