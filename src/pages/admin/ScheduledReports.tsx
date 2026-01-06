@@ -34,6 +34,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
+import { useAuditLog } from '@/hooks/useAuditLog';
 import { Calendar, Plus, Search, MoreHorizontal, Pencil, Power, Trash2, Send, Clock } from 'lucide-react';
 import {
   DropdownMenu,
@@ -94,6 +95,7 @@ export default function ScheduledReports() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSending, setIsSending] = useState<string | null>(null);
   const { toast } = useToast();
+  const { logCreate, logUpdate, logDelete } = useAuditLog();
 
   useEffect(() => {
     fetchData();
@@ -192,19 +194,24 @@ export default function ScheduledReports() {
       };
 
       if (editingReport) {
+        const beforeData = { name: editingReport.name, frequency: editingReport.frequency, emails: editingReport.emails };
         const { error } = await supabase
           .from('scheduled_reports')
           .update(payload)
           .eq('id', editingReport.id);
 
         if (error) throw error;
+        await logUpdate('scheduled_report', editingReport.id, formData.name, beforeData, payload);
         toast({ title: 'Relatório atualizado', description: 'Alterações salvas com sucesso.' });
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('scheduled_reports')
-          .insert(payload);
+          .insert(payload)
+          .select()
+          .single();
 
         if (error) throw error;
+        await logCreate('scheduled_report', data.id, formData.name, payload);
         toast({ title: 'Relatório criado', description: 'Novo relatório agendado com sucesso.' });
       }
       
@@ -248,12 +255,14 @@ export default function ScheduledReports() {
 
   const toggleStatus = async (report: ScheduledReport) => {
     try {
+      const newStatus = !report.is_active;
       const { error } = await supabase
         .from('scheduled_reports')
-        .update({ is_active: !report.is_active })
+        .update({ is_active: newStatus })
         .eq('id', report.id);
 
       if (error) throw error;
+      await logUpdate('scheduled_report', report.id, report.name, { is_active: report.is_active }, { is_active: newStatus });
       toast({ 
         title: report.is_active ? 'Relatório pausado' : 'Relatório ativado',
         description: `${report.name} está agora ${report.is_active ? 'pausado' : 'ativo'}.`
@@ -274,6 +283,7 @@ export default function ScheduledReports() {
         .eq('id', report.id);
 
       if (error) throw error;
+      await logDelete('scheduled_report', report.id, report.name, { name: report.name, frequency: report.frequency });
       toast({ title: 'Relatório excluído', description: `${report.name} foi removido.` });
       fetchData();
     } catch (error: any) {
