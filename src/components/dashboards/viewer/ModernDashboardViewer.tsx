@@ -6,7 +6,9 @@ import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { RefreshCw, BarChart3, LogIn } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { RefreshCw, BarChart3, LogIn, Bug, Clock, Table } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 
 import DashboardFilterBar, { DateRange } from './DashboardFilterBar';
 import DashboardTabs, { TabsContent, TabType } from './DashboardTabs';
@@ -15,7 +17,11 @@ import AlertsInsights from './AlertsInsights';
 import DetailDrawer from './DetailDrawer';
 import EnhancedDataTable from './EnhancedDataTable';
 import TrendCharts from './TrendCharts';
-import { generateTemplateConfig, TemplateConfig } from './templateEngine';
+import DiagnosticsDrawer from './DiagnosticsDrawer';
+import ThemeToggle from './ThemeToggle';
+import { generateTemplateConfig, TemplateConfig, getDefaultTemplateConfig } from './templateEngine';
+import { normalizeDataset, NormalizedDataset, formatValue } from './datasetNormalizer';
+import { parseDashboardSpec, generateSpecFromData, DashboardSpec } from './types/dashboardSpec';
 
 import ExecutiveView from '../templates/ExecutiveView';
 import FunnelView from '../templates/FunnelView';
@@ -54,20 +60,91 @@ function SessionExpiredView({ onLogin }: { onLogin: () => void }) {
   );
 }
 
+// Compatibility mode view (fail-soft)
+function CompatibilityModeView({ 
+  data, 
+  columns,
+  warnings,
+  onRowClick 
+}: { 
+  data: Record<string, any>[];
+  columns: string[];
+  warnings: string[];
+  onRowClick?: (row: any, index: number) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 p-3 rounded-lg bg-warning/10 border border-warning/20">
+        <Table className="h-5 w-5 text-warning" />
+        <div className="flex-1">
+          <p className="text-sm font-medium text-warning">Modo compatibilidade</p>
+          <p className="text-xs text-muted-foreground">
+            Exibição simplificada devido a limitações de dados
+          </p>
+        </div>
+        {warnings.length > 0 && (
+          <Badge variant="outline" className="text-xs">
+            {warnings.length} aviso(s)
+          </Badge>
+        )}
+      </div>
+      
+      <Card>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50">
+              <tr>
+                {columns.slice(0, 10).map(col => (
+                  <th key={col} className="px-4 py-3 text-left font-medium">
+                    {col}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.slice(0, 50).map((row, i) => (
+                <tr 
+                  key={i} 
+                  className="border-t hover:bg-muted/30 cursor-pointer"
+                  onClick={() => onRowClick?.(row, i)}
+                >
+                  {columns.slice(0, 10).map(col => (
+                    <td key={col} className="px-4 py-2">
+                      {formatValue(row[col], 'string')}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {data.length > 50 && (
+          <div className="p-3 border-t text-center text-sm text-muted-foreground">
+            Exibindo 50 de {data.length} linhas
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 export default function ModernDashboardViewer({
   dashboardId,
-  dashboardSpec = {},
+  dashboardSpec: rawDashboardSpec = {},
   templateKind = 'costs_funnel_daily',
   detectedColumns = [],
   dashboardName = 'Dashboard',
 }: ModernDashboardViewerProps) {
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { user, userRole } = useAuth();
   const [searchParams] = useSearchParams();
   
   // State
-  const [data, setData] = useState<any[]>([]);
-  const [previousData, setPreviousData] = useState<any[]>([]);
+  const [rawData, setRawData] = useState<any[]>([]);
+  const [normalizedData, setNormalizedData] = useState<NormalizedDataset | null>(null);
+  const [previousRawData, setPreviousRawData] = useState<any[]>([]);
+  const [previousNormalized, setPreviousNormalized] = useState<NormalizedDataset | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
@@ -82,30 +159,81 @@ export default function ModernDashboardViewer({
   const [activeTab, setActiveTab] = useState<TabType>('executivo');
   const [selectedRow, setSelectedRow] = useState<any>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [compatibilityMode, setCompatibilityMode] = useState(false);
+  
+  // Parse dashboard spec
+  const dashboardSpec = useMemo<DashboardSpec | null>(() => {
+    if (!rawDashboardSpec || Object.keys(rawDashboardSpec).length === 0) {
+      return null;
+    }
+    return parseDashboardSpec(rawDashboardSpec);
+  }, [rawDashboardSpec]);
+  
+  // Get spec columns for normalization
+  const specColumns = useMemo(() => {
+    if (!dashboardSpec?.columns) return undefined;
+    return dashboardSpec.columns.map(col => ({
+      name: col.name,
+      type: col.type,
+      scale: col.scale,
+    }));
+  }, [dashboardSpec]);
+  
+  // Normalize data whenever raw data changes
+  useEffect(() => {
+    if (rawData.length === 0) {
+      setNormalizedData(null);
+      return;
+    }
+    
+    try {
+      const normalized = normalizeDataset({ data: rawData }, specColumns);
+      setNormalizedData(normalized);
+      
+      // Check if we should enter compatibility mode
+      if (normalized.warnings.length > 5 || normalized.columns.length === 0) {
+        setCompatibilityMode(true);
+      } else {
+        setCompatibilityMode(false);
+      }
+    } catch (err) {
+      console.error('Normalization error:', err);
+      setCompatibilityMode(true);
+    }
+  }, [rawData, specColumns]);
+  
+  // Normalize previous data
+  useEffect(() => {
+    if (previousRawData.length === 0) {
+      setPreviousNormalized(null);
+      return;
+    }
+    
+    try {
+      setPreviousNormalized(normalizeDataset({ data: previousRawData }, specColumns));
+    } catch {
+      setPreviousNormalized(null);
+    }
+  }, [previousRawData, specColumns]);
+  
+  // Get working data (prefer normalized)
+  const data = useMemo(() => normalizedData?.rows || rawData, [normalizedData, rawData]);
+  const previousData = useMemo(() => previousNormalized?.rows || previousRawData, [previousNormalized, previousRawData]);
+  
   // Generate template config from columns (with try-catch to prevent crash)
   const templateConfig: TemplateConfig = useMemo(() => {
     try {
-      const columns = detectedColumns.length > 0 
-        ? detectedColumns 
-        : data.length > 0 ? Object.keys(data[0]) : [];
-      return generateTemplateConfig(columns, templateKind, dashboardSpec);
+      const columns = normalizedData?.columns.map(c => c.name) || 
+                      detectedColumns.length > 0 ? detectedColumns : 
+                      data.length > 0 ? Object.keys(data[0]) : [];
+      return generateTemplateConfig(columns, templateKind, rawDashboardSpec);
     } catch (error) {
       console.error('Error generating template config:', error);
-      // Return safe default config
-      return {
-        enabledTabs: ['executivo', 'detalhes'] as const,
-        kpis: [],
-        funnelStages: {},
-        costMetrics: [],
-        taxaColumns: [],
-        lossColumns: [],
-        dateColumn: 'dia',
-        goals: {},
-        formatting: {},
-      };
+      return getDefaultTemplateConfig();
     }
-  }, [detectedColumns, data, templateKind, dashboardSpec]);
+  }, [normalizedData, detectedColumns, data, templateKind, rawDashboardSpec]);
 
   // Aggregate data for KPIs and insights
   const aggregatedData: AggregatedData = useMemo(() => {
@@ -114,14 +242,14 @@ export default function ModernDashboardViewer({
     const sums: AggregatedData = {};
     data.forEach(row => {
       Object.entries(row).forEach(([key, value]) => {
-        if (typeof value === 'number') {
+        if (typeof value === 'number' && isFinite(value)) {
           sums[key] = (sums[key] || 0) + value;
         }
       });
     });
     
-    // Calculate derived metrics
-    if (sums.custo_total !== undefined) {
+    // Calculate derived metrics (with null safety)
+    if (sums.custo_total !== undefined && sums.custo_total > 0) {
       if (sums.leads_total && sums.leads_total > 0) {
         sums.cpl = sums.custo_total / sums.leads_total;
       }
@@ -133,14 +261,16 @@ export default function ModernDashboardViewer({
       }
     }
     
-    // Calculate rates
-    if (sums.leads_total && sums.entrada_total) {
-      sums.taxa_entrada = sums.entrada_total / sums.leads_total;
+    // Calculate rates (with null safety)
+    if (sums.leads_total && sums.leads_total > 0) {
+      if (sums.entrada_total) {
+        sums.taxa_entrada = sums.entrada_total / sums.leads_total;
+      }
+      if (sums.venda_total) {
+        sums.taxa_venda_total = sums.venda_total / sums.leads_total;
+      }
     }
-    if (sums.leads_total && sums.venda_total) {
-      sums.taxa_venda_total = sums.venda_total / sums.leads_total;
-    }
-    if (sums.reuniao_agendada_total && sums.reuniao_realizada_total) {
+    if (sums.reuniao_agendada_total && sums.reuniao_agendada_total > 0 && sums.reuniao_realizada_total) {
       sums.taxa_comparecimento = sums.reuniao_realizada_total / sums.reuniao_agendada_total;
     }
     
@@ -153,13 +283,13 @@ export default function ModernDashboardViewer({
     const sums: AggregatedData = {};
     previousData.forEach(row => {
       Object.entries(row).forEach(([key, value]) => {
-        if (typeof value === 'number') {
+        if (typeof value === 'number' && isFinite(value)) {
           sums[key] = (sums[key] || 0) + value;
         }
       });
     });
     
-    if (sums.custo_total !== undefined) {
+    if (sums.custo_total !== undefined && sums.custo_total > 0) {
       if (sums.leads_total && sums.leads_total > 0) {
         sums.cpl = sums.custo_total / sums.leads_total;
       }
@@ -168,11 +298,13 @@ export default function ModernDashboardViewer({
       }
     }
     
-    if (sums.leads_total && sums.entrada_total) {
-      sums.taxa_entrada = sums.entrada_total / sums.leads_total;
-    }
-    if (sums.leads_total && sums.venda_total) {
-      sums.taxa_venda_total = sums.venda_total / sums.leads_total;
+    if (sums.leads_total && sums.leads_total > 0) {
+      if (sums.entrada_total) {
+        sums.taxa_entrada = sums.entrada_total / sums.leads_total;
+      }
+      if (sums.venda_total) {
+        sums.taxa_venda_total = sums.venda_total / sums.leads_total;
+      }
     }
     
     return sums;
@@ -185,7 +317,6 @@ export default function ModernDashboardViewer({
     setSessionExpired(false);
 
     try {
-      // Check session first
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
       
       if (sessionError || !sessionData.session) {
@@ -199,8 +330,6 @@ export default function ModernDashboardViewer({
       const startStr = format(dateRange.start, 'yyyy-MM-dd');
       const endStr = format(dateRange.end, 'yyyy-MM-dd');
       
-      // Use supabase.functions.invoke instead of raw fetch
-      // This automatically sends the user's JWT
       const { data: result, error: fnError } = await supabase.functions.invoke('dashboard-data', {
         body: {
           dashboard_id: dashboardId,
@@ -209,11 +338,9 @@ export default function ModernDashboardViewer({
         },
       });
 
-      // Handle errors
       if (fnError) {
         console.error('Edge function error:', fnError);
         
-        // Check for auth errors (401)
         if (fnError.message?.includes('401') || fnError.message?.includes('Unauthorized') || fnError.message?.includes('Invalid JWT')) {
           setSessionExpired(true);
           toast({ 
@@ -231,9 +358,7 @@ export default function ModernDashboardViewer({
         };
       }
 
-      // Check for error in response body
       if (result?.error) {
-        // Check if it's an auth error
         if (result.error.includes('autenticado') || result.error.includes('autorizado')) {
           setSessionExpired(true);
           return;
@@ -246,7 +371,8 @@ export default function ModernDashboardViewer({
         };
       }
 
-      setData(result?.data || []);
+      setRawData(result?.data || []);
+      setLastUpdated(new Date());
 
       // Fetch previous period if comparison enabled
       if (fetchPrev && previousRange) {
@@ -262,10 +388,10 @@ export default function ModernDashboardViewer({
         });
 
         if (!prevError && prevResult?.data) {
-          setPreviousData(prevResult.data);
+          setPreviousRawData(prevResult.data);
         }
       } else {
-        setPreviousData([]);
+        setPreviousRawData([]);
       }
 
     } catch (err: any) {
@@ -322,6 +448,7 @@ export default function ModernDashboardViewer({
       ...data.map(row => headers.map(h => {
         const val = row[h];
         if (val === null || val === undefined) return '';
+        if (val instanceof Date) return format(val, 'yyyy-MM-dd');
         return typeof val === 'string' && val.includes(',') ? `"${val}"` : val;
       }).join(','))
     ].join('\n');
@@ -339,13 +466,12 @@ export default function ModernDashboardViewer({
   const handleRowClick = useCallback((row: any, index: number) => {
     setSelectedRow(row);
     
-    // Find previous day's data for comparison
     const dateCol = templateConfig.dateColumn;
     if (dateCol && row[dateCol]) {
-      const currentDate = parseISO(row[dateCol]);
+      const currentDate = row[dateCol] instanceof Date ? row[dateCol] : parseISO(row[dateCol]);
       const prevRow = data.find(r => {
         if (!r[dateCol]) return false;
-        const d = parseISO(r[dateCol]);
+        const d = r[dateCol] instanceof Date ? r[dateCol] : parseISO(r[dateCol]);
         return differenceInDays(currentDate, d) === 1;
       });
       setSelectedRow({ current: row, previous: prevRow || null });
@@ -371,7 +497,10 @@ export default function ModernDashboardViewer({
   const sparklines = useMemo(() => {
     const result: Record<string, number[]> = {};
     templateConfig.kpis.forEach(kpi => {
-      result[kpi] = data.map(row => row[kpi] || 0);
+      result[kpi] = data.map(row => {
+        const val = row[kpi];
+        return typeof val === 'number' && isFinite(val) ? val : 0;
+      });
     });
     return result;
   }, [data, templateConfig.kpis]);
@@ -380,6 +509,9 @@ export default function ModernDashboardViewer({
   const handleLoginRedirect = useCallback(() => {
     navigate('/auth');
   }, [navigate]);
+  
+  // Check if user is admin/manager for diagnostics
+  const isAdminOrManager = userRole === 'admin' || userRole === 'manager';
 
   // Session expired state
   if (sessionExpired) {
@@ -465,99 +597,167 @@ export default function ModernDashboardViewer({
 
   return (
     <div className="space-y-6">
-      {/* Filter Bar */}
-      <DashboardFilterBar
-        onDateRangeChange={handleDateRangeChange}
-        onRefresh={() => fetchData(comparisonEnabled)}
-        onCopyLink={handleCopyLink}
-        onExport={handleExport}
-        isRefreshing={isRefreshing}
-        copied={copied}
-        comparisonEnabled={comparisonEnabled}
-        onComparisonToggle={setComparisonEnabled}
-      />
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-        {templateConfig.kpis.slice(0, 7).map(kpi => {
-          if (aggregatedData[kpi] === undefined) return null;
-          
-          const format = kpi.includes('custo') || kpi === 'cpl' || kpi === 'cac' 
-            ? 'currency' 
-            : kpi.includes('taxa_') ? 'percent' : 'integer';
-          
-          const goalDirection = kpi === 'cpl' || kpi === 'cac' || kpi.includes('custo') 
-            ? 'lower_better' 
-            : 'higher_better';
-          
-          return (
-            <KPICard
-              key={kpi}
-              label={kpi.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-              value={aggregatedData[kpi]}
-              previousValue={comparisonEnabled ? previousAggregated[kpi] : undefined}
-              goal={templateConfig.goals[kpi]}
-              goalDirection={goalDirection as any}
-              format={format as any}
-              sparklineData={sparklines[kpi]}
-            />
-          );
-        })}
-      </div>
-
-      {/* Alerts & Insights */}
-      {(goals.length > 0 || comparisonEnabled) && (
-        <AlertsInsights
-          data={aggregatedData}
-          previousData={comparisonEnabled ? previousAggregated : undefined}
-          goals={goals}
+      {/* Sticky Header Bar */}
+      <div className="sticky top-0 z-20 bg-background/95 backdrop-blur-sm pb-4 -mx-1 px-1 pt-1">
+        {/* Top info bar */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <h1 className="text-lg font-semibold truncate">{dashboardName}</h1>
+            {dashboardSpec && (
+              <Badge variant="secondary" className="text-xs">
+                Spec v{dashboardSpec.version}
+              </Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {lastUpdated && (
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                {format(lastUpdated, 'HH:mm')}
+              </span>
+            )}
+            <ThemeToggle />
+            {isAdminOrManager && (
+              <Button 
+                variant="ghost" 
+                size="icon"
+                onClick={() => setDiagnosticsOpen(true)}
+                title="Diagnóstico"
+              >
+                <Bug className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+        </div>
+        
+        {/* Filter Bar */}
+        <DashboardFilterBar
+          onDateRangeChange={handleDateRangeChange}
+          onRefresh={() => fetchData(comparisonEnabled)}
+          onCopyLink={handleCopyLink}
+          onExport={handleExport}
+          isRefreshing={isRefreshing}
+          copied={copied}
+          comparisonEnabled={comparisonEnabled}
+          onComparisonToggle={setComparisonEnabled}
         />
+      </div>
+      
+      {/* Warnings banner */}
+      {normalizedData && normalizedData.warnings.length > 0 && normalizedData.warnings.length <= 3 && (
+        <div className="flex items-center gap-2 p-2 rounded-lg bg-warning/10 border border-warning/20 text-sm">
+          <span className="text-warning font-medium">{normalizedData.warnings.length} aviso(s)</span>
+          <span className="text-muted-foreground">-</span>
+          <span className="text-muted-foreground truncate">
+            {normalizedData.warnings[0]?.message}
+          </span>
+          {isAdminOrManager && (
+            <Button 
+              variant="link" 
+              size="sm" 
+              className="ml-auto h-auto p-0"
+              onClick={() => setDiagnosticsOpen(true)}
+            >
+              Ver detalhes
+            </Button>
+          )}
+        </div>
       )}
 
-      {/* Tabs */}
-      <DashboardTabs
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        enabledTabs={templateConfig.enabledTabs}
-      >
-        <TabsContent value="executivo" className="mt-6">
-          <ExecutiveView 
-            data={data} 
-            spec={dashboardSpec}
-            previousData={previousData}
-            comparisonEnabled={comparisonEnabled}
-          />
-        </TabsContent>
+      {/* Compatibility mode fallback */}
+      {compatibilityMode ? (
+        <CompatibilityModeView 
+          data={data} 
+          columns={normalizedData?.columns.map(c => c.name) || Object.keys(data[0] || {})}
+          warnings={normalizedData?.warnings.map(w => w.message) || []}
+          onRowClick={handleRowClick}
+        />
+      ) : (
+        <>
+          {/* KPI Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+            {templateConfig.kpis.slice(0, 7).map(kpi => {
+              const value = aggregatedData[kpi];
+              if (value === undefined || !isFinite(value)) return null;
+              
+              const formatType = kpi.includes('custo') || kpi === 'cpl' || kpi === 'cac' 
+                ? 'currency' 
+                : kpi.includes('taxa_') ? 'percent' : 'integer';
+              
+              const goalDirection = kpi === 'cpl' || kpi === 'cac' || kpi.includes('custo') 
+                ? 'lower_better' 
+                : 'higher_better';
+              
+              return (
+                <KPICard
+                  key={kpi}
+                  label={kpi.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                  value={value}
+                  previousValue={comparisonEnabled ? previousAggregated[kpi] : undefined}
+                  goal={templateConfig.goals[kpi]}
+                  goalDirection={goalDirection as any}
+                  format={formatType as any}
+                  sparklineData={sparklines[kpi]}
+                />
+              );
+            })}
+          </div>
 
-        <TabsContent value="funil" className="mt-6">
-          <FunnelView 
-            data={data} 
-            spec={dashboardSpec}
-            previousData={previousData}
-            comparisonEnabled={comparisonEnabled}
-          />
-        </TabsContent>
+          {/* Alerts & Insights */}
+          {(goals.length > 0 || comparisonEnabled) && (
+            <AlertsInsights
+              data={aggregatedData}
+              previousData={comparisonEnabled ? previousAggregated : undefined}
+              goals={goals}
+            />
+          )}
 
-        <TabsContent value="eficiencia" className="mt-6">
-          <CostEfficiencyView data={data} spec={dashboardSpec} />
-        </TabsContent>
+          {/* Tabs */}
+          <DashboardTabs
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            enabledTabs={templateConfig.enabledTabs}
+          >
+            <TabsContent value="executivo" className="mt-6">
+              <ExecutiveView 
+                data={data} 
+                spec={rawDashboardSpec}
+                previousData={previousData}
+                comparisonEnabled={comparisonEnabled}
+              />
+            </TabsContent>
 
-        <TabsContent value="tendencias" className="mt-6">
-          <TrendCharts 
-            data={data}
-            previousData={previousData}
-            spec={dashboardSpec}
-          />
-        </TabsContent>
+            <TabsContent value="funil" className="mt-6">
+              <FunnelView 
+                data={data} 
+                spec={rawDashboardSpec}
+                previousData={previousData}
+                comparisonEnabled={comparisonEnabled}
+              />
+            </TabsContent>
 
-        <TabsContent value="detalhes" className="mt-6">
-          <EnhancedDataTable 
-            data={data}
-            spec={dashboardSpec}
-            onRowClick={handleRowClick}
-          />
-        </TabsContent>
-      </DashboardTabs>
+            <TabsContent value="eficiencia" className="mt-6">
+              <CostEfficiencyView data={data} spec={rawDashboardSpec} />
+            </TabsContent>
+
+            <TabsContent value="tendencias" className="mt-6">
+              <TrendCharts 
+                data={data}
+                previousData={previousData}
+                spec={rawDashboardSpec}
+              />
+            </TabsContent>
+
+            <TabsContent value="detalhes" className="mt-6">
+              <EnhancedDataTable 
+                data={data}
+                spec={rawDashboardSpec}
+                onRowClick={handleRowClick}
+              />
+            </TabsContent>
+          </DashboardTabs>
+        </>
+      )}
 
       {/* Detail Drawer */}
       <DetailDrawer
@@ -567,6 +767,18 @@ export default function ModernDashboardViewer({
         previousRowData={selectedRow?.previous}
         dateColumn={templateConfig.dateColumn}
       />
+      
+      {/* Diagnostics Drawer (admin only) */}
+      {isAdminOrManager && (
+        <DiagnosticsDrawer
+          open={diagnosticsOpen}
+          onOpenChange={setDiagnosticsOpen}
+          normalizedDataset={normalizedData}
+          dashboardSpec={dashboardSpec}
+          rawDataSample={rawData[0]}
+          templateConfig={templateConfig}
+        />
+      )}
     </div>
   );
 }

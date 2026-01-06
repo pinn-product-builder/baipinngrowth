@@ -22,13 +22,15 @@ export interface TemplateConfig {
   formatting: Record<string, string>;
 }
 
-export interface NormalizedColumn {
+// Note: NormalizedColumn and NormalizedDataset are now in datasetNormalizer.ts
+// These legacy types kept for backward compatibility with existing code
+export interface LegacyNormalizedColumn {
   name: string;
   type?: 'string' | 'number' | 'date' | 'boolean' | 'json' | 'unknown';
 }
 
-export interface NormalizedDataset {
-  columns: NormalizedColumn[];
+export interface LegacyNormalizedDataset {
+  columns: LegacyNormalizedColumn[];
   rows: Record<string, any>[];
   meta?: any;
   warnings: string[];
@@ -110,10 +112,10 @@ export function normalizeColumns(input: any): string[] {
 }
 
 /**
- * Normalize dataset from various backend response formats
- * NEVER throws, always returns a valid NormalizedDataset
+ * Normalize dataset from various backend response formats (legacy version)
+ * NEVER throws, always returns a valid LegacyNormalizedDataset
  */
-export function normalizeDataset(input: any): NormalizedDataset {
+export function legacyNormalizeDataset(input: any): LegacyNormalizedDataset {
   const warnings: string[] = [];
   
   try {
@@ -123,7 +125,7 @@ export function normalizeDataset(input: any): NormalizedDataset {
     }
     
     let rows: Record<string, any>[] = [];
-    let columns: NormalizedColumn[] = [];
+    let columns: LegacyNormalizedColumn[] = [];
     
     // Extract rows
     if (Array.isArray(input.rows)) {
@@ -162,7 +164,7 @@ export function normalizeDataset(input: any): NormalizedDataset {
           };
         }
         return { name: normalizeColumnName(col) };
-      }).filter((c: NormalizedColumn) => c.name.length > 0);
+      }).filter((c: LegacyNormalizedColumn) => c.name.length > 0);
     }
     
     // If no columns found, infer from first row
@@ -179,10 +181,10 @@ export function normalizeDataset(input: any): NormalizedDataset {
       rows,
       meta: input.meta,
       warnings
-    };
+    } as LegacyNormalizedDataset;
   } catch (error) {
     warnings.push(`Normalization error: ${error instanceof Error ? error.message : 'unknown'}`);
-    return { columns: [], rows: [], warnings };
+    return { columns: [], rows: [], warnings } as LegacyNormalizedDataset;
   }
 }
 
