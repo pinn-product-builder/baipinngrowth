@@ -48,7 +48,16 @@ const PAGE_SIZES = [10, 25, 50, 100];
 const formatValue = (value: any, key: string): string => {
   if (value === null || value === undefined) return '-';
   
-  // Date
+  // Handle Date objects directly
+  if (value instanceof Date) {
+    try {
+      return format(value, 'dd/MM/yyyy', { locale: ptBR });
+    } catch {
+      return value.toLocaleDateString('pt-BR');
+    }
+  }
+  
+  // Date string columns
   if (key === 'dia' || key === 'date' || key === 'created_at') {
     try {
       return format(parseISO(value), 'dd/MM/yyyy', { locale: ptBR });
@@ -67,9 +76,14 @@ const formatValue = (value: any, key: string): string => {
     return `${((value || 0) * 100).toFixed(1)}%`;
   }
   
-  // Integer
+  // Number
   if (typeof value === 'number') {
     return value.toLocaleString('pt-BR');
+  }
+  
+  // Objects/Arrays - convert to string safely
+  if (typeof value === 'object') {
+    return JSON.stringify(value);
   }
   
   return String(value);
