@@ -393,7 +393,7 @@ serve(async (req) => {
   }
 
   try {
-    const { dashboard_id, start, end, question, conversation_id, quick_action } = await req.json();
+    const { dashboard_id, start, end, question, conversation_id, quick_action, response_mode } = await req.json();
     
     if (!dashboard_id || !start || !end) {
       return new Response(
@@ -441,7 +441,7 @@ serve(async (req) => {
     // Get user profile with AI settings
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('tenant_id, ai_enabled, ai_daily_limit_messages, ai_daily_limit_tokens, ai_style')
+      .select('tenant_id, ai_enabled, ai_daily_limit_messages, ai_daily_limit_tokens, ai_style, ai_response_mode')
       .eq('id', userId)
       .single();
     
@@ -616,12 +616,21 @@ serve(async (req) => {
       );
     }
     
-    // Adjust prompt based on user style
+    // Adjust prompt based on response mode (from request) or fallback to user style
     let styleInstructions = '';
-    if (profile.ai_style === 'analista') {
-      styleInstructions = '\n\nEstilo: Analista técnico. Inclua mais detalhes numéricos, variações percentuais e análise estatística.';
-    } else {
-      styleInstructions = '\n\nEstilo: Executivo. Seja conciso, foque em insights acionáveis e próximos passos.';
+    const effectiveMode = response_mode || profile.ai_response_mode || 'executivo';
+    
+    switch (effectiveMode) {
+      case 'tecnico':
+        styleInstructions = '\n\nEstilo: Técnico. Explique os cálculos, variações percentuais, metodologia, possíveis vieses nos dados, e inclua análise estatística detalhada. Seja preciso e fundamentado.';
+        break;
+      case 'operacional':
+        styleInstructions = '\n\nEstilo: Operacional. Foque no diagnóstico de problemas, hipóteses de causas, etapas do funil com gargalos, e próximos passos de investigação. Seja prático e acionável.';
+        break;
+      case 'executivo':
+      default:
+        styleInstructions = '\n\nEstilo: Executivo. Seja conciso (máximo 3-4 parágrafos), foque em insights de alto nível e 3-5 ações estratégicas. Evite detalhes técnicos.';
+        break;
     }
     
     // =====================================================

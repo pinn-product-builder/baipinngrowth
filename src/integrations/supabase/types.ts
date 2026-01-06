@@ -436,6 +436,63 @@ export type Database = {
           },
         ]
       }
+      dashboard_insights: {
+        Row: {
+          content: string
+          created_at: string
+          dashboard_id: string
+          id: string
+          period_end: string | null
+          period_start: string | null
+          tags: string[] | null
+          tenant_id: string
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          dashboard_id: string
+          id?: string
+          period_end?: string | null
+          period_start?: string | null
+          tags?: string[] | null
+          tenant_id: string
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          dashboard_id?: string
+          id?: string
+          period_end?: string | null
+          period_start?: string | null
+          tags?: string[] | null
+          tenant_id?: string
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dashboard_insights_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: false
+            referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dashboard_insights_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dashboard_permissions: {
         Row: {
           can_edit: boolean | null

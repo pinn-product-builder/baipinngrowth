@@ -4,25 +4,25 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 import { Card, CardContent } from '@/components/ui/card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
   Sparkles, 
   Send, 
   Loader2, 
   AlertTriangle, 
-  TrendingUp, 
-  TrendingDown,
   Calendar,
   MessageSquare,
   RefreshCw,
   AlertCircle,
-  Lightbulb,
-  Target
+  Copy,
+  Check,
+  FileDown,
+  Save
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { format } from 'date-fns';
+import { format, subDays, startOfMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 interface AIAnalystDrawerProps {
@@ -52,6 +52,14 @@ interface QuickChip {
   action: string;
 }
 
+type ResponseMode = 'executivo' | 'operacional' | 'tecnico';
+
+interface DatePreset {
+  label: string;
+  start: Date;
+  end: Date;
+}
+
 const QUICK_CHIPS: QuickChip[] = [
   { id: 'resumo', label: 'Resumo do período', action: 'resumo' },
   { id: 'alertas', label: 'Alertas', action: 'alertas' },
@@ -61,12 +69,22 @@ const QUICK_CHIPS: QuickChip[] = [
   { id: 'melhores_piores', label: 'Melhores/piores dias', action: 'melhores_piores' },
 ];
 
+const getDatePresets = (): DatePreset[] => {
+  const today = new Date();
+  return [
+    { label: 'Últimos 7 dias', start: subDays(today, 7), end: today },
+    { label: 'Últimos 14 dias', start: subDays(today, 14), end: today },
+    { label: 'Últimos 30 dias', start: subDays(today, 30), end: today },
+    { label: 'Mês atual', start: startOfMonth(today), end: today },
+  ];
+};
+
 export default function AIAnalystDrawer({
   open,
   onOpenChange,
   dashboardId,
   dashboardName,
-  dateRange,
+  dateRange: initialDateRange,
 }: AIAnalystDrawerProps) {
   const { toast } = useToast();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -74,8 +92,19 @@ export default function AIAnalystDrawer({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [responseMode, setResponseMode] = useState<ResponseMode>('executivo');
+  const [dateRange, setDateRange] = useState(initialDateRange);
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  
+  const datePresets = getDatePresets();
+  
+  // Update date range when initial range changes
+  useEffect(() => {
+    setDateRange(initialDateRange);
+  }, [initialDateRange]);
   
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -90,6 +119,14 @@ export default function AIAnalystDrawer({
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [open]);
+  
+  const handlePresetChange = (presetLabel: string) => {
+    setSelectedPreset(presetLabel);
+    const preset = datePresets.find(p => p.label === presetLabel);
+    if (preset) {
+      setDateRange({ start: preset.start, end: preset.end });
+    }
+  };
   
   const sendMessage = async (question?: string, quickAction?: string) => {
     const messageText = question || input.trim();
@@ -120,6 +157,7 @@ export default function AIAnalystDrawer({
           question: messageText,
           quick_action: quickAction,
           conversation_id: conversationId,
+          response_mode: responseMode,
         },
       });
       
@@ -156,7 +194,7 @@ export default function AIAnalystDrawer({
       const errorMessage = err instanceof Error ? err.message : 'Erro desconhecido';
       setError(errorMessage);
       
-      if (errorMessage.includes('não habilitada') || errorMessage.includes('Limite')) {
+      if (errorMessage.includes('não habilitada') || errorMessage.includes('Limite') || errorMessage.includes('atingido')) {
         toast({
           title: 'Acesso restrito',
           description: errorMessage,
@@ -185,6 +223,58 @@ export default function AIAnalystDrawer({
     setError(null);
   };
   
+  const copyMessage = async (messageId: string, content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedId(messageId);
+      setTimeout(() => setCopiedId(null), 2000);
+      toast({ title: 'Copiado!' });
+    } catch {
+      toast({ title: 'Erro ao copiar', variant: 'destructive' });
+    }
+  };
+  
+  const saveInsight = async (message: Message) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast({ title: 'Usuário não autenticado', variant: 'destructive' });
+        return;
+      }
+      
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('tenant_id')
+        .eq('id', user.id)
+        .single();
+      
+      if (!profile?.tenant_id) {
+        toast({ title: 'Erro ao obter tenant', variant: 'destructive' });
+        return;
+      }
+      
+      const { error: insertError } = await supabase
+        .from('dashboard_insights')
+        .insert({
+          tenant_id: profile.tenant_id,
+          dashboard_id: dashboardId,
+          user_id: user.id,
+          title: message.content.slice(0, 100) + (message.content.length > 100 ? '...' : ''),
+          content: message.content,
+          period_start: format(dateRange.start, 'yyyy-MM-dd'),
+          period_end: format(dateRange.end, 'yyyy-MM-dd'),
+          tags: ['ai-generated'],
+        });
+      
+      if (insertError) throw insertError;
+      
+      toast({ title: 'Insight salvo com sucesso!' });
+    } catch (err) {
+      console.error('Error saving insight:', err);
+      toast({ title: 'Erro ao salvar insight', variant: 'destructive' });
+    }
+  };
+  
   const formatContent = (content: string) => {
     // Split into sections
     const lines = content.split('\n');
@@ -209,7 +299,7 @@ export default function AIAnalystDrawer({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full sm:max-w-lg flex flex-col h-full p-0">
-        <SheetHeader className="p-4 border-b">
+        <SheetHeader className="p-4 border-b space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="p-2 rounded-lg bg-primary/10">
@@ -232,12 +322,38 @@ export default function AIAnalystDrawer({
             </Button>
           </div>
           
-          {/* Period indicator */}
-          <div className="flex items-center gap-2 mt-2">
-            <Calendar className="h-3 w-3 text-muted-foreground" />
-            <span className="text-xs text-muted-foreground">
-              {format(dateRange.start, 'dd/MM/yyyy', { locale: ptBR })} — {format(dateRange.end, 'dd/MM/yyyy', { locale: ptBR })}
-            </span>
+          {/* Period selector with presets */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Calendar className="h-3 w-3 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">
+                {format(dateRange.start, 'dd/MM/yyyy', { locale: ptBR })} — {format(dateRange.end, 'dd/MM/yyyy', { locale: ptBR })}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <Select value={selectedPreset || ''} onValueChange={handlePresetChange}>
+                <SelectTrigger className="h-8 text-xs flex-1">
+                  <SelectValue placeholder="Período" />
+                </SelectTrigger>
+                <SelectContent>
+                  {datePresets.map(preset => (
+                    <SelectItem key={preset.label} value={preset.label} className="text-xs">
+                      {preset.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={responseMode} onValueChange={(v) => setResponseMode(v as ResponseMode)}>
+                <SelectTrigger className="h-8 text-xs w-32">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="executivo" className="text-xs">Executivo</SelectItem>
+                  <SelectItem value="operacional" className="text-xs">Operacional</SelectItem>
+                  <SelectItem value="tecnico" className="text-xs">Técnico</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </SheetHeader>
         
@@ -328,6 +444,32 @@ export default function AIAnalystDrawer({
                             <span className="font-medium">Limitações:</span> {message.meta.limitations[0]}
                           </div>
                         )}
+                        
+                        {/* Action buttons */}
+                        <div className="flex gap-1 mt-3 pt-2 border-t border-border/30">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => copyMessage(message.id, message.content)}
+                          >
+                            {copiedId === message.id ? (
+                              <Check className="h-3 w-3 mr-1" />
+                            ) : (
+                              <Copy className="h-3 w-3 mr-1" />
+                            )}
+                            Copiar
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => saveInsight(message)}
+                          >
+                            <Save className="h-3 w-3 mr-1" />
+                            Salvar
+                          </Button>
+                        </div>
                       </div>
                     ) : (
                       <p className="text-sm">{message.content}</p>
