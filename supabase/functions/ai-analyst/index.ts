@@ -413,28 +413,24 @@ serve(async (req) => {
     
     // Create Supabase clients
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    
-    // Client for JWT validation
-    const authClient = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } }
-    });
     
     // Service role client for admin operations
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
-    // Validate user with getUser
-    const { data: { user }, error: userError } = await authClient.auth.getUser();
+    // Validate user with service role client + token
+    const token = authHeader.replace('Bearer ', '');
+    const { data: userData, error: userError } = await supabase.auth.getUser(token);
     
-    if (userError || !user) {
-      console.log('JWT validation failed:', userError?.message);
+    if (userError || !userData?.user) {
+      console.error('JWT validation failed:', userError?.message);
       return new Response(
         JSON.stringify({ error: 'Token inválido ou expirado' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
     
+    const user = userData.user;
     const userId = user.id;
     console.log(`AI Analyst request from user: ${userId}`);
     
