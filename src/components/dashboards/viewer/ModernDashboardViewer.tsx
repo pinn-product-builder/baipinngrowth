@@ -19,6 +19,8 @@ import EnhancedDataTable from './EnhancedDataTable';
 import TrendCharts from './TrendCharts';
 import DiagnosticsDrawer from './DiagnosticsDrawer';
 import ThemeToggle from './ThemeToggle';
+import AIAnalystDrawer from './AIAnalystDrawer';
+import AIAnalystButton from './AIAnalystButton';
 import { generateTemplateConfig, TemplateConfig, getDefaultTemplateConfig } from './templateEngine';
 import { normalizeDataset, NormalizedDataset, formatValue } from './datasetNormalizer';
 import { parseDashboardSpec, generateSpecFromData, DashboardSpec } from './types/dashboardSpec';
@@ -160,6 +162,7 @@ export default function ModernDashboardViewer({
   const [selectedRow, setSelectedRow] = useState<any>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [compatibilityMode, setCompatibilityMode] = useState(false);
   
@@ -779,6 +782,16 @@ export default function ModernDashboardViewer({
           templateConfig={templateConfig}
         />
       )}
+      
+      {/* AI Analyst Button & Drawer */}
+      <AIAnalystButton onClick={() => setAiDrawerOpen(true)} />
+      <AIAnalystDrawer
+        open={aiDrawerOpen}
+        onOpenChange={setAiDrawerOpen}
+        dashboardId={dashboardId}
+        dashboardName={dashboardName}
+        dateRange={dateRange}
+      />
     </div>
   );
 }

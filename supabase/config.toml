@@ -38,3 +38,9 @@ verify_jwt = false
 
 [functions.generate-insights]
 verify_jwt = false
+
+[functions.ai-analyst]
+verify_jwt = false
+
+[functions.auto-insights]
+verify_jwt = false

@@ -9,6 +9,8 @@ export { default as TrendCharts } from './TrendCharts';
 export { default as DashboardErrorBoundary } from './DashboardErrorBoundary';
 export { default as DiagnosticsDrawer } from './DiagnosticsDrawer';
 export { default as ThemeToggle } from './ThemeToggle';
+export { default as AIAnalystDrawer } from './AIAnalystDrawer';
+export { default as AIAnalystButton } from './AIAnalystButton';
 
 // Template engine exports
 export { 
