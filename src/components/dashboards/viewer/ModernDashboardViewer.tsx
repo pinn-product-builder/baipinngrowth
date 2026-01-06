@@ -12,22 +12,21 @@ import { useAuth } from '@/contexts/AuthContext';
 
 import DashboardFilterBar, { DateRange } from './DashboardFilterBar';
 import DashboardTabs, { TabsContent, TabType } from './DashboardTabs';
-import KPICard from './KPICard';
-import AlertsInsights from './AlertsInsights';
 import DetailDrawer from './DetailDrawer';
 import EnhancedDataTable from './EnhancedDataTable';
-import TrendCharts from './TrendCharts';
 import DiagnosticsDrawer from './DiagnosticsDrawer';
 import ThemeToggle from './ThemeToggle';
 import AIAnalystDrawer from './AIAnalystDrawer';
 import AIAnalystButton from './AIAnalystButton';
 import { generateTemplateConfig, TemplateConfig, getDefaultTemplateConfig } from './templateEngine';
 import { normalizeDataset, NormalizedDataset, formatValue } from './datasetNormalizer';
-import { parseDashboardSpec, generateSpecFromData, DashboardSpec } from './types/dashboardSpec';
+import { parseDashboardSpec, DashboardSpec } from './types/dashboardSpec';
 
-import ExecutiveView from '../templates/ExecutiveView';
-import FunnelView from '../templates/FunnelView';
-import CostEfficiencyView from '../templates/CostEfficiencyView';
+// New executive components
+import ExecutiveKPIRow from './ExecutiveKPIRow';
+import ExecutiveFunnel from './ExecutiveFunnel';
+import ExecutiveTrendCharts from './ExecutiveTrendCharts';
+import DiagnosticsPanel from './DiagnosticsPanel';
 
 interface ModernDashboardViewerProps {
   dashboardId: string;
@@ -677,88 +676,43 @@ export default function ModernDashboardViewer({
         />
       ) : (
         <>
-          {/* KPI Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-            {templateConfig.kpis.slice(0, 7).map(kpi => {
-              const value = aggregatedData[kpi];
-              if (value === undefined || !isFinite(value)) return null;
-              
-              const formatType = kpi.includes('custo') || kpi === 'cpl' || kpi === 'cac' 
-                ? 'currency' 
-                : kpi.includes('taxa_') ? 'percent' : 'integer';
-              
-              const goalDirection = kpi === 'cpl' || kpi === 'cac' || kpi.includes('custo') 
-                ? 'lower_better' 
-                : 'higher_better';
-              
-              return (
-                <KPICard
-                  key={kpi}
-                  label={kpi.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                  value={value}
-                  previousValue={comparisonEnabled ? previousAggregated[kpi] : undefined}
-                  goal={templateConfig.goals[kpi]}
-                  goalDirection={goalDirection as any}
-                  format={formatType as any}
-                  sparklineData={sparklines[kpi]}
-                />
-              );
-            })}
-          </div>
+          {/* Section 1: Executive KPIs (single row, no duplications) */}
+          <ExecutiveKPIRow
+            data={aggregatedData}
+            previousData={comparisonEnabled ? previousAggregated : undefined}
+            dailyData={data}
+            goals={templateConfig.goals}
+            comparisonEnabled={comparisonEnabled}
+          />
 
-          {/* Alerts & Insights */}
-          {(goals.length > 0 || comparisonEnabled) && (
-            <AlertsInsights
-              data={aggregatedData}
-              previousData={comparisonEnabled ? previousAggregated : undefined}
-              goals={goals}
-            />
-          )}
+          {/* Section 2: Funnel visualization with bottleneck detection */}
+          <ExecutiveFunnel
+            data={aggregatedData}
+            previousData={comparisonEnabled ? previousAggregated : undefined}
+            comparisonEnabled={comparisonEnabled}
+          />
 
-          {/* Tabs */}
-          <DashboardTabs
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            enabledTabs={templateConfig.enabledTabs}
-          >
-            <TabsContent value="executivo" className="mt-6">
-              <ExecutiveView 
-                data={data} 
-                spec={rawDashboardSpec}
-                previousData={previousData}
-                comparisonEnabled={comparisonEnabled}
-              />
-            </TabsContent>
+          {/* Section 3: Trend charts with better storytelling */}
+          <ExecutiveTrendCharts
+            data={data}
+            previousData={previousData}
+            goals={templateConfig.goals}
+            comparisonEnabled={comparisonEnabled}
+          />
 
-            <TabsContent value="funil" className="mt-6">
-              <FunnelView 
-                data={data} 
-                spec={rawDashboardSpec}
-                previousData={previousData}
-                comparisonEnabled={comparisonEnabled}
-              />
-            </TabsContent>
+          {/* Section 4: Diagnostics & Alerts */}
+          <DiagnosticsPanel
+            data={data}
+            aggregatedData={aggregatedData}
+            goals={templateConfig.goals}
+          />
 
-            <TabsContent value="eficiencia" className="mt-6">
-              <CostEfficiencyView data={data} spec={rawDashboardSpec} />
-            </TabsContent>
-
-            <TabsContent value="tendencias" className="mt-6">
-              <TrendCharts 
-                data={data}
-                previousData={previousData}
-                spec={rawDashboardSpec}
-              />
-            </TabsContent>
-
-            <TabsContent value="detalhes" className="mt-6">
-              <EnhancedDataTable 
-                data={data}
-                spec={rawDashboardSpec}
-                onRowClick={handleRowClick}
-              />
-            </TabsContent>
-          </DashboardTabs>
+          {/* Section 5: Detailed data table */}
+          <EnhancedDataTable 
+            data={data}
+            spec={rawDashboardSpec}
+            onRowClick={handleRowClick}
+          />
         </>
       )}
 
