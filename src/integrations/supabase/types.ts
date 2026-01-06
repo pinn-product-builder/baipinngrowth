@@ -436,6 +436,50 @@ export type Database = {
           },
         ]
       }
+      dashboard_definitions: {
+        Row: {
+          created_at: string
+          dashboard_id: string
+          dataset_ids: string[] | null
+          default_view_tab: string | null
+          filters_json: Json | null
+          id: string
+          template_id: string
+          tiles_json: Json | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          dashboard_id: string
+          dataset_ids?: string[] | null
+          default_view_tab?: string | null
+          filters_json?: Json | null
+          id?: string
+          template_id?: string
+          tiles_json?: Json | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          dashboard_id?: string
+          dataset_ids?: string[] | null
+          default_view_tab?: string | null
+          filters_json?: Json | null
+          id?: string
+          template_id?: string
+          tiles_json?: Json | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dashboard_definitions_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: true
+            referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dashboard_insights: {
         Row: {
           content: string
@@ -693,6 +737,214 @@ export type Database = {
           },
           {
             foreignKeyName: "dashboards_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dataset_columns: {
+        Row: {
+          aggregator_default: string | null
+          column_name: string
+          created_at: string
+          dataset_id: string
+          db_type: string
+          display_label: string | null
+          format: string | null
+          id: string
+          is_hidden: boolean | null
+          is_nullable: boolean | null
+          role_hint: string | null
+          semantic_type: string | null
+          sort_priority: number | null
+          updated_at: string
+        }
+        Insert: {
+          aggregator_default?: string | null
+          column_name: string
+          created_at?: string
+          dataset_id: string
+          db_type: string
+          display_label?: string | null
+          format?: string | null
+          id?: string
+          is_hidden?: boolean | null
+          is_nullable?: boolean | null
+          role_hint?: string | null
+          semantic_type?: string | null
+          sort_priority?: number | null
+          updated_at?: string
+        }
+        Update: {
+          aggregator_default?: string | null
+          column_name?: string
+          created_at?: string
+          dataset_id?: string
+          db_type?: string
+          display_label?: string | null
+          format?: string | null
+          id?: string
+          is_hidden?: boolean | null
+          is_nullable?: boolean | null
+          role_hint?: string | null
+          semantic_type?: string | null
+          sort_priority?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dataset_columns_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "datasets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dataset_relationships: {
+        Row: {
+          cardinality: string | null
+          created_at: string
+          enabled: boolean
+          id: string
+          join_type: string
+          left_dataset_id: string
+          left_key: string
+          right_dataset_id: string
+          right_key: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          cardinality?: string | null
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          join_type?: string
+          left_dataset_id: string
+          left_key: string
+          right_dataset_id: string
+          right_key: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          cardinality?: string | null
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          join_type?: string
+          left_dataset_id?: string
+          left_key?: string
+          right_dataset_id?: string
+          right_key?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dataset_relationships_left_dataset_id_fkey"
+            columns: ["left_dataset_id"]
+            isOneToOne: false
+            referencedRelation: "datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dataset_relationships_right_dataset_id_fkey"
+            columns: ["right_dataset_id"]
+            isOneToOne: false
+            referencedRelation: "datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dataset_relationships_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      datasets: {
+        Row: {
+          created_at: string
+          datasource_id: string
+          default_order: string | null
+          grain_hint: string | null
+          id: string
+          is_active: boolean
+          kind: string
+          last_introspected_at: string | null
+          name: string
+          object_name: string | null
+          primary_key: string | null
+          primary_time_column: string | null
+          refresh_policy: string | null
+          row_limit_default: number | null
+          schema_name: string
+          sql_query: string | null
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          datasource_id: string
+          default_order?: string | null
+          grain_hint?: string | null
+          id?: string
+          is_active?: boolean
+          kind?: string
+          last_introspected_at?: string | null
+          name: string
+          object_name?: string | null
+          primary_key?: string | null
+          primary_time_column?: string | null
+          refresh_policy?: string | null
+          row_limit_default?: number | null
+          schema_name?: string
+          sql_query?: string | null
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          datasource_id?: string
+          default_order?: string | null
+          grain_hint?: string | null
+          id?: string
+          is_active?: boolean
+          kind?: string
+          last_introspected_at?: string | null
+          name?: string
+          object_name?: string | null
+          primary_key?: string | null
+          primary_time_column?: string | null
+          refresh_policy?: string | null
+          row_limit_default?: number | null
+          schema_name?: string
+          sql_query?: string | null
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "datasets_datasource_id_fkey"
+            columns: ["datasource_id"]
+            isOneToOne: false
+            referencedRelation: "tenant_data_sources"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "datasets_datasource_id_fkey"
+            columns: ["datasource_id"]
+            isOneToOne: false
+            referencedRelation: "tenant_data_sources_safe"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "datasets_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
