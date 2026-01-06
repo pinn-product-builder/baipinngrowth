@@ -77,23 +77,24 @@ serve(async (req) => {
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+    // Use service role client to verify the JWT token
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    const authClient = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } }
-    });
-
-    // Validate user via getUser (works with auth header)
-    const { data: { user }, error: userError } = await authClient.auth.getUser();
-    if (userError || !user) {
+    
+    // Extract JWT and get user info
+    const token = authHeader.replace('Bearer ', '');
+    const { data: userData, error: userError } = await supabase.auth.getUser(token);
+    
+    if (userError || !userData?.user) {
       console.error('Auth error:', userError);
       return new Response(
         JSON.stringify({ error: 'Token inválido' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
+    const user = userData.user;
 
     // Verify admin role
     const { data: roleData } = await supabase
