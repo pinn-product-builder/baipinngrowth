@@ -624,23 +624,114 @@ serve(async (req) => {
       styleInstructions = '\n\nEstilo: Executivo. Seja conciso, foque em insights acionáveis e próximos passos.';
     }
     
-    // Call Lovable AI Gateway
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) {
-      return new Response(
-        JSON.stringify({ error: 'LOVABLE_API_KEY não configurada' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    // =====================================================
+    // TENANT API KEY RESOLUTION
+    // =====================================================
+    let tenantApiKey: string | null = null;
+    let tenantModel: string = 'gpt-4.1-mini';
+    let useTenantKey = false;
+    let tenantRpmLimit = 60;
+    let tenantDailyTokenLimit: number | null = null;
+    let tenantMonthlyBudget: number | null = null;
+    
+    // Try to get tenant's OpenAI settings
+    const { data: tenantAiSettings } = await supabase
+      .from('tenant_ai_settings')
+      .select('*')
+      .eq('tenant_id', profile.tenant_id)
+      .eq('provider', 'openai')
+      .eq('enabled', true)
+      .single();
+    
+    if (tenantAiSettings?.api_key_encrypted) {
+      try {
+        tenantApiKey = await decrypt(tenantAiSettings.api_key_encrypted);
+        tenantModel = tenantAiSettings.default_model || 'gpt-4.1-mini';
+        tenantRpmLimit = tenantAiSettings.max_requests_per_minute || 60;
+        tenantDailyTokenLimit = tenantAiSettings.max_tokens_per_day;
+        tenantMonthlyBudget = tenantAiSettings.max_spend_month_usd;
+        useTenantKey = true;
+        console.log(`Using tenant OpenAI key for tenant: ${profile.tenant_id}`);
+      } catch (e) {
+        console.error('Failed to decrypt tenant API key:', e);
+      }
     }
     
-    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
+    // Check tenant-level rate limits and usage (only if using tenant key)
+    if (useTenantKey) {
+      // Check daily token limit
+      if (tenantDailyTokenLimit) {
+        const todayStart = new Date().toISOString().split('T')[0];
+        const { data: todayUsage } = await supabase
+          .from('ai_usage_logs')
+          .select('total_tokens')
+          .eq('tenant_id', profile.tenant_id)
+          .gte('created_at', todayStart);
+        
+        const todayTokens = todayUsage?.reduce((acc, r) => acc + (r.total_tokens || 0), 0) || 0;
+        if (todayTokens >= tenantDailyTokenLimit) {
+          return new Response(
+            JSON.stringify({ error: 'Limite diário de tokens do tenant atingido. Tente novamente amanhã.' }),
+            { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+      }
+      
+      // Check monthly budget
+      if (tenantMonthlyBudget) {
+        const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+        const { data: monthUsage } = await supabase
+          .from('ai_usage_logs')
+          .select('cost_estimated')
+          .eq('tenant_id', profile.tenant_id)
+          .gte('created_at', monthStart);
+        
+        const monthCost = monthUsage?.reduce((acc, r) => acc + Number(r.cost_estimated || 0), 0) || 0;
+        if (monthCost >= tenantMonthlyBudget) {
+          return new Response(
+            JSON.stringify({ error: 'Orçamento mensal de IA do tenant atingido. Contate o administrador.' }),
+            { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+      }
+      
+      // Simple RPM check (last minute)
+      const oneMinuteAgo = new Date(Date.now() - 60000).toISOString();
+      const { count: recentRequests } = await supabase
+        .from('ai_usage_logs')
+        .select('*', { count: 'exact', head: true })
+        .eq('tenant_id', profile.tenant_id)
+        .gte('created_at', oneMinuteAgo);
+      
+      if ((recentRequests || 0) >= tenantRpmLimit) {
+        return new Response(
+          JSON.stringify({ error: 'Limite de requisições por minuto atingido. Aguarde alguns segundos.' }),
+          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+    
+    const startTime = Date.now();
+    let aiResponse: Response;
+    let modelUsed: string;
+    let providerUsed: string;
+    
+    // =====================================================
+    // CALL AI (TENANT KEY OR FALLBACK TO LOVABLE AI)
+    // =====================================================
+    if (useTenantKey && tenantApiKey) {
+      // Use OpenAI directly with tenant's key
+      providerUsed = 'openai';
+      modelUsed = tenantModel;
+      
+      // Map model names for OpenAI API
+      const openAIModel = tenantModel.startsWith('gpt-') ? tenantModel : 'gpt-4.1-mini';
+      
+      // Determine if model needs max_completion_tokens vs max_tokens
+      const isNewerModel = openAIModel.includes('gpt-5') || openAIModel.includes('gpt-4.1') || openAIModel.includes('o3') || openAIModel.includes('o4');
+      
+      const requestBody: any = {
+        model: openAIModel,
         messages: [
           { role: 'system', content: SYSTEM_PROMPT_BASE + styleInstructions },
           { 
@@ -648,35 +739,142 @@ serve(async (req) => {
             content: `CONTEXT PACK (dados do dashboard):\n${JSON.stringify(contextPack, null, 2)}\n\nPERGUNTA DO USUÁRIO:\n${actualQuestion}` 
           }
         ],
-        temperature: 0.7,
-        max_tokens: 2000,
-      }),
-    });
+      };
+      
+      // Add appropriate token limit parameter based on model
+      if (isNewerModel) {
+        requestBody.max_completion_tokens = 2000;
+        // Note: temperature not supported for GPT-5+ and O3/O4 models
+      } else {
+        requestBody.max_tokens = 2000;
+        requestBody.temperature = 0.7;
+      }
+      
+      console.log(`Calling OpenAI with tenant key, model: ${openAIModel}`);
+      
+      aiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${tenantApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+    } else {
+      // Fallback to Lovable AI Gateway
+      providerUsed = 'lovable_ai';
+      modelUsed = 'google/gemini-2.5-flash';
+      
+      const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+      if (!LOVABLE_API_KEY) {
+        // No tenant key AND no Lovable key - AI not available
+        return new Response(
+          JSON.stringify({ error: 'IA não configurada. Contate o administrador para configurar a API Key do tenant.' }),
+          { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      
+      console.log('Using Lovable AI Gateway (fallback)');
+      
+      aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'google/gemini-2.5-flash',
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT_BASE + styleInstructions },
+            { 
+              role: 'user', 
+              content: `CONTEXT PACK (dados do dashboard):\n${JSON.stringify(contextPack, null, 2)}\n\nPERGUNTA DO USUÁRIO:\n${actualQuestion}` 
+            }
+          ],
+          temperature: 0.7,
+          max_tokens: 2000,
+        }),
+      });
+    }
     
+    const latencyMs = Date.now() - startTime;
+    
+    // Handle response errors
     if (!aiResponse.ok) {
+      let errorMessage = 'Erro ao processar com IA';
+      let errorCode = String(aiResponse.status);
+      
       if (aiResponse.status === 429) {
-        return new Response(
-          JSON.stringify({ error: 'Limite de requisições excedido. Tente novamente em alguns minutos.' }),
-          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        errorMessage = 'Limite de requisições excedido. Tente novamente em alguns minutos.';
+      } else if (aiResponse.status === 402) {
+        errorMessage = 'Créditos de AI esgotados. Contate o administrador.';
+      } else if (aiResponse.status === 401) {
+        errorMessage = 'API Key inválida ou expirada. Contate o administrador.';
+        errorCode = 'invalid_key';
       }
-      if (aiResponse.status === 402) {
-        return new Response(
-          JSON.stringify({ error: 'Créditos de AI esgotados. Contate o administrador.' }),
-          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      const errorText = await aiResponse.text();
-      console.error('AI Gateway error:', aiResponse.status, errorText);
+      
+      const errorText = await aiResponse.text().catch(() => '');
+      console.error('AI error:', aiResponse.status, errorText);
+      
+      // Log failed request
+      await supabase.from('ai_usage_logs').insert({
+        tenant_id: profile.tenant_id,
+        user_id: userId,
+        dashboard_id,
+        request_type: quick_action || 'chat',
+        model: modelUsed,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+        latency_ms: latencyMs,
+        status: 'error',
+        error_code: errorCode,
+        error_message: errorMessage,
+      });
+      
       return new Response(
-        JSON.stringify({ error: 'Erro ao processar com IA' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: errorMessage }),
+        { status: aiResponse.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
     
     const aiData = await aiResponse.json();
     const answerText = aiData.choices?.[0]?.message?.content || 'Não foi possível gerar resposta.';
+    const promptTokens = aiData.usage?.prompt_tokens || 0;
+    const completionTokens = aiData.usage?.completion_tokens || 0;
     const tokensUsed = aiData.usage?.total_tokens || 0;
+    
+    // Estimate cost (rough OpenAI pricing)
+    let costEstimated = 0;
+    if (providerUsed === 'openai') {
+      // Approximate costs per 1M tokens (input/output)
+      const pricing: Record<string, { input: number; output: number }> = {
+        'gpt-4.1-mini': { input: 0.15, output: 0.60 },
+        'gpt-4.1': { input: 2.00, output: 8.00 },
+        'gpt-4o-mini': { input: 0.15, output: 0.60 },
+        'gpt-4o': { input: 2.50, output: 10.00 },
+        'gpt-5-nano': { input: 0.10, output: 0.40 },
+        'gpt-5-mini': { input: 0.40, output: 1.60 },
+        'gpt-5': { input: 3.00, output: 15.00 },
+      };
+      const modelPricing = pricing[modelUsed] || pricing['gpt-4.1-mini'];
+      costEstimated = (promptTokens / 1000000 * modelPricing.input) + (completionTokens / 1000000 * modelPricing.output);
+    }
+    
+    // Log successful request to ai_usage_logs
+    await supabase.from('ai_usage_logs').insert({
+      tenant_id: profile.tenant_id,
+      user_id: userId,
+      dashboard_id,
+      request_type: quick_action || 'chat',
+      model: modelUsed,
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: tokensUsed,
+      cost_estimated: costEstimated,
+      latency_ms: latencyMs,
+      status: 'success',
+    });
     
     // Update or create usage record
     if (usageData) {
@@ -733,7 +931,10 @@ serve(async (req) => {
           content: answerText,
           meta: {
             tokens: tokensUsed,
-            model: 'google/gemini-2.5-flash',
+            model: modelUsed,
+            provider: providerUsed,
+            cost_estimated: costEstimated,
+            latency_ms: latencyMs,
             context_pack_rows: contextPack.meta.rows_count,
           },
         },
