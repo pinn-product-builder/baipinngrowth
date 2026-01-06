@@ -6,7 +6,7 @@ const corsHeaders = {
 }
 
 // Standard response helper - ALWAYS returns 200 with JSON
-function jsonResponse(data: Record<string, any>, status = 200) {
+function jsonResponse(data: Record<string, any>) {
   return new Response(JSON.stringify(data), {
     status: 200, // Always 200 to avoid generic client errors
     headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -89,7 +89,7 @@ Deno.serve(async (req) => {
   try {
     // Validate authorization header
     const authHeader = req.headers.get('authorization')
-    if (!authHeader) {
+    if (!authHeader?.startsWith('Bearer ')) {
       return errorResponse('UNAUTHORIZED', 'Token de autorização não fornecido')
     }
 
@@ -109,16 +109,21 @@ Deno.serve(async (req) => {
       return errorResponse('CONFIG_ERROR', 'Chave de criptografia não configurada. Configure MASTER_ENCRYPTION_KEY nos secrets.')
     }
 
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+    // Create client for JWT validation
+    const authClient = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
     })
 
-    // Authenticate user
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    // Validate user with getUser
+    const { data: { user }, error: userError } = await authClient.auth.getUser()
+    
     if (userError || !user) {
-      console.log('Auth failed:', userError?.message)
-      return errorResponse('AUTH_FAILED', 'Usuário não autenticado', userError?.message)
+      console.log('JWT validation failed:', userError?.message)
+      return errorResponse('AUTH_FAILED', 'Token inválido ou expirado', userError?.message)
     }
+
+    const userId = user.id
+    console.log(`Manage datasource keys request from user: ${userId}`)
 
     // Check user is admin using service role
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
@@ -126,7 +131,7 @@ Deno.serve(async (req) => {
     const { data: adminRole, error: roleError } = await adminClient
       .from('user_roles')
       .select('role')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .eq('role', 'admin')
       .maybeSingle()
 

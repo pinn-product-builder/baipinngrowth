@@ -47,6 +47,41 @@ INTERAÇÃO
 - Se o usuário pedir recortes que não existem no dataset (ex.: campanha/anúncio) informe que a dimensão não está disponível.`;
 
 // =====================================================
+// ENCRYPTION HELPERS
+// =====================================================
+async function getEncryptionKey(): Promise<CryptoKey> {
+  const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
+  if (!masterKey) {
+    throw new Error('MASTER_ENCRYPTION_KEY not configured')
+  }
+  
+  const encoder = new TextEncoder()
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(masterKey.padEnd(32, '0').slice(0, 32)),
+    { name: 'AES-GCM' },
+    false,
+    ['decrypt']
+  )
+  return keyMaterial
+}
+
+async function decrypt(ciphertext: string): Promise<string> {
+  const key = await getEncryptionKey()
+  const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
+  const iv = combined.slice(0, 12)
+  const encrypted = combined.slice(12)
+  
+  const decrypted = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    encrypted
+  )
+  
+  return new TextDecoder().decode(decrypted)
+}
+
+// =====================================================
 // HELPER FUNCTIONS
 // =====================================================
 
@@ -369,37 +404,49 @@ serve(async (req) => {
     
     // Get auth token
     const authHeader = req.headers.get('authorization');
-    if (!authHeader) {
+    if (!authHeader?.startsWith('Bearer ')) {
       return new Response(
         JSON.stringify({ error: 'Não autenticado' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
     
-    // Create Supabase client
+    // Create Supabase clients
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     
-    // Get user from token
-    const token = authHeader.replace('Bearer ', '');
-    const { data: { user }, error: userError } = await supabase.auth.getUser(token);
+    // Client for JWT validation
+    const authClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } }
+    });
+    
+    // Service role client for admin operations
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    
+    // Validate user with getUser
+    const { data: { user }, error: userError } = await authClient.auth.getUser();
     
     if (userError || !user) {
+      console.log('JWT validation failed:', userError?.message);
       return new Response(
-        JSON.stringify({ error: 'Token inválido' }),
+        JSON.stringify({ error: 'Token inválido ou expirado' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+    
+    const userId = user.id;
+    console.log(`AI Analyst request from user: ${userId}`);
     
     // Get user profile with AI settings
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
       .select('tenant_id, ai_enabled, ai_daily_limit_messages, ai_daily_limit_tokens, ai_style')
-      .eq('id', user.id)
+      .eq('id', userId)
       .single();
     
     if (profileError || !profile) {
+      console.log('Profile not found for user:', userId);
       return new Response(
         JSON.stringify({ error: 'Perfil não encontrado' }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -418,13 +465,13 @@ serve(async (req) => {
     const { data: usageData } = await supabase
       .from('ai_usage_daily')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .eq('date', today)
       .single();
     
-    if (usageData && usageData.requests >= profile.ai_daily_limit_messages) {
+    if (usageData && usageData.requests >= (profile.ai_daily_limit_messages || 30)) {
       return new Response(
-        JSON.stringify({ error: `Limite diário atingido (${profile.ai_daily_limit_messages} mensagens/dia)` }),
+        JSON.stringify({ error: `Limite diário atingido (${profile.ai_daily_limit_messages || 30} mensagens/dia)` }),
         { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -449,7 +496,7 @@ serve(async (req) => {
       const { data: roleData } = await supabase
         .from('user_roles')
         .select('role')
-        .eq('user_id', user.id)
+        .eq('user_id', userId)
         .single();
       
       if (roleData?.role !== 'admin') {
@@ -460,46 +507,77 @@ serve(async (req) => {
       }
     }
     
-    // Fetch dashboard data (same logic as dashboard-data function)
+    // Fetch dashboard data using proper decryption
     let rows: any[] = [];
     
     if (dashboard.data_source) {
       const ds = dashboard.data_source;
       
-      // Decrypt keys if needed
-      let serviceKey = ds.service_role_key_encrypted;
-      const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY');
+      // Get decrypted key
+      let remoteKey: string | null = null;
       
-      if (serviceKey && masterKey) {
+      // Try anon key first
+      if (ds.anon_key_encrypted) {
         try {
-          // Simple XOR decryption for demo - in production use proper encryption
-          const decoded = atob(serviceKey);
-          serviceKey = decoded; // Simplified - implement proper decryption
-        } catch {
-          // Use as-is if decryption fails
+          remoteKey = await decrypt(ds.anon_key_encrypted);
+          console.log('Successfully decrypted anon_key for AI analyst');
+        } catch (e) {
+          console.error('Failed to decrypt anon_key:', e);
         }
       }
       
-      // Create client for external Supabase
-      const externalClient = createClient(
-        ds.project_url,
-        serviceKey || ds.anon_key_encrypted || '',
-        { auth: { persistSession: false } }
-      );
-      
-      // Query the view
-      const viewName = dashboard.view_name;
-      if (viewName) {
-        const { data: viewData, error: viewError } = await externalClient
-          .from(viewName)
-          .select('*')
-          .gte('dia', start)
-          .lte('dia', end)
-          .order('dia', { ascending: true });
-        
-        if (!viewError && viewData) {
-          rows = viewData;
+      // Fallback to service role key
+      if (!remoteKey && ds.service_role_key_encrypted) {
+        try {
+          remoteKey = await decrypt(ds.service_role_key_encrypted);
+          console.log('Successfully decrypted service_role_key for AI analyst');
+        } catch (e) {
+          console.error('Failed to decrypt service_role_key:', e);
         }
+      }
+      
+      // Fallback to Afonsina keys
+      if (!remoteKey) {
+        const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL');
+        const afonsinaServiceKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY');
+        const afonsinaAnonKey = Deno.env.get('AFONSINA_SUPABASE_ANON_KEY');
+        
+        if (afonsinaUrl && ds.project_url === afonsinaUrl) {
+          remoteKey = afonsinaAnonKey || afonsinaServiceKey || null;
+          console.log('Using Afonsina fallback keys for AI analyst');
+        }
+      }
+      
+      if (remoteKey && dashboard.view_name) {
+        // Use REST API to query external Supabase
+        let restUrl = `${ds.project_url}/rest/v1/${dashboard.view_name}?select=*`;
+        restUrl += `&dia=gte.${start}`;
+        restUrl += `&dia=lte.${end}`;
+        restUrl += `&order=dia.asc`;
+        restUrl += `&limit=1000`;
+        
+        console.log('AI analyst fetching from:', restUrl);
+        
+        try {
+          const response = await fetch(restUrl, {
+            headers: {
+              'apikey': remoteKey,
+              'Authorization': `Bearer ${remoteKey}`,
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          if (response.ok) {
+            rows = await response.json();
+            console.log(`AI analyst received ${rows.length} rows`);
+          } else {
+            console.error('External Supabase error:', response.status, await response.text());
+          }
+        } catch (fetchError) {
+          console.error('Fetch error:', fetchError);
+        }
+      } else {
+        console.log('No valid credentials or view_name for data source');
       }
     }
     
@@ -615,7 +693,7 @@ serve(async (req) => {
         .from('ai_usage_daily')
         .insert({
           tenant_id: profile.tenant_id,
-          user_id: user.id,
+          user_id: userId,
           date: today,
           requests: 1,
           tokens_in: aiData.usage?.prompt_tokens || 0,
@@ -630,7 +708,7 @@ serve(async (req) => {
         .from('ai_conversations')
         .insert({
           tenant_id: profile.tenant_id,
-          user_id: user.id,
+          user_id: userId,
           dashboard_id,
           start_date: start,
           end_date: end,

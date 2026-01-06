@@ -103,7 +103,7 @@ Deno.serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('authorization')
-    if (!authHeader) {
+    if (!authHeader?.startsWith('Bearer ')) {
       console.log('No authorization header provided')
       return new Response(JSON.stringify({ error: 'Não autorizado', error_type: 'auth' }), {
         status: 401,
@@ -115,22 +115,28 @@ Deno.serve(async (req) => {
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
-    // Create client with the user's JWT
+    // Create client with the user's JWT for validation
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
     })
 
+    // Validate user with getUser
     const { data: { user }, error: userError } = await supabase.auth.getUser()
+    
     if (userError || !user) {
-      console.log('User auth failed:', userError?.message)
-      return new Response(JSON.stringify({ error: 'Usuário não autenticado', error_type: 'auth' }), {
+      console.log('JWT validation failed:', userError?.message)
+      return new Response(JSON.stringify({ error: 'Token inválido ou expirado', error_type: 'auth' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
+    const userId = user.id
+
+    console.log(`Authenticated user: ${userId}`)
+
     // Rate limiting by user
-    if (!checkRateLimit(user.id)) {
+    if (!checkRateLimit(userId)) {
       return new Response(JSON.stringify({ error: 'Muitas requisições. Tente novamente em 1 minuto.' }), {
         status: 429,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -172,8 +178,9 @@ Deno.serve(async (req) => {
       })
     }
 
-    console.log(`Fetching dashboard ${dashboardId} for user ${user.id}, period: ${start} to ${end}`)
+    console.log(`Fetching dashboard ${dashboardId} for user ${userId}, period: ${start} to ${end}`)
 
+    // Use service role client for admin operations
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
 
     const { data: dashboard, error: dashboardError } = await adminClient
@@ -194,14 +201,14 @@ Deno.serve(async (req) => {
     const { data: profile } = await adminClient
       .from('profiles')
       .select('tenant_id')
-      .eq('id', user.id)
+      .eq('id', userId)
       .maybeSingle()
 
     if (!profile || profile.tenant_id !== dashboard.tenant_id) {
       const { data: role } = await adminClient
         .from('user_roles')
         .select('role')
-        .eq('user_id', user.id)
+        .eq('user_id', userId)
         .eq('role', 'admin')
         .maybeSingle()
 
@@ -366,8 +373,9 @@ Deno.serve(async (req) => {
       if (dataSource.anon_key_encrypted) {
         try {
           remoteKey = await decrypt(dataSource.anon_key_encrypted)
+          console.log('Successfully decrypted anon_key')
         } catch (e) {
-          console.error('Failed to decrypt anon_key')
+          console.error('Failed to decrypt anon_key:', e)
         }
       }
 
@@ -375,8 +383,9 @@ Deno.serve(async (req) => {
       if (!remoteKey && dataSource.service_role_key_encrypted) {
         try {
           remoteKey = await decrypt(dataSource.service_role_key_encrypted)
+          console.log('Successfully decrypted service_role_key')
         } catch (e) {
-          console.error('Failed to decrypt service_role_key')
+          console.error('Failed to decrypt service_role_key:', e)
         }
       }
 
@@ -388,11 +397,16 @@ Deno.serve(async (req) => {
         
         if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
           remoteKey = afonsinaAnonKey || afonsinaServiceKey || null
+          console.log('Using Afonsina fallback keys')
         }
       }
 
       if (!remoteKey) {
-        return new Response(JSON.stringify({ error: 'Credenciais do data source não configuradas' }), {
+        return new Response(JSON.stringify({ 
+          error: 'Credenciais do data source não configuradas',
+          error_type: 'config',
+          details: 'Configure as chaves anon_key ou service_role_key para este data source.'
+        }), {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         })
@@ -424,10 +438,25 @@ Deno.serve(async (req) => {
       if (!response.ok) {
         const errorText = await response.text()
         console.error('Remote Supabase error:', response.status, errorText)
+        
+        let errorType = 'supabase_error'
+        let errorMessage = 'Erro ao buscar dados do Supabase'
+        
+        if (response.status === 401) {
+          errorType = 'auth'
+          errorMessage = 'Credenciais inválidas para o data source externo'
+        } else if (response.status === 403) {
+          errorType = 'permission'
+          errorMessage = 'Sem permissão para acessar esta view'
+        } else if (response.status === 404) {
+          errorType = 'not_found'
+          errorMessage = `View "${dashboard.view_name}" não encontrada`
+        }
+        
         return new Response(JSON.stringify({ 
-          error: 'Erro ao buscar dados do Supabase', 
+          error: errorMessage, 
           details: errorText.slice(0, 200),
-          error_type: 'supabase_error'
+          error_type: errorType
         }), {
           status: response.status,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
