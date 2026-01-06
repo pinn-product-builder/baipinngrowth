@@ -44,7 +44,8 @@ const navItems: NavItem[] = [
   { label: 'Relatórios', href: '/admin/scheduled-reports', icon: Calendar, adminOnly: true },
   { label: 'Feature Flags', href: '/admin/feature-flags', icon: Flag, adminOnly: true },
   { label: 'IA / OpenAI', href: '/admin/ai-settings', icon: Bot, adminOnly: true },
-  { label: 'Health', href: '/admin/health', icon: Activity, adminOnly: true },
+  { label: 'AI Health', href: '/admin/ai-health', icon: Activity, adminOnly: true },
+  { label: 'Dashboard Health', href: '/admin/health', icon: Activity, adminOnly: true },
   { label: 'Audit Logs', href: '/admin/audit-logs', icon: FileText, adminOnly: true },
 ];
 
