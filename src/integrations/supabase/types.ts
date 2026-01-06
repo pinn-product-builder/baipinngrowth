@@ -231,6 +231,75 @@ export type Database = {
           },
         ]
       }
+      ai_usage_logs: {
+        Row: {
+          completion_tokens: number | null
+          cost_estimated: number | null
+          created_at: string
+          dashboard_id: string | null
+          error_code: string | null
+          error_message: string | null
+          id: string
+          latency_ms: number | null
+          model: string | null
+          prompt_tokens: number | null
+          request_type: string
+          status: string
+          tenant_id: string
+          total_tokens: number | null
+          user_id: string | null
+        }
+        Insert: {
+          completion_tokens?: number | null
+          cost_estimated?: number | null
+          created_at?: string
+          dashboard_id?: string | null
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          latency_ms?: number | null
+          model?: string | null
+          prompt_tokens?: number | null
+          request_type?: string
+          status?: string
+          tenant_id: string
+          total_tokens?: number | null
+          user_id?: string | null
+        }
+        Update: {
+          completion_tokens?: number | null
+          cost_estimated?: number | null
+          created_at?: string
+          dashboard_id?: string | null
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          latency_ms?: number | null
+          model?: string | null
+          prompt_tokens?: number | null
+          request_type?: string
+          status?: string
+          tenant_id?: string
+          total_tokens?: number | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_usage_logs_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: false
+            referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_usage_logs_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_logs: {
         Row: {
           action: string
@@ -669,6 +738,59 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "scheduled_reports_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tenant_ai_settings: {
+        Row: {
+          api_key_encrypted: string | null
+          api_key_last4: string | null
+          created_at: string
+          default_model: string | null
+          enabled: boolean | null
+          id: string
+          max_requests_per_minute: number | null
+          max_spend_month_usd: number | null
+          max_tokens_per_day: number | null
+          provider: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          api_key_encrypted?: string | null
+          api_key_last4?: string | null
+          created_at?: string
+          default_model?: string | null
+          enabled?: boolean | null
+          id?: string
+          max_requests_per_minute?: number | null
+          max_spend_month_usd?: number | null
+          max_tokens_per_day?: number | null
+          provider?: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          api_key_encrypted?: string | null
+          api_key_last4?: string | null
+          created_at?: string
+          default_model?: string | null
+          enabled?: boolean | null
+          id?: string
+          max_requests_per_minute?: number | null
+          max_spend_month_usd?: number | null
+          max_tokens_per_day?: number | null
+          provider?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_ai_settings_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"

@@ -44,3 +44,9 @@ verify_jwt = false
 
 [functions.auto-insights]
 verify_jwt = false
+
+[functions.ai-settings]
+verify_jwt = false
+
+[functions.ai-test-connection]
+verify_jwt = false
