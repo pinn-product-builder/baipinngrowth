@@ -80,14 +80,15 @@ serve(async (req) => {
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const authClient = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
     });
 
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
+    // Validate user via getUser (works with auth header)
     const { data: { user }, error: userError } = await authClient.auth.getUser();
     if (userError || !user) {
+      console.error('Auth error:', userError);
       return new Response(
         JSON.stringify({ error: 'Token inválido' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -101,7 +102,7 @@ serve(async (req) => {
       .eq('user_id', user.id)
       .single();
 
-    if (roleData?.role !== 'admin') {
+    if (roleData?.role !== 'admin' && roleData?.role !== 'manager') {
       return new Response(
         JSON.stringify({ error: 'Acesso negado. Apenas administradores.' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
