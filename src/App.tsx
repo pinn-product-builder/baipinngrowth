@@ -20,6 +20,8 @@ import DataSources from "@/pages/admin/DataSources";
 import ActivityLogs from "@/pages/admin/ActivityLogs";
 import ScheduledReports from "@/pages/admin/ScheduledReports";
 import DashboardHealth from "@/pages/admin/DashboardHealth";
+import FeatureFlags from "@/pages/admin/FeatureFlags";
+import AuditLogs from "@/pages/admin/AuditLogs";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -86,6 +88,16 @@ const App = () => (
               <Route path="/admin/health" element={
                 <ProtectedRoute requireAdmin>
                   <DashboardHealth />
+                </ProtectedRoute>
+              } />
+              <Route path="/admin/feature-flags" element={
+                <ProtectedRoute requireAdmin>
+                  <FeatureFlags />
+                </ProtectedRoute>
+              } />
+              <Route path="/admin/audit-logs" element={
+                <ProtectedRoute requireAdmin>
+                  <AuditLogs />
                 </ProtectedRoute>
               } />
             </Route>
