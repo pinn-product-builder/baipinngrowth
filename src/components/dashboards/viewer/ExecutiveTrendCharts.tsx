@@ -32,19 +32,36 @@ interface ExecutiveTrendChartsProps {
 
 type Aggregation = 'day' | 'week' | 'month';
 
-const formatDate = (dateStr: string) => {
+const parseDate = (dateValue: any): Date | null => {
+  if (!dateValue) return null;
+  if (dateValue instanceof Date) return dateValue;
+  if (typeof dateValue === 'string') {
+    try {
+      return parseISO(dateValue);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const formatDate = (dateValue: any) => {
+  const date = parseDate(dateValue);
+  if (!date) return String(dateValue ?? '');
   try {
-    return format(parseISO(dateStr), 'dd/MM', { locale: ptBR });
+    return format(date, 'dd/MM', { locale: ptBR });
   } catch {
-    return dateStr;
+    return String(dateValue);
   }
 };
 
-const formatDateFull = (dateStr: string) => {
+const formatDateFull = (dateValue: any) => {
+  const date = parseDate(dateValue);
+  if (!date) return String(dateValue ?? '');
   try {
-    return format(parseISO(dateStr), "dd 'de' MMMM", { locale: ptBR });
+    return format(date, "dd 'de' MMMM", { locale: ptBR });
   } catch {
-    return dateStr;
+    return String(dateValue);
   }
 };
 
@@ -89,12 +106,18 @@ export default function ExecutiveTrendCharts({
 }: ExecutiveTrendChartsProps) {
   const [aggregation, setAggregation] = useState<Aggregation>('day');
   
-  // Aggregate data based on selected period
+  // Aggregate data based on selected period and ensure dia is string
   const chartData = useMemo(() => {
-    if (aggregation === 'day') return data;
+    // Convert Date objects to ISO strings for chart rendering
+    const normalized = data.map(row => ({
+      ...row,
+      dia: row.dia instanceof Date ? row.dia.toISOString() : row.dia,
+    }));
+    
+    if (aggregation === 'day') return normalized;
     
     // TODO: Implement week/month aggregation
-    return data;
+    return normalized;
   }, [data, aggregation]);
   
   // Calculate averages for reference lines
