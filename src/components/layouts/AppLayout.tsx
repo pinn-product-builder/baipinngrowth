@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/hooks/useTheme';
 import {
   LayoutDashboard,
   Building2,
@@ -16,7 +17,10 @@ import {
   Calendar,
   Flag,
   FileText,
-  Bot
+  Bot,
+  Sun,
+  Moon,
+  Monitor
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -60,9 +64,20 @@ const roleLabels: Record<string, string> = {
 
 export default function AppLayout() {
   const { user, userRole, signOut } = useAuth();
+  const { theme, setTheme, isDark } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const getThemeIcon = () => {
+    if (theme === 'system') return <Monitor className="h-4 w-4" />;
+    return isDark ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />;
+  };
+
+  const cycleTheme = () => {
+    const next = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
+    setTheme(next);
+  };
 
   const isAdmin = userRole === 'admin';
   const isManager = userRole === 'manager';
@@ -158,6 +173,22 @@ export default function AppLayout() {
                   Conta
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setTheme('light')}>
+                  <Sun className="mr-2 h-4 w-4" />
+                  Tema claro
+                  {theme === 'light' && <span className="ml-auto text-xs text-primary">✓</span>}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTheme('dark')}>
+                  <Moon className="mr-2 h-4 w-4" />
+                  Tema escuro
+                  {theme === 'dark' && <span className="ml-auto text-xs text-primary">✓</span>}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTheme('system')}>
+                  <Monitor className="mr-2 h-4 w-4" />
+                  Sistema
+                  {theme === 'system' && <span className="ml-auto text-xs text-primary">✓</span>}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={handleSignOut} className="text-destructive focus:text-destructive">
                   <LogOut className="mr-2 h-4 w-4" />
                   Sair
@@ -179,6 +210,14 @@ export default function AppLayout() {
             <Menu className="h-6 w-6" />
           </button>
           <div className="flex-1" />
+          {/* Theme toggle in header */}
+          <button
+            onClick={cycleTheme}
+            className="flex items-center justify-center h-9 w-9 rounded-md hover:bg-muted transition-colors"
+            title={`Tema: ${theme === 'light' ? 'Claro' : theme === 'dark' ? 'Escuro' : 'Sistema'}`}
+          >
+            {getThemeIcon()}
+          </button>
         </header>
 
         {/* Conteúdo da página */}

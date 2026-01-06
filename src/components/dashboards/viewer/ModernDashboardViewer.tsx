@@ -597,6 +597,31 @@ export default function ModernDashboardViewer({
     );
   }
 
+  // Persist tab selection per dashboard
+  useEffect(() => {
+    const storedTab = localStorage.getItem(`dashboard-tab-${dashboardId}`);
+    if (storedTab && ['executivo', 'funil', 'eficiencia', 'tendencias', 'detalhes'].includes(storedTab)) {
+      setActiveTab(storedTab as TabType);
+    }
+  }, [dashboardId]);
+
+  const handleTabChange = useCallback((tab: TabType) => {
+    setActiveTab(tab);
+    localStorage.setItem(`dashboard-tab-${dashboardId}`, tab);
+  }, [dashboardId]);
+
+  // Warnings summary for executive view
+  const warningsSummary = useMemo(() => {
+    if (!normalizedData || normalizedData.warnings.length === 0) return null;
+    const count = normalizedData.warnings.length;
+    return {
+      count,
+      message: count === 1 
+        ? 'Detectamos 1 inconsistência nos dados.' 
+        : `Detectamos ${count} inconsistências nos dados.`
+    };
+  }, [normalizedData]);
+
   return (
     <div className="space-y-6">
       {/* Sticky Header Bar */}
@@ -644,27 +669,6 @@ export default function ModernDashboardViewer({
           onComparisonToggle={setComparisonEnabled}
         />
       </div>
-      
-      {/* Warnings banner */}
-      {normalizedData && normalizedData.warnings.length > 0 && normalizedData.warnings.length <= 3 && (
-        <div className="flex items-center gap-2 p-2 rounded-lg bg-warning/10 border border-warning/20 text-sm">
-          <span className="text-warning font-medium">{normalizedData.warnings.length} aviso(s)</span>
-          <span className="text-muted-foreground">-</span>
-          <span className="text-muted-foreground truncate">
-            {normalizedData.warnings[0]?.message}
-          </span>
-          {isAdminOrManager && (
-            <Button 
-              variant="link" 
-              size="sm" 
-              className="ml-auto h-auto p-0"
-              onClick={() => setDiagnosticsOpen(true)}
-            >
-              Ver detalhes
-            </Button>
-          )}
-        </div>
-      )}
 
       {/* Compatibility mode fallback */}
       {compatibilityMode ? (
@@ -675,45 +679,179 @@ export default function ModernDashboardViewer({
           onRowClick={handleRowClick}
         />
       ) : (
-        <>
-          {/* Section 1: Executive KPIs (single row, no duplications) */}
-          <ExecutiveKPIRow
-            data={aggregatedData}
-            previousData={comparisonEnabled ? previousAggregated : undefined}
-            dailyData={data}
-            goals={templateConfig.goals}
-            comparisonEnabled={comparisonEnabled}
-          />
+        <DashboardTabs 
+          activeTab={activeTab} 
+          onTabChange={handleTabChange}
+          enabledTabs={['executivo', 'funil', 'eficiencia', 'tendencias', 'detalhes']}
+        >
+          {/* Tab: Executivo */}
+          <TabsContent value="executivo" className="mt-6 space-y-6">
+            {/* Warnings summary (brief) */}
+            {warningsSummary && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-warning/10 border border-warning/20">
+                <span className="text-sm text-warning font-medium">{warningsSummary.message}</span>
+                <Button 
+                  variant="link" 
+                  size="sm" 
+                  className="ml-auto h-auto p-0 text-warning"
+                  onClick={() => handleTabChange('detalhes')}
+                >
+                  Ver detalhes
+                </Button>
+              </div>
+            )}
 
-          {/* Section 2: Funnel visualization with bottleneck detection */}
-          <ExecutiveFunnel
-            data={aggregatedData}
-            previousData={comparisonEnabled ? previousAggregated : undefined}
-            comparisonEnabled={comparisonEnabled}
-          />
+            {/* KPIs - single row */}
+            <ExecutiveKPIRow
+              data={aggregatedData}
+              previousData={comparisonEnabled ? previousAggregated : undefined}
+              dailyData={data}
+              goals={templateConfig.goals}
+              comparisonEnabled={comparisonEnabled}
+            />
 
-          {/* Section 3: Trend charts with better storytelling */}
-          <ExecutiveTrendCharts
-            data={data}
-            previousData={previousData}
-            goals={templateConfig.goals}
-            comparisonEnabled={comparisonEnabled}
-          />
+            {/* Funnel compact */}
+            <ExecutiveFunnel
+              data={aggregatedData}
+              previousData={comparisonEnabled ? previousAggregated : undefined}
+              comparisonEnabled={comparisonEnabled}
+            />
 
-          {/* Section 4: Diagnostics & Alerts */}
-          <DiagnosticsPanel
-            data={data}
-            aggregatedData={aggregatedData}
-            goals={templateConfig.goals}
-          />
+            {/* Trend charts (2 main ones) */}
+            <ExecutiveTrendCharts
+              data={data}
+              previousData={previousData}
+              goals={templateConfig.goals}
+              comparisonEnabled={comparisonEnabled}
+            />
 
-          {/* Section 5: Detailed data table */}
-          <EnhancedDataTable 
-            data={data}
-            spec={rawDashboardSpec}
-            onRowClick={handleRowClick}
-          />
-        </>
+            {/* Diagnostics summary */}
+            <DiagnosticsPanel
+              data={data}
+              aggregatedData={aggregatedData}
+              goals={templateConfig.goals}
+            />
+          </TabsContent>
+
+          {/* Tab: Funil */}
+          <TabsContent value="funil" className="mt-6 space-y-6">
+            <ExecutiveFunnel
+              data={aggregatedData}
+              previousData={comparisonEnabled ? previousAggregated : undefined}
+              comparisonEnabled={comparisonEnabled}
+              className="min-h-[400px]"
+            />
+            
+            {/* Funnel conversion table */}
+            <Card>
+              <CardContent className="p-6">
+                <h3 className="text-base font-medium mb-4">Taxas de Conversão por Etapa</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {[
+                    { key: 'taxa_entrada', label: 'Leads → Entrada' },
+                    { key: 'taxa_reuniao_agendada', label: 'Entrada → Agendamento' },
+                    { key: 'taxa_comparecimento', label: 'Agendado → Realizado' },
+                    { key: 'taxa_venda_pos_reuniao', label: 'Realizado → Venda' },
+                  ].map(({ key, label }) => {
+                    const value = aggregatedData[key];
+                    return (
+                      <div key={key} className="text-center p-4 rounded-lg bg-muted/50">
+                        <p className="text-xs text-muted-foreground mb-1">{label}</p>
+                        <p className="text-2xl font-semibold">
+                          {typeof value === 'number' && isFinite(value) 
+                            ? `${(value * 100).toFixed(1)}%` 
+                            : '—'}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Tab: Eficiência */}
+          <TabsContent value="eficiencia" className="mt-6 space-y-6">
+            {/* Cost efficiency KPIs */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[
+                { key: 'cpl', label: 'CPL' },
+                { key: 'cac', label: 'CAC' },
+                { key: 'custo_por_entrada', label: 'Custo por Entrada' },
+                { key: 'custo_por_reuniao_realizada', label: 'Custo por Reunião' },
+              ].map(({ key, label }) => {
+                const value = aggregatedData[key];
+                const goal = templateConfig.goals?.[key];
+                const isGood = goal && typeof value === 'number' ? value <= goal : undefined;
+                return (
+                  <Card key={key} className={isGood === false ? 'border-destructive/50' : isGood === true ? 'border-success/50' : ''}>
+                    <CardContent className="p-4">
+                      <p className="text-xs text-muted-foreground mb-1">{label}</p>
+                      <p className="text-2xl font-semibold">
+                        {typeof value === 'number' && isFinite(value) 
+                          ? `R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` 
+                          : '—'}
+                      </p>
+                      {goal && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Meta: R$ {goal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+
+            {/* Cost efficiency trend chart */}
+            <ExecutiveTrendCharts
+              data={data}
+              previousData={previousData}
+              goals={templateConfig.goals}
+              comparisonEnabled={comparisonEnabled}
+            />
+          </TabsContent>
+
+          {/* Tab: Tendências */}
+          <TabsContent value="tendencias" className="mt-6 space-y-6">
+            <ExecutiveTrendCharts
+              data={data}
+              previousData={previousData}
+              goals={templateConfig.goals}
+              comparisonEnabled={comparisonEnabled}
+            />
+          </TabsContent>
+
+          {/* Tab: Detalhes */}
+          <TabsContent value="detalhes" className="mt-6 space-y-6">
+            {/* Full warnings if any */}
+            {normalizedData && normalizedData.warnings.length > 0 && (
+              <Card>
+                <CardContent className="p-4">
+                  <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-warning" />
+                    Qualidade dos Dados ({normalizedData.warnings.length} aviso{normalizedData.warnings.length > 1 ? 's' : ''})
+                  </h3>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    {normalizedData.warnings.map((w, i) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <span className="text-warning">•</span>
+                        <span>{w.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Full data table */}
+            <EnhancedDataTable 
+              data={data}
+              spec={rawDashboardSpec}
+              onRowClick={handleRowClick}
+            />
+          </TabsContent>
+        </DashboardTabs>
       )}
 
       {/* Detail Drawer */}
