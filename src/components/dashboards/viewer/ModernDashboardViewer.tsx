@@ -25,6 +25,12 @@ import { generateTemplateConfig, TemplateConfig, getDefaultTemplateConfig } from
 import { normalizeDataset, NormalizedDataset, formatValue } from './datasetNormalizer';
 import { parseDashboardSpec, generateSpecFromData, DashboardSpec } from './types/dashboardSpec';
 
+// New professional components
+import ExecutiveKPIGrid from './ExecutiveKPIGrid';
+import FunnelChart from './FunnelChart';
+import TrendChartsModern from './TrendChartsModern';
+import AlertsPanel from './AlertsPanel';
+
 import ExecutiveView from '../templates/ExecutiveView';
 import FunnelView from '../templates/FunnelView';
 import CostEfficiencyView from '../templates/CostEfficiencyView';
@@ -677,27 +683,33 @@ export default function ModernDashboardViewer({
         />
       ) : (
         <>
-          {/* KPI Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-            {templateConfig.kpis.slice(0, 7).map(kpi => {
-              const value = aggregatedData[kpi];
-              if (value === undefined || !isFinite(value)) return null;
-              
-              const formatType = kpi.includes('custo') || kpi === 'cpl' || kpi === 'cac' 
-                ? 'currency' 
-                : kpi.includes('taxa_') ? 'percent' : 'integer';
-              
-              const goalDirection = kpi === 'cpl' || kpi === 'cac' || kpi.includes('custo') 
-                ? 'lower_better' 
-                : 'higher_better';
-              
-              return (
-                <KPICard
-                  key={kpi}
-                  label={kpi.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                  value={value}
-                  previousValue={comparisonEnabled ? previousAggregated[kpi] : undefined}
-                  goal={templateConfig.goals[kpi]}
+          {/* Executive KPI Grid - Professional layout */}
+          <ExecutiveKPIGrid
+            aggregatedData={aggregatedData}
+            previousData={comparisonEnabled ? previousAggregated : undefined}
+            seriesData={data}
+            comparisonEnabled={comparisonEnabled}
+          />
+
+          {/* Funnel Visualization */}
+          <FunnelChart
+            data={aggregatedData}
+            previousData={comparisonEnabled ? previousAggregated : undefined}
+            comparisonEnabled={comparisonEnabled}
+          />
+
+          {/* Trend Charts - Modern */}
+          <TrendChartsModern
+            data={data}
+            previousData={comparisonEnabled ? previousData : undefined}
+            comparisonEnabled={comparisonEnabled}
+          />
+
+          {/* Alerts & Insights Panel */}
+          <AlertsPanel
+            data={data}
+            aggregatedData={aggregatedData}
+          />
                   goalDirection={goalDirection as any}
                   format={formatType as any}
                   sparklineData={sparklines[kpi]}
