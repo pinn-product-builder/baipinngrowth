@@ -231,6 +231,59 @@ export type Database = {
           },
         ]
       }
+      audit_logs: {
+        Row: {
+          action: string
+          actor_user_id: string | null
+          after_data: Json | null
+          before_data: Json | null
+          created_at: string | null
+          entity_id: string | null
+          entity_name: string | null
+          entity_type: string
+          id: string
+          ip_address: string | null
+          tenant_id: string | null
+          user_agent: string | null
+        }
+        Insert: {
+          action: string
+          actor_user_id?: string | null
+          after_data?: Json | null
+          before_data?: Json | null
+          created_at?: string | null
+          entity_id?: string | null
+          entity_name?: string | null
+          entity_type: string
+          id?: string
+          ip_address?: string | null
+          tenant_id?: string | null
+          user_agent?: string | null
+        }
+        Update: {
+          action?: string
+          actor_user_id?: string | null
+          after_data?: Json | null
+          before_data?: Json | null
+          created_at?: string | null
+          entity_id?: string | null
+          entity_name?: string | null
+          entity_type?: string
+          id?: string
+          ip_address?: string | null
+          tenant_id?: string | null
+          user_agent?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_logs_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dashboard_categories: {
         Row: {
           created_at: string | null
@@ -263,12 +316,95 @@ export type Database = {
           },
         ]
       }
+      dashboard_permissions: {
+        Row: {
+          can_edit: boolean | null
+          can_view: boolean | null
+          created_at: string | null
+          dashboard_id: string
+          id: string
+          role: Database["public"]["Enums"]["app_role"] | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          can_edit?: boolean | null
+          can_view?: boolean | null
+          created_at?: string | null
+          dashboard_id: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"] | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          can_edit?: boolean | null
+          can_view?: boolean | null
+          created_at?: string | null
+          dashboard_id?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"] | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dashboard_permissions_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: false
+            referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dashboard_spec_versions: {
+        Row: {
+          created_at: string | null
+          created_by: string | null
+          dashboard_id: string
+          dashboard_layout: Json | null
+          dashboard_spec: Json | null
+          id: string
+          notes: string | null
+          version: number
+        }
+        Insert: {
+          created_at?: string | null
+          created_by?: string | null
+          dashboard_id: string
+          dashboard_layout?: Json | null
+          dashboard_spec?: Json | null
+          id?: string
+          notes?: string | null
+          version: number
+        }
+        Update: {
+          created_at?: string | null
+          created_by?: string | null
+          dashboard_id?: string
+          dashboard_layout?: Json | null
+          dashboard_spec?: Json | null
+          id?: string
+          notes?: string | null
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dashboard_spec_versions_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: false
+            referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dashboards: {
         Row: {
           allowed_domains: string[] | null
           cache_ttl_seconds: number | null
           category_id: string | null
           created_at: string
+          dashboard_layout: Json | null
           dashboard_spec: Json | null
           data_source_id: string | null
           default_filters: Json | null
@@ -299,6 +435,7 @@ export type Database = {
           cache_ttl_seconds?: number | null
           category_id?: string | null
           created_at?: string
+          dashboard_layout?: Json | null
           dashboard_spec?: Json | null
           data_source_id?: string | null
           default_filters?: Json | null
@@ -329,6 +466,7 @@ export type Database = {
           cache_ttl_seconds?: number | null
           category_id?: string | null
           created_at?: string
+          dashboard_layout?: Json | null
           dashboard_spec?: Json | null
           data_source_id?: string | null
           default_filters?: Json | null
@@ -370,7 +508,58 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "dashboards_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "tenant_data_sources_safe"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "dashboards_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      feature_flags: {
+        Row: {
+          config: Json | null
+          created_at: string | null
+          description: string | null
+          enabled: boolean | null
+          id: string
+          is_global: boolean | null
+          name: string
+          tenant_id: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          config?: Json | null
+          created_at?: string | null
+          description?: string | null
+          enabled?: boolean | null
+          id?: string
+          is_global?: boolean | null
+          name: string
+          tenant_id?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          config?: Json | null
+          created_at?: string | null
+          description?: string | null
+          enabled?: boolean | null
+          id?: string
+          is_global?: boolean | null
+          name?: string
+          tenant_id?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "feature_flags_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -482,6 +671,56 @@ export type Database = {
             foreignKeyName: "scheduled_reports_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tenant_branding: {
+        Row: {
+          created_at: string | null
+          custom_css: string | null
+          custom_domain: string | null
+          display_name: string | null
+          favicon_url: string | null
+          id: string
+          logo_url: string | null
+          primary_color: string | null
+          secondary_color: string | null
+          tenant_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          custom_css?: string | null
+          custom_domain?: string | null
+          display_name?: string | null
+          favicon_url?: string | null
+          id?: string
+          logo_url?: string | null
+          primary_color?: string | null
+          secondary_color?: string | null
+          tenant_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          custom_css?: string | null
+          custom_domain?: string | null
+          display_name?: string | null
+          favicon_url?: string | null
+          id?: string
+          logo_url?: string | null
+          primary_color?: string | null
+          secondary_color?: string | null
+          tenant_id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_branding_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
             referencedRelation: "tenants"
             referencedColumns: ["id"]
           },
@@ -664,7 +903,65 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      tenant_data_sources_safe: {
+        Row: {
+          allowed_views: string[] | null
+          anon_key_present: boolean | null
+          auth_mode: string | null
+          base_url: string | null
+          created_at: string | null
+          id: string | null
+          is_active: boolean | null
+          name: string | null
+          project_ref: string | null
+          project_url: string | null
+          service_role_key_present: boolean | null
+          tenant_id: string | null
+          type: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          allowed_views?: string[] | null
+          anon_key_present?: boolean | null
+          auth_mode?: string | null
+          base_url?: string | null
+          created_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          name?: string | null
+          project_ref?: string | null
+          project_url?: string | null
+          service_role_key_present?: boolean | null
+          tenant_id?: string | null
+          type?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          allowed_views?: string[] | null
+          anon_key_present?: boolean | null
+          auth_mode?: string | null
+          base_url?: string | null
+          created_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          name?: string | null
+          project_ref?: string | null
+          project_url?: string | null
+          service_role_key_present?: boolean | null
+          tenant_id?: string | null
+          type?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_data_sources_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       get_user_tenant_id: { Args: { _user_id: string }; Returns: string }
