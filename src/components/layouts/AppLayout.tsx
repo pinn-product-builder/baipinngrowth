@@ -20,7 +20,9 @@ import {
   Bot,
   Sun,
   Moon,
-  Monitor
+  Monitor,
+  Layers,
+  GitBranch
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -45,6 +47,8 @@ const navItems: NavItem[] = [
   { label: 'Usuários', href: '/admin/users', icon: Users, adminOnly: true },
   { label: 'Gerenciar Dashboards', href: '/admin/dashboards', icon: BarChart3, adminOnly: true },
   { label: 'Data Sources', href: '/admin/data-sources', icon: Database, adminOnly: true },
+  { label: 'Datasets', href: '/admin/datasets', icon: Layers, adminOnly: true },
+  { label: 'Relacionamentos', href: '/admin/relationships', icon: GitBranch, adminOnly: true },
   { label: 'Relatórios', href: '/admin/scheduled-reports', icon: Calendar, adminOnly: true },
   { label: 'Feature Flags', href: '/admin/feature-flags', icon: Flag, adminOnly: true },
   { label: 'IA / OpenAI', href: '/admin/ai-settings', icon: Bot, adminOnly: true },
