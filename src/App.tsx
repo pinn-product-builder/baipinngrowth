@@ -19,6 +19,7 @@ import AdminDashboards from "@/pages/admin/AdminDashboards";
 import DataSources from "@/pages/admin/DataSources";
 import ActivityLogs from "@/pages/admin/ActivityLogs";
 import ScheduledReports from "@/pages/admin/ScheduledReports";
+import DashboardHealth from "@/pages/admin/DashboardHealth";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -80,6 +81,11 @@ const App = () => (
               <Route path="/admin/scheduled-reports" element={
                 <ProtectedRoute requireAdmin>
                   <ScheduledReports />
+                </ProtectedRoute>
+              } />
+              <Route path="/admin/health" element={
+                <ProtectedRoute requireAdmin>
+                  <DashboardHealth />
                 </ProtectedRoute>
               } />
             </Route>

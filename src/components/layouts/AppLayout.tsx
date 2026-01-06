@@ -39,6 +39,7 @@ const navItems: NavItem[] = [
   { label: 'Gerenciar Dashboards', href: '/admin/dashboards', icon: BarChart3, adminOnly: true },
   { label: 'Data Sources', href: '/admin/data-sources', icon: Database, adminOnly: true },
   { label: 'Relatórios', href: '/admin/scheduled-reports', icon: Calendar, adminOnly: true },
+  { label: 'Health', href: '/admin/health', icon: Activity, adminOnly: true },
   { label: 'Logs de Atividade', href: '/admin/activity-logs', icon: Activity, adminOnly: true },
 ];
 
