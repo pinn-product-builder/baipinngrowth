@@ -22,6 +22,7 @@ import ScheduledReports from "@/pages/admin/ScheduledReports";
 import DashboardHealth from "@/pages/admin/DashboardHealth";
 import FeatureFlags from "@/pages/admin/FeatureFlags";
 import AuditLogs from "@/pages/admin/AuditLogs";
+import TenantAISettings from "@/pages/admin/TenantAISettings";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -98,6 +99,11 @@ const App = () => (
               <Route path="/admin/audit-logs" element={
                 <ProtectedRoute requireAdmin>
                   <AuditLogs />
+                </ProtectedRoute>
+              } />
+              <Route path="/admin/ai-settings" element={
+                <ProtectedRoute requireAdmin>
+                  <TenantAISettings />
                 </ProtectedRoute>
               } />
             </Route>
