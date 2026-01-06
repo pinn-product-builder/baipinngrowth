@@ -50,3 +50,6 @@ verify_jwt = false
 
 [functions.ai-test-connection]
 verify_jwt = false
+
+[functions.dashboard-context-v2]
+verify_jwt = false

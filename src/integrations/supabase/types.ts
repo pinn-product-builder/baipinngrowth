@@ -385,6 +385,57 @@ export type Database = {
           },
         ]
       }
+      dashboard_context_cache: {
+        Row: {
+          cache_hash: string
+          created_at: string
+          dashboard_id: string
+          end_date: string
+          expires_at: string
+          id: string
+          payload: Json
+          start_date: string
+          tenant_id: string
+        }
+        Insert: {
+          cache_hash: string
+          created_at?: string
+          dashboard_id: string
+          end_date: string
+          expires_at: string
+          id?: string
+          payload: Json
+          start_date: string
+          tenant_id: string
+        }
+        Update: {
+          cache_hash?: string
+          created_at?: string
+          dashboard_id?: string
+          end_date?: string
+          expires_at?: string
+          id?: string
+          payload?: Json
+          start_date?: string
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dashboard_context_cache_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: false
+            referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dashboard_context_cache_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dashboard_permissions: {
         Row: {
           can_edit: boolean | null
@@ -641,6 +692,7 @@ export type Database = {
           ai_daily_limit_messages: number | null
           ai_daily_limit_tokens: number | null
           ai_enabled: boolean | null
+          ai_response_mode: string | null
           ai_style: string | null
           created_at: string
           full_name: string | null
@@ -656,6 +708,7 @@ export type Database = {
           ai_daily_limit_messages?: number | null
           ai_daily_limit_tokens?: number | null
           ai_enabled?: boolean | null
+          ai_response_mode?: string | null
           ai_style?: string | null
           created_at?: string
           full_name?: string | null
@@ -671,6 +724,7 @@ export type Database = {
           ai_daily_limit_messages?: number | null
           ai_daily_limit_tokens?: number | null
           ai_enabled?: boolean | null
+          ai_response_mode?: string | null
           ai_style?: string | null
           created_at?: string
           full_name?: string | null
