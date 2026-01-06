@@ -25,6 +25,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
+import { useAuditLog } from '@/hooks/useAuditLog';
 import { Building2, Plus, Search, MoreHorizontal, Pencil, Power } from 'lucide-react';
 import {
   DropdownMenu,
@@ -53,6 +54,7 @@ export default function Tenants() {
   const [formData, setFormData] = useState({ name: '', slug: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
+  const { logCreate, logUpdate } = useAuditLog();
 
   useEffect(() => {
     fetchTenants();
@@ -104,17 +106,21 @@ export default function Tenants() {
     setIsSubmitting(true);
     try {
       if (editingTenant) {
+        const beforeData = { name: editingTenant.name, slug: editingTenant.slug };
         const { error } = await supabase
           .from('tenants')
           .update({ name: formData.name, slug: formData.slug })
           .eq('id', editingTenant.id);
 
         if (error) throw error;
+        await logUpdate('tenant', editingTenant.id, formData.name, beforeData, { name: formData.name, slug: formData.slug });
         toast({ title: 'Cliente atualizado', description: 'Alterações salvas com sucesso.' });
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('tenants')
-          .insert({ name: formData.name, slug: formData.slug });
+          .insert({ name: formData.name, slug: formData.slug })
+          .select()
+          .single();
 
         if (error) {
           if (error.code === '23505') {
@@ -123,6 +129,7 @@ export default function Tenants() {
           }
           throw error;
         }
+        await logCreate('tenant', data.id, formData.name, { name: formData.name, slug: formData.slug });
         toast({ title: 'Cliente criado', description: 'Novo cliente adicionado com sucesso.' });
       }
       
@@ -139,12 +146,14 @@ export default function Tenants() {
 
   const toggleTenantStatus = async (tenant: Tenant) => {
     try {
+      const newStatus = !tenant.is_active;
       const { error } = await supabase
         .from('tenants')
-        .update({ is_active: !tenant.is_active })
+        .update({ is_active: newStatus })
         .eq('id', tenant.id);
 
       if (error) throw error;
+      await logUpdate('tenant', tenant.id, tenant.name, { is_active: tenant.is_active }, { is_active: newStatus });
       toast({ 
         title: tenant.is_active ? 'Cliente desativado' : 'Cliente ativado',
         description: `${tenant.name} agora está ${tenant.is_active ? 'inativo' : 'ativo'}.`

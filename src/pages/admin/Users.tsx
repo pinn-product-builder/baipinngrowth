@@ -40,6 +40,7 @@ import {
 } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
+import { useAuditLog } from '@/hooks/useAuditLog';
 import { Users as UsersIcon, Plus, Search, MoreHorizontal, Power, Mail, Send, Clock, UserPlus } from 'lucide-react';
 import {
   DropdownMenu,
@@ -105,6 +106,7 @@ export default function Users() {
   const [activeTab, setActiveTab] = useState('users');
   const { toast } = useToast();
   const { logActivity } = useActivityLogger();
+  const { logCreate, logUpdate } = useAuditLog();
 
   const isAdmin = userRole === 'admin';
   const isManager = userRole === 'manager';
@@ -260,6 +262,7 @@ export default function Users() {
       if (error) throw error;
       if (data.error) throw new Error(data.error);
 
+      await logCreate('user_invite', data.invite_id || formData.email, formData.email, { email: formData.email, role: formData.role });
       toast({ title: 'Convite enviado', description: `Convite enviado para ${formData.email}` });
       setIsDialogOpen(false);
       setFormData({ email: '', fullName: '', tenantId: isManager ? currentUserTenantId || '' : '', role: 'viewer' });
@@ -293,14 +296,16 @@ export default function Users() {
 
   const toggleUserStatus = async (user: UserProfile) => {
     try {
+      const newActive = !user.is_active;
       const newStatus = user.is_active ? 'disabled' : 'active';
       const { error } = await supabase
         .from('profiles')
-        .update({ is_active: !user.is_active, status: newStatus })
+        .update({ is_active: newActive, status: newStatus })
         .eq('id', user.id);
 
       if (error) throw error;
       logActivity(user.is_active ? 'deactivate_user' : 'create_user', 'user', user.id, { name: user.full_name });
+      await logUpdate('user', user.id, user.full_name || user.id, { is_active: user.is_active }, { is_active: newActive });
       toast({ 
         title: user.is_active ? 'Usuário desativado' : 'Usuário ativado',
         description: `A conta agora está ${user.is_active ? 'inativa' : 'ativa'}.`

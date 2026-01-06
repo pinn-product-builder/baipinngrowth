@@ -33,6 +33,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
+import { useAuditLog } from '@/hooks/useAuditLog';
 import { Database, Plus, Search, MoreHorizontal, Pencil, Power, CheckCircle, XCircle, Loader2, Trash2, Key, RefreshCw, Lock, Unlock, Globe, Webhook, AlertCircle } from 'lucide-react';
 import {
   DropdownMenu,
@@ -128,6 +129,7 @@ export default function DataSources() {
   const [selectedType, setSelectedType] = useState<DataSourceType>('proxy_webhook');
   
   const { toast } = useToast();
+  const { logCreate, logUpdate, logDelete } = useAuditLog();
 
   useEffect(() => {
     fetchData();
@@ -199,19 +201,24 @@ export default function DataSources() {
       };
 
       if (editingDataSource) {
+        const beforeData = { name: editingDataSource.name, base_url: editingDataSource.base_url };
         const { error } = await supabase
           .from('tenant_data_sources')
           .update(payload)
           .eq('id', editingDataSource.id);
 
         if (error) throw error;
+        await logUpdate('data_source', editingDataSource.id, proxyFormData.name, beforeData, payload);
         toast({ title: 'Data Source atualizado', description: 'Alterações salvas com sucesso.' });
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('tenant_data_sources')
-          .insert(payload);
+          .insert(payload)
+          .select()
+          .single();
 
         if (error) throw error;
+        await logCreate('data_source', data.id, proxyFormData.name, { type: 'proxy_webhook', base_url: proxyFormData.baseUrl });
         toast({ title: 'Proxy criado', description: 'Novo proxy/webhook data source adicionado.' });
       }
       
@@ -241,19 +248,24 @@ export default function DataSources() {
       };
 
       if (editingDataSource) {
+        const beforeData = { name: editingDataSource.name, project_url: editingDataSource.project_url };
         const { error } = await supabase
           .from('tenant_data_sources')
           .update(payload)
           .eq('id', editingDataSource.id);
 
         if (error) throw error;
+        await logUpdate('data_source', editingDataSource.id, formData.name, beforeData, payload);
         toast({ title: 'Data Source atualizado', description: 'Alterações salvas com sucesso.' });
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('tenant_data_sources')
-          .insert(payload);
+          .insert(payload)
+          .select()
+          .single();
 
         if (error) throw error;
+        await logCreate('data_source', data.id, formData.name, { type: 'supabase', project_url: formData.projectUrl });
         toast({ title: 'Data Source criado', description: 'Novo data source adicionado. Configure as credenciais.' });
       }
       
@@ -329,12 +341,14 @@ export default function DataSources() {
 
   const toggleStatus = async (ds: DataSource) => {
     try {
+      const newStatus = !ds.is_active;
       const { error } = await supabase
         .from('tenant_data_sources')
-        .update({ is_active: !ds.is_active })
+        .update({ is_active: newStatus })
         .eq('id', ds.id);
 
       if (error) throw error;
+      await logUpdate('data_source', ds.id, ds.name, { is_active: ds.is_active }, { is_active: newStatus });
       toast({ 
         title: ds.is_active ? 'Data Source desativado' : 'Data Source ativado',
         description: `${ds.name} está agora ${ds.is_active ? 'inativo' : 'ativo'}.`
@@ -542,6 +556,7 @@ export default function DataSources() {
         .eq('id', ds.id);
 
       if (error) throw error;
+      await logDelete('data_source', ds.id, ds.name, { type: ds.type, name: ds.name });
       toast({ title: 'Data Source excluído', description: `${ds.name} foi removido.` });
       fetchData();
     } catch (error: any) {

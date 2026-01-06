@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
+import { useAuditLog } from '@/hooks/useAuditLog';
 import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown, Copy, Database, Wand2, Upload } from 'lucide-react';
 import {
   DropdownMenu,
@@ -122,6 +123,7 @@ export default function AdminDashboards() {
   const [isImporting, setIsImporting] = useState(false);
   const { toast } = useToast();
   const { logActivity } = useActivityLogger();
+  const { logCreate, logUpdate, logDelete, logPublish, logUnpublish } = useAuditLog();
 
   useEffect(() => {
     fetchData();
@@ -222,6 +224,7 @@ export default function AdminDashboards() {
       }
 
       if (editingDashboard) {
+        const beforeData = { name: editingDashboard.name, source_kind: editingDashboard.source_kind };
         const { error } = await supabase
           .from('dashboards')
           .update(payload)
@@ -229,6 +232,7 @@ export default function AdminDashboards() {
 
         if (error) throw error;
         logActivity('update_dashboard', 'dashboard', editingDashboard.id, { name: formData.name });
+        await logUpdate('dashboard', editingDashboard.id, formData.name, beforeData, payload);
         toast({ title: 'Dashboard atualizado', description: 'Alterações salvas com sucesso.' });
       } else {
         const { data, error } = await supabase
@@ -239,6 +243,7 @@ export default function AdminDashboards() {
 
         if (error) throw error;
         logActivity('create_dashboard', 'dashboard', data.id, { name: formData.name });
+        await logCreate('dashboard', data.id, formData.name, payload);
         toast({ title: 'Dashboard criado', description: 'Novo dashboard adicionado com sucesso.' });
       }
       
@@ -296,13 +301,19 @@ export default function AdminDashboards() {
 
   const toggleDashboardStatus = async (dashboard: Dashboard) => {
     try {
+      const newStatus = !dashboard.is_active;
       const { error } = await supabase
         .from('dashboards')
-        .update({ is_active: !dashboard.is_active })
+        .update({ is_active: newStatus })
         .eq('id', dashboard.id);
 
       if (error) throw error;
       logActivity(dashboard.is_active ? 'deactivate_dashboard' : 'activate_dashboard', 'dashboard', dashboard.id, { name: dashboard.name });
+      if (newStatus) {
+        await logPublish('dashboard', dashboard.id, dashboard.name);
+      } else {
+        await logUnpublish('dashboard', dashboard.id, dashboard.name);
+      }
       toast({ 
         title: dashboard.is_active ? 'Dashboard desativado' : 'Dashboard ativado',
         description: `${dashboard.name} está agora ${dashboard.is_active ? 'inativo' : 'ativo'}.`
@@ -336,6 +347,7 @@ export default function AdminDashboards() {
 
       if (error) throw error;
       logActivity('create_dashboard', 'dashboard', data.id, { name: data.name, duplicated_from: dashboard.id });
+      await logCreate('dashboard', data.id, data.name, { duplicated_from: dashboard.id, name: data.name });
       toast({ title: 'Dashboard duplicado', description: 'Cópia criada com sucesso. Edite e ative quando pronto.' });
       fetchData();
     } catch (error: any) {

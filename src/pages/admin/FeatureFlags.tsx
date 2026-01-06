@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { useAuditLog } from '@/hooks/useAuditLog';
 import { Flag, Plus, Save, Globe, Building2 } from 'lucide-react';
 
 interface Tenant {
@@ -59,6 +60,7 @@ export default function FeatureFlags() {
     config: '{}',
   });
   const { toast } = useToast();
+  const { logCreate, logUpdate } = useAuditLog();
 
   const fetchData = async () => {
     try {
@@ -94,15 +96,17 @@ export default function FeatureFlags() {
 
   const handleToggle = async (flag: FeatureFlag) => {
     try {
+      const newEnabled = !flag.enabled;
       const { error } = await supabase
         .from('feature_flags')
-        .update({ enabled: !flag.enabled, updated_at: new Date().toISOString() })
+        .update({ enabled: newEnabled, updated_at: new Date().toISOString() })
         .eq('id', flag.id);
 
       if (error) throw error;
       
-      setFlags(prev => prev.map(f => f.id === flag.id ? { ...f, enabled: !f.enabled } : f));
-      toast({ title: `Flag "${flag.name}" ${!flag.enabled ? 'habilitada' : 'desabilitada'}` });
+      await logUpdate('feature_flag', flag.id, flag.name, { enabled: flag.enabled }, { enabled: newEnabled });
+      setFlags(prev => prev.map(f => f.id === flag.id ? { ...f, enabled: newEnabled } : f));
+      toast({ title: `Flag "${flag.name}" ${newEnabled ? 'habilitada' : 'desabilitada'}` });
     } catch (error: any) {
       toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     }
@@ -155,17 +159,22 @@ export default function FeatureFlags() {
       };
 
       if (editingFlag) {
+        const beforeData = { name: editingFlag.name, enabled: editingFlag.enabled, config: editingFlag.config };
         const { error } = await supabase
           .from('feature_flags')
           .update(data)
           .eq('id', editingFlag.id);
         if (error) throw error;
+        await logUpdate('feature_flag', editingFlag.id, formData.name, beforeData, data);
         toast({ title: 'Flag atualizada' });
       } else {
-        const { error } = await supabase
+        const { data: newFlag, error } = await supabase
           .from('feature_flags')
-          .insert(data);
+          .insert(data)
+          .select()
+          .single();
         if (error) throw error;
+        await logCreate('feature_flag', newFlag.id, formData.name, data);
         toast({ title: 'Flag criada' });
       }
 
