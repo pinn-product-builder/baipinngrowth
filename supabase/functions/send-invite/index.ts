@@ -50,35 +50,45 @@ Deno.serve(async (req) => {
 
     const resend = new Resend(resendApiKey)
 
-    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-      auth: { autoRefreshToken: false, persistSession: false }
-    })
-
     // Verify caller is admin or manager
     const authHeader = req.headers.get('Authorization')
-    if (!authHeader) {
+    if (!authHeader?.startsWith('Bearer ')) {
       return new Response(
         JSON.stringify({ error: 'Unauthorized' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
+    // Create client with user's auth for claim validation
+    const supabaseAuth = createClient(supabaseUrl, Deno.env.get('SUPABASE_ANON_KEY')!, {
+      global: { headers: { Authorization: authHeader } }
+    })
+
     const token = authHeader.replace('Bearer ', '')
-    const { data: { user }, error: userError } = await supabase.auth.getUser(token)
+    const { data: claimsData, error: claimsError } = await supabaseAuth.auth.getClaims(token)
     
-    if (userError || !user) {
+    if (claimsError || !claimsData?.claims) {
+      console.error('Claims error:', claimsError)
       return new Response(
         JSON.stringify({ error: 'Invalid token' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
+    const userId = claimsData.claims.sub as string
+    const userEmail = claimsData.claims.email as string
+    
+    // Create admin client for database operations
+    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { autoRefreshToken: false, persistSession: false }
+    })
+
     // Rate limit: 50 invites per user per hour
-    const rateLimit = checkRateLimit(user.id, 50, 3600000);
+    const rateLimit = checkRateLimit(userId, 50, 3600000);
     
     if (!rateLimit.allowed) {
       const retryAfter = Math.ceil((rateLimit.resetAt - Date.now()) / 1000);
-      console.log(`Rate limit exceeded for send-invite by user: ${user.id}`);
+      console.log(`Rate limit exceeded for send-invite by user: ${userId}`);
       return new Response(
         JSON.stringify({ error: 'Too many invitations sent. Please try again later.', retryAfter }),
         { 
@@ -96,7 +106,7 @@ Deno.serve(async (req) => {
     const { data: roleData } = await supabase
       .from('user_roles')
       .select('role')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .single()
 
     const isAdmin = roleData?.role === 'admin'
@@ -152,7 +162,7 @@ Deno.serve(async (req) => {
       const { data: profileData } = await supabase
         .from('profiles')
         .select('tenant_id')
-        .eq('id', user.id)
+        .eq('id', userId)
         .single()
 
       if (!tenantId || tenantId !== profileData?.tenant_id) {
@@ -213,7 +223,7 @@ Deno.serve(async (req) => {
           expires_at: expiresAt.toISOString(),
           role,
           tenant_id: tenantId || null,
-          invited_by: user.id
+          invited_by: userId
         })
         .eq('id', existingInvite.id)
 
@@ -228,7 +238,7 @@ Deno.serve(async (req) => {
           token: token_value,
           expires_at: expiresAt.toISOString(),
           tenant_id: tenantId || null,
-          invited_by: user.id,
+          invited_by: userId,
           accepted: false
         })
 
@@ -250,9 +260,9 @@ Deno.serve(async (req) => {
     const { data: inviterProfile } = await supabase
       .from('profiles')
       .select('full_name')
-      .eq('id', user.id)
+      .eq('id', userId)
       .single()
-    const inviterName = inviterProfile?.full_name || user.email
+    const inviterName = inviterProfile?.full_name || userEmail
 
     // Build invite URL
     const baseUrl = req.headers.get('origin') || 'https://uiljecxfzlebocjenkmn.lovableproject.com'
@@ -300,14 +310,14 @@ Deno.serve(async (req) => {
     await supabase
       .from('activity_logs')
       .insert({
-        user_id: user.id,
+        user_id: userId,
         action: 'invite_sent',
         entity_type: 'user',
         entity_id: null,
         details: { email, role, tenant_id: tenantId, resent: !!existingInvite }
       })
 
-    console.log(`Invite sent to ${email} by ${user.email}`)
+    console.log(`Invite sent to ${email} by ${userEmail}`)
 
     return new Response(
       JSON.stringify({ 
