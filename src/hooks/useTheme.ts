@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 
 export type Theme = 'light' | 'dark' | 'system';
 
@@ -16,6 +18,8 @@ function applyTheme(theme: 'light' | 'dark') {
 }
 
 export function useTheme() {
+  const { user } = useAuth();
+  
   const [theme, setThemeState] = useState<Theme>(() => {
     if (typeof window === 'undefined') return 'system';
     return (localStorage.getItem(THEME_STORAGE_KEY) as Theme) || 'system';
@@ -27,6 +31,37 @@ export function useTheme() {
     if (stored === 'light' || stored === 'dark') return stored;
     return getSystemTheme();
   });
+  
+  const [isLoading, setIsLoading] = useState(true);
+  
+  // Load theme from profile on mount
+  useEffect(() => {
+    const loadThemeFromProfile = async () => {
+      if (!user) {
+        setIsLoading(false);
+        return;
+      }
+      
+      try {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('theme')
+          .eq('id', user.id)
+          .single();
+        
+        if (profile?.theme && ['light', 'dark', 'system'].includes(profile.theme)) {
+          setThemeState(profile.theme as Theme);
+          localStorage.setItem(THEME_STORAGE_KEY, profile.theme);
+        }
+      } catch (error) {
+        console.error('Error loading theme from profile:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    loadThemeFromProfile();
+  }, [user]);
   
   // Apply theme on mount and when it changes
   useEffect(() => {
@@ -52,17 +87,27 @@ export function useTheme() {
     return () => mediaQuery.removeEventListener('change', handler);
   }, [theme]);
   
-  const setTheme = useCallback((newTheme: Theme) => {
+  const setTheme = useCallback(async (newTheme: Theme) => {
     setThemeState(newTheme);
-  }, []);
+    localStorage.setItem(THEME_STORAGE_KEY, newTheme);
+    
+    // Persist to profile if user is logged in
+    if (user) {
+      try {
+        await supabase
+          .from('profiles')
+          .update({ theme: newTheme })
+          .eq('id', user.id);
+      } catch (error) {
+        console.error('Error saving theme to profile:', error);
+      }
+    }
+  }, [user]);
   
   const toggleTheme = useCallback(() => {
-    setThemeState(prev => {
-      if (prev === 'light') return 'dark';
-      if (prev === 'dark') return 'system';
-      return 'light';
-    });
-  }, []);
+    const nextTheme = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
+    setTheme(nextTheme);
+  }, [theme, setTheme]);
   
   return {
     theme,
@@ -70,6 +115,7 @@ export function useTheme() {
     setTheme,
     toggleTheme,
     isDark: resolvedTheme === 'dark',
+    isLoading,
   };
 }
 
