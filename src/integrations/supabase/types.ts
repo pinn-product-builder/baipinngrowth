@@ -44,6 +44,193 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_auto_insights: {
+        Row: {
+          alerts: Json | null
+          created_at: string
+          dashboard_id: string
+          date: string
+          forecast: Json | null
+          highlights: Json | null
+          id: string
+          meta: Json | null
+          summary: string
+          tenant_id: string
+        }
+        Insert: {
+          alerts?: Json | null
+          created_at?: string
+          dashboard_id: string
+          date: string
+          forecast?: Json | null
+          highlights?: Json | null
+          id?: string
+          meta?: Json | null
+          summary: string
+          tenant_id: string
+        }
+        Update: {
+          alerts?: Json | null
+          created_at?: string
+          dashboard_id?: string
+          date?: string
+          forecast?: Json | null
+          highlights?: Json | null
+          id?: string
+          meta?: Json | null
+          summary?: string
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_auto_insights_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: false
+            referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_auto_insights_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_conversations: {
+        Row: {
+          created_at: string
+          dashboard_id: string | null
+          end_date: string | null
+          id: string
+          start_date: string | null
+          tenant_id: string
+          title: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          dashboard_id?: string | null
+          end_date?: string | null
+          id?: string
+          start_date?: string | null
+          tenant_id: string
+          title?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          dashboard_id?: string | null
+          end_date?: string | null
+          id?: string
+          start_date?: string | null
+          tenant_id?: string
+          title?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_conversations_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: false
+            referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_conversations_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_messages: {
+        Row: {
+          content: string
+          conversation_id: string
+          created_at: string
+          id: string
+          meta: Json | null
+          role: string
+        }
+        Insert: {
+          content: string
+          conversation_id: string
+          created_at?: string
+          id?: string
+          meta?: Json | null
+          role: string
+        }
+        Update: {
+          content?: string
+          conversation_id?: string
+          created_at?: string
+          id?: string
+          meta?: Json | null
+          role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_messages_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "ai_conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_usage_daily: {
+        Row: {
+          created_at: string
+          date: string
+          estimated_cost: number | null
+          id: string
+          requests: number | null
+          tenant_id: string
+          tokens_in: number | null
+          tokens_out: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          date: string
+          estimated_cost?: number | null
+          id?: string
+          requests?: number | null
+          tenant_id: string
+          tokens_in?: number | null
+          tokens_out?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          date?: string
+          estimated_cost?: number | null
+          id?: string
+          requests?: number | null
+          tenant_id?: string
+          tokens_in?: number | null
+          tokens_out?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_usage_daily_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dashboard_categories: {
         Row: {
           created_at: string | null
@@ -193,6 +380,10 @@ export type Database = {
       }
       profiles: {
         Row: {
+          ai_daily_limit_messages: number | null
+          ai_daily_limit_tokens: number | null
+          ai_enabled: boolean | null
+          ai_style: string | null
           created_at: string
           full_name: string | null
           id: string
@@ -203,6 +394,10 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          ai_daily_limit_messages?: number | null
+          ai_daily_limit_tokens?: number | null
+          ai_enabled?: boolean | null
+          ai_style?: string | null
           created_at?: string
           full_name?: string | null
           id: string
@@ -213,6 +408,10 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          ai_daily_limit_messages?: number | null
+          ai_daily_limit_tokens?: number | null
+          ai_enabled?: boolean | null
+          ai_style?: string | null
           created_at?: string
           full_name?: string | null
           id?: string

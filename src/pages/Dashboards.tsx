@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { LayoutDashboard, Clock, ArrowRight, CheckCircle, XCircle, HelpCircle } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import AutoInsightsCard from '@/components/dashboards/AutoInsightsCard';
 
 interface Dashboard {
   id: string;
@@ -75,6 +76,9 @@ export default function Dashboards() {
         title="Dashboards" 
         description="Visualize e analise suas métricas de negócio"
       />
+      
+      {/* Auto-Insights Card */}
+      <AutoInsightsCard />
 
       {dashboards.length === 0 ? (
         <EmptyState
