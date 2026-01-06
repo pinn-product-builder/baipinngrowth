@@ -336,7 +336,9 @@ export default function DatasetRelationships() {
                     <Badge variant="outline">{rel.cardinality || 'N/A'}</Badge>
                   </TableCell>
                   <TableCell>
-                    <StatusBadge status={rel.enabled ? 'active' : 'inactive'} />
+                    <StatusBadge variant={rel.enabled ? 'active' : 'inactive'}>
+                      {rel.enabled ? 'Ativo' : 'Inativo'}
+                    </StatusBadge>
                   </TableCell>
                   <TableCell>
                     <DropdownMenu>

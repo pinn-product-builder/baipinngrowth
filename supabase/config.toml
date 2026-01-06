@@ -53,3 +53,9 @@ verify_jwt = false
 
 [functions.dashboard-context-v2]
 verify_jwt = false
+
+[functions.introspect-dataset]
+verify_jwt = false
+
+[functions.suggest-template]
+verify_jwt = false

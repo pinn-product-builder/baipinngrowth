@@ -24,6 +24,8 @@ import FeatureFlags from "@/pages/admin/FeatureFlags";
 import AuditLogs from "@/pages/admin/AuditLogs";
 import TenantAISettings from "@/pages/admin/TenantAISettings";
 import AIHealth from "@/pages/admin/AIHealth";
+import Datasets from "@/pages/admin/Datasets";
+import DatasetRelationships from "@/pages/admin/DatasetRelationships";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -110,6 +112,16 @@ const App = () => (
               <Route path="/admin/ai-health" element={
                 <ProtectedRoute requireAdmin>
                   <AIHealth />
+                </ProtectedRoute>
+              } />
+              <Route path="/admin/datasets" element={
+                <ProtectedRoute requireAdmin>
+                  <Datasets />
+                </ProtectedRoute>
+              } />
+              <Route path="/admin/relationships" element={
+                <ProtectedRoute requireAdmin>
+                  <DatasetRelationships />
                 </ProtectedRoute>
               } />
             </Route>

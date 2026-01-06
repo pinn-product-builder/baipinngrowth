@@ -103,12 +103,13 @@ interface ViewInfo {
 }
 
 interface ColumnInfo {
-  name: string;
+  column_name: string;
   db_type: string;
   semantic_type: string | null;
   role_hint: string | null;
   format: string | null;
   display_label: string;
+  aggregator_default: string;
 }
 
 export default function Datasets() {
@@ -511,7 +512,9 @@ export default function Datasets() {
                     )}
                   </TableCell>
                   <TableCell>
-                    <StatusBadge status={ds.is_active ? 'active' : 'inactive'} />
+                    <StatusBadge variant={ds.is_active ? 'active' : 'inactive'}>
+                      {ds.is_active ? 'Ativo' : 'Inativo'}
+                    </StatusBadge>
                   </TableCell>
                   <TableCell>
                     <DropdownMenu>
