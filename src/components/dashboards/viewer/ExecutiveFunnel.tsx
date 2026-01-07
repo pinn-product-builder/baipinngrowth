@@ -19,7 +19,7 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { formatColumnValue, getColumnLabel, FUNNEL_STAGES, RATE_METRICS } from './labelMap';
+import { formatColumnValue, getColumnLabel, FUNNEL_STAGES, FUNNEL_STAGES_V3, RATE_METRICS, RATE_METRICS_V3 } from './labelMap';
 
 interface ExecutiveFunnelProps {
   data: Record<string, number>;
@@ -29,11 +29,19 @@ interface ExecutiveFunnelProps {
 }
 
 const STAGE_ICONS: Record<string, React.ElementType> = {
+  // Legacy
   leads_total: Users,
   entrada_total: ArrowRight,
   reuniao_agendada_total: Calendar,
   reuniao_realizada_total: Briefcase,
   venda_total: Target,
+  // V3
+  leads_total_7d: Users,
+  leads_total_30d: Users,
+  msg_in_7d: ArrowRight,
+  msg_in_30d: ArrowRight,
+  meetings_scheduled_7d: Calendar,
+  meetings_scheduled_30d: Calendar,
 };
 
 const STAGE_COLORS = [
@@ -57,9 +65,16 @@ export default function ExecutiveFunnel({
   comparisonEnabled = false,
   className,
 }: ExecutiveFunnelProps) {
-  // Get funnel stages that exist in data
+  // Get funnel stages that exist in data - check v3 first, then legacy
   const stages = useMemo(() => {
-    return FUNNEL_STAGES.filter(stage => 
+    // Check if we have v3 data
+    const hasV3Data = FUNNEL_STAGES_V3.some(stage => 
+      data[stage] !== undefined && isFinite(data[stage])
+    );
+    
+    const stageList = hasV3Data ? [...FUNNEL_STAGES_V3] : [...FUNNEL_STAGES];
+    
+    return stageList.filter(stage => 
       data[stage] !== undefined && isFinite(data[stage])
     );
   }, [data]);
@@ -120,11 +135,18 @@ export default function ExecutiveFunnel({
     return ((current - previous) / previous) * 100;
   };
   
-  // Get existing rate metrics
+  // Get existing rate metrics - check v3 first
   const rateMetrics = useMemo(() => {
     const result: Array<{ key: string; value: number }> = [];
     
-    RATE_METRICS.forEach(key => {
+    // Check if we have v3 rates
+    const hasV3Rates = RATE_METRICS_V3.some(key => 
+      data[key] !== undefined && isFinite(data[key])
+    );
+    
+    const metricList = hasV3Rates ? [...RATE_METRICS_V3] : [...RATE_METRICS];
+    
+    metricList.forEach(key => {
       if (data[key] !== undefined && isFinite(data[key])) {
         result.push({ key, value: data[key] });
       }
