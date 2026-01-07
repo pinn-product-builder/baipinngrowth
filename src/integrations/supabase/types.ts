@@ -353,6 +353,79 @@ export type Database = {
           },
         ]
       }
+      alert_history: {
+        Row: {
+          alert_config_id: string | null
+          alert_type: string
+          created_at: string | null
+          goal_id: string | null
+          id: string
+          message: string
+          metric_value: number | null
+          notification_channels: string[] | null
+          notification_error: string | null
+          notification_sent: boolean | null
+          severity: string
+          tenant_id: string
+          threshold_value: number | null
+          title: string
+        }
+        Insert: {
+          alert_config_id?: string | null
+          alert_type: string
+          created_at?: string | null
+          goal_id?: string | null
+          id?: string
+          message: string
+          metric_value?: number | null
+          notification_channels?: string[] | null
+          notification_error?: string | null
+          notification_sent?: boolean | null
+          severity?: string
+          tenant_id: string
+          threshold_value?: number | null
+          title: string
+        }
+        Update: {
+          alert_config_id?: string | null
+          alert_type?: string
+          created_at?: string | null
+          goal_id?: string | null
+          id?: string
+          message?: string
+          metric_value?: number | null
+          notification_channels?: string[] | null
+          notification_error?: string | null
+          notification_sent?: boolean | null
+          severity?: string
+          tenant_id?: string
+          threshold_value?: number | null
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "alert_history_alert_config_id_fkey"
+            columns: ["alert_config_id"]
+            isOneToOne: false
+            referencedRelation: "alert_configurations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "alert_history_goal_id_fkey"
+            columns: ["goal_id"]
+            isOneToOne: false
+            referencedRelation: "tenant_goals"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "alert_history_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_logs: {
         Row: {
           action: string
@@ -529,6 +602,90 @@ export type Database = {
             columns: ["dashboard_id"]
             isOneToOne: true
             referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dashboard_generated_insights: {
+        Row: {
+          change_percent: number | null
+          comparison_period_end: string | null
+          comparison_period_start: string | null
+          comparison_value: number | null
+          created_at: string | null
+          current_value: number | null
+          dashboard_id: string
+          description: string
+          details: Json | null
+          dismissed_at: string | null
+          id: string
+          impact_estimate: string | null
+          insight_type: string
+          metric_key: string | null
+          period_end: string | null
+          period_start: string | null
+          priority: string
+          suggested_action: string | null
+          tenant_id: string
+          title: string
+        }
+        Insert: {
+          change_percent?: number | null
+          comparison_period_end?: string | null
+          comparison_period_start?: string | null
+          comparison_value?: number | null
+          created_at?: string | null
+          current_value?: number | null
+          dashboard_id: string
+          description: string
+          details?: Json | null
+          dismissed_at?: string | null
+          id?: string
+          impact_estimate?: string | null
+          insight_type: string
+          metric_key?: string | null
+          period_end?: string | null
+          period_start?: string | null
+          priority?: string
+          suggested_action?: string | null
+          tenant_id: string
+          title: string
+        }
+        Update: {
+          change_percent?: number | null
+          comparison_period_end?: string | null
+          comparison_period_start?: string | null
+          comparison_value?: number | null
+          created_at?: string | null
+          current_value?: number | null
+          dashboard_id?: string
+          description?: string
+          details?: Json | null
+          dismissed_at?: string | null
+          id?: string
+          impact_estimate?: string | null
+          insight_type?: string
+          metric_key?: string | null
+          period_end?: string | null
+          period_start?: string | null
+          priority?: string
+          suggested_action?: string | null
+          tenant_id?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dashboard_generated_insights_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: false
+            referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dashboard_generated_insights_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
             referencedColumns: ["id"]
           },
         ]
@@ -790,6 +947,76 @@ export type Database = {
           },
           {
             foreignKeyName: "dashboards_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      data_quality_issues: {
+        Row: {
+          affected_columns: string[] | null
+          affected_dates: string[] | null
+          created_at: string | null
+          dashboard_id: string | null
+          dataset_id: string | null
+          description: string | null
+          details: Json | null
+          id: string
+          issue_type: string
+          resolved_at: string | null
+          severity: string
+          tenant_id: string
+          title: string
+        }
+        Insert: {
+          affected_columns?: string[] | null
+          affected_dates?: string[] | null
+          created_at?: string | null
+          dashboard_id?: string | null
+          dataset_id?: string | null
+          description?: string | null
+          details?: Json | null
+          id?: string
+          issue_type: string
+          resolved_at?: string | null
+          severity?: string
+          tenant_id: string
+          title: string
+        }
+        Update: {
+          affected_columns?: string[] | null
+          affected_dates?: string[] | null
+          created_at?: string | null
+          dashboard_id?: string | null
+          dataset_id?: string | null
+          description?: string | null
+          details?: Json | null
+          id?: string
+          issue_type?: string
+          resolved_at?: string | null
+          severity?: string
+          tenant_id?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "data_quality_issues_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: false
+            referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "data_quality_issues_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "data_quality_issues_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -1378,6 +1605,75 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "tenant_data_sources_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tenant_goals: {
+        Row: {
+          alert_enabled: boolean | null
+          alert_threshold_critical: number | null
+          alert_threshold_warning: number | null
+          created_at: string | null
+          dashboard_id: string | null
+          goal_type: string
+          goal_value: number
+          goal_value_max: number | null
+          id: string
+          is_active: boolean | null
+          metric_key: string
+          metric_label: string
+          tenant_id: string
+          unit: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          alert_enabled?: boolean | null
+          alert_threshold_critical?: number | null
+          alert_threshold_warning?: number | null
+          created_at?: string | null
+          dashboard_id?: string | null
+          goal_type?: string
+          goal_value: number
+          goal_value_max?: number | null
+          id?: string
+          is_active?: boolean | null
+          metric_key: string
+          metric_label: string
+          tenant_id: string
+          unit?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          alert_enabled?: boolean | null
+          alert_threshold_critical?: number | null
+          alert_threshold_warning?: number | null
+          created_at?: string | null
+          dashboard_id?: string | null
+          goal_type?: string
+          goal_value?: number
+          goal_value_max?: number | null
+          id?: string
+          is_active?: boolean | null
+          metric_key?: string
+          metric_label?: string
+          tenant_id?: string
+          unit?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_goals_dashboard_id_fkey"
+            columns: ["dashboard_id"]
+            isOneToOne: false
+            referencedRelation: "dashboards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tenant_goals_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"

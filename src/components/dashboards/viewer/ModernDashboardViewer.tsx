@@ -27,6 +27,7 @@ import ExecutiveKPIRow from './ExecutiveKPIRow';
 import ExecutiveFunnel from './ExecutiveFunnel';
 import ExecutiveTrendCharts from './ExecutiveTrendCharts';
 import DiagnosticsPanel from './DiagnosticsPanel';
+import DecisionCenter from './DecisionCenter';
 
 interface ModernDashboardViewerProps {
   dashboardId: string;
@@ -157,7 +158,7 @@ export default function ModernDashboardViewer({
     end: new Date(),
   });
   const [previousRange, setPreviousRange] = useState<DateRange | undefined>();
-  const [activeTab, setActiveTab] = useState<TabType>('executivo');
+  const [activeTab, setActiveTab] = useState<TabType>('decisoes');
   const [selectedRow, setSelectedRow] = useState<any>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -518,7 +519,7 @@ export default function ModernDashboardViewer({
   // Persist tab selection per dashboard (MOVED UP - must be before any returns)
   useEffect(() => {
     const storedTab = localStorage.getItem(`dashboard-tab-${dashboardId}`);
-    if (storedTab && ['executivo', 'funil', 'eficiencia', 'tendencias', 'detalhes'].includes(storedTab)) {
+    if (storedTab && ['decisoes', 'executivo', 'funil', 'eficiencia', 'tendencias', 'detalhes'].includes(storedTab)) {
       setActiveTab(storedTab as TabType);
     }
   }, [dashboardId]);
@@ -682,8 +683,18 @@ export default function ModernDashboardViewer({
         <DashboardTabs 
           activeTab={activeTab} 
           onTabChange={handleTabChange}
-          enabledTabs={['executivo', 'funil', 'eficiencia', 'tendencias', 'detalhes']}
+          enabledTabs={['decisoes', 'executivo', 'funil', 'eficiencia', 'tendencias', 'detalhes']}
         >
+          {/* Tab: Decisões (Decision Center) - FIRST TAB */}
+          <TabsContent value="decisoes" className="mt-6">
+            <DecisionCenter
+              data={data}
+              previousPeriodData={previousData}
+              dateColumn="dia"
+              onViewDetails={() => handleTabChange('detalhes')}
+            />
+          </TabsContent>
+
           {/* Tab: Executivo */}
           <TabsContent value="executivo" className="mt-6 space-y-6">
             {/* Warnings summary (brief) */}

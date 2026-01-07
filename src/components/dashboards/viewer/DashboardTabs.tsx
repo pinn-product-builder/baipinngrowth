@@ -1,8 +1,8 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { LayoutDashboard, GitBranch, TrendingUp, BarChart3, Table } from 'lucide-react';
+import { LayoutDashboard, GitBranch, TrendingUp, BarChart3, Table, Lightbulb } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type TabType = 'executivo' | 'funil' | 'eficiencia' | 'tendencias' | 'detalhes';
+export type TabType = 'decisoes' | 'executivo' | 'funil' | 'eficiencia' | 'tendencias' | 'detalhes';
 
 interface Tab {
   id: TabType;
@@ -11,6 +11,7 @@ interface Tab {
 }
 
 const ALL_TABS: Tab[] = [
+  { id: 'decisoes', label: 'Decisões', icon: <Lightbulb className="h-4 w-4" /> },
   { id: 'executivo', label: 'Executivo', icon: <LayoutDashboard className="h-4 w-4" /> },
   { id: 'funil', label: 'Funil', icon: <GitBranch className="h-4 w-4" /> },
   { id: 'eficiencia', label: 'Eficiência', icon: <TrendingUp className="h-4 w-4" /> },
