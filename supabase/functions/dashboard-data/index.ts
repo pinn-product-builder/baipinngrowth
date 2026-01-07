@@ -312,16 +312,48 @@ Deno.serve(async (req) => {
       }
       
       // Get the active data source for this tenant
-      const { data: dataSource, error: dsError } = await adminClient
+      let dataSource = null
+      const { data: tenantDataSource, error: dsError } = await adminClient
         .from('tenant_data_sources')
         .select('*')
         .eq('tenant_id', profile.tenant_id)
         .eq('is_active', true)
         .maybeSingle()
       
-      if (dsError || !dataSource) {
-        console.error('Data source error:', dsError)
-        return new Response(JSON.stringify({ error: 'Data source não encontrado para este tenant' }), {
+      if (tenantDataSource) {
+        dataSource = tenantDataSource
+        console.log(`Using tenant data source: ${tenantDataSource.name}`)
+      } else {
+        // Fallback: get the Afonsina data source (or any active one) as default
+        const { data: defaultDataSource } = await adminClient
+          .from('tenant_data_sources')
+          .select('*')
+          .eq('is_active', true)
+          .eq('name', 'Afonsina')
+          .maybeSingle()
+        
+        if (defaultDataSource) {
+          dataSource = defaultDataSource
+          console.log(`Using default Afonsina data source`)
+        } else {
+          // Get any active data source
+          const { data: anyDataSource } = await adminClient
+            .from('tenant_data_sources')
+            .select('*')
+            .eq('is_active', true)
+            .limit(1)
+            .maybeSingle()
+          
+          dataSource = anyDataSource
+          if (anyDataSource) {
+            console.log(`Using fallback data source: ${anyDataSource.name}`)
+          }
+        }
+      }
+      
+      if (!dataSource) {
+        console.error('No active data source found')
+        return new Response(JSON.stringify({ error: 'Nenhum data source ativo encontrado' }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         })
