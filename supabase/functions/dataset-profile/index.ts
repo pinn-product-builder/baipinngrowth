@@ -335,7 +335,7 @@ Deno.serve(async (req) => {
       const funnelIdx = CRM_FUNNEL_STAGES.findIndex(s => lowerName === s || lowerName.includes(s))
       if (funnelIdx >= 0 || (stats.boolean_rate && stats.boolean_rate > 0.8)) {
         semanticType = 'count'
-        roleHint = 'funnel_step'
+        roleHint = 'stage'
         if (funnelIdx >= 0) {
           detectedCandidates.funnel_stages.push({
             name: colName,

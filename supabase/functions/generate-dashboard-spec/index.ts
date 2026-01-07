@@ -887,7 +887,7 @@ serve(async (req) => {
         })),
         kpis: validColumns
           .filter(c => ['count', 'currency', 'metric', 'percent'].includes(c.semantic_type || '') || 
-                       c.role_hint === 'funnel_step')
+                       c.role_hint === 'stage')
           .slice(0, 8)
           .map(c => ({
             label: c.display_label || c.name,
