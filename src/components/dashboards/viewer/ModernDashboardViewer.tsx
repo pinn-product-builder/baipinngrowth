@@ -336,6 +336,7 @@ export default function ModernDashboardViewer({
       const { data: result, error: fnError } = await supabase.functions.invoke('dashboard-data', {
         body: {
           dashboard_id: dashboardId,
+          section: 'executive', // Use new executive section for all views
           start: startStr,
           end: endStr,
         },
@@ -374,7 +375,9 @@ export default function ModernDashboardViewer({
         };
       }
 
-      setRawData(result?.data || []);
+      // Handle response - prefer 'daily' for time series, fallback to 'data'
+      const dailyData = result?.daily || result?.data || [];
+      setRawData(dailyData);
       setLastUpdated(new Date());
 
       // Fetch previous period if comparison enabled
@@ -385,13 +388,15 @@ export default function ModernDashboardViewer({
         const { data: prevResult, error: prevError } = await supabase.functions.invoke('dashboard-data', {
           body: {
             dashboard_id: dashboardId,
+            section: 'executive',
             start: prevStartStr,
             end: prevEndStr,
           },
         });
 
-        if (!prevError && prevResult?.data) {
-          setPreviousRawData(prevResult.data);
+        if (!prevError && prevResult) {
+          const prevDaily = prevResult?.daily || prevResult?.data || [];
+          setPreviousRawData(prevDaily);
         }
       } else {
         setPreviousRawData([]);
