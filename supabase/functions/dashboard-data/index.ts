@@ -7,12 +7,24 @@ const corsHeaders = {
 }
 
 // View configuration with date column info
-const VIEW_CONFIG: Record<string, { views: Record<string, { name: string; dateColumn?: string; hasDateFilter?: boolean }> }> = {
+// Based on official data source documentation
+const VIEW_CONFIG: Record<string, { views: Record<string, { name: string; dateColumn?: string; hasDateFilter?: boolean; orderBy?: string }> }> = {
   executive: {
     views: {
-      kpis: { name: 'vw_dashboard_kpis_30d_v3', hasDateFilter: false },
-      daily: { name: 'vw_dashboard_daily_60d_v3', dateColumn: 'dia', hasDateFilter: true },
-      funnel: { name: 'vw_funnel_current_exec', hasDateFilter: false },
+      // KPIs - 7d and 30d aggregates
+      kpis_7d: { name: 'vw_dashboard_kpis_7d_v3', hasDateFilter: false },
+      kpis_30d: { name: 'vw_dashboard_kpis_30d_v3', hasDateFilter: false },
+      // Time series - 60 days
+      daily: { name: 'vw_dashboard_daily_60d_v3', dateColumn: 'day', hasDateFilter: true, orderBy: 'day.desc' },
+      // Funnel
+      funnel: { name: 'vw_funnel_current_v3', hasDateFilter: false, orderBy: 'stage_rank.asc' },
+      // Upcoming meetings
+      meetings: { name: 'vw_meetings_upcoming_v3', hasDateFilter: false, orderBy: 'start_at.asc' },
+      // Calls KPIs
+      calls_7d: { name: 'vw_calls_kpis_7d', hasDateFilter: false },
+      calls_30d: { name: 'vw_calls_kpis_30d', hasDateFilter: false },
+      // AI insights
+      ai_insights: { name: 'ai_insights', hasDateFilter: false, orderBy: 'created_at.desc' },
     }
   },
   trafego: {
@@ -34,11 +46,12 @@ const VIEW_CONFIG: Record<string, { views: Record<string, { name: string; dateCo
   },
   reunioes: {
     views: {
-      upcoming: { name: 'vw_meetings_upcoming_v3', hasDateFilter: false },
+      upcoming: { name: 'vw_meetings_upcoming_v3', hasDateFilter: false, orderBy: 'start_at.asc' },
     }
   },
   ligacoes: {
     views: {
+      kpis_7d: { name: 'vw_calls_kpis_7d', hasDateFilter: false },
       kpis_30d: { name: 'vw_calls_kpis_30d', hasDateFilter: false },
       daily: { name: 'vw_calls_daily_30d', dateColumn: 'dia', hasDateFilter: true },
       recent: { name: 'vw_calls_last_50', hasDateFilter: false },
@@ -158,7 +171,8 @@ async function fetchFromView(
   end: string | null,
   limit: string,
   dateColumn: string | null = null,
-  hasDateFilter: boolean = false
+  hasDateFilter: boolean = false,
+  orderBy: string | null = null
 ): Promise<{ data: any[]; error: string | null }> {
   try {
     let restUrl = `${remoteUrl}/rest/v1/${viewName}?select=*`
@@ -166,6 +180,11 @@ async function fetchFromView(
     // Filter by org_id if provided
     if (orgId) {
       restUrl += `&org_id=eq.${orgId}`
+    }
+    
+    // For ai_insights, filter by scope='executivo'
+    if (viewName === 'ai_insights') {
+      restUrl += `&scope=eq.executivo`
     }
     
     // Date filters - only apply if view has date filtering
@@ -176,7 +195,12 @@ async function fetchFromView(
       if (end) {
         restUrl += `&${dateColumn}=lte.${end}`
       }
-      // Order by date column
+    }
+    
+    // Apply order - use custom orderBy or fallback to dateColumn
+    if (orderBy) {
+      restUrl += `&order=${orderBy}`
+    } else if (hasDateFilter && dateColumn) {
       restUrl += `&order=${dateColumn}.asc`
     }
     
@@ -619,7 +643,8 @@ Deno.serve(async (req) => {
             end,
             limit,
             viewConfig.dateColumn || null,
-            viewConfig.hasDateFilter || false
+            viewConfig.hasDateFilter || false,
+            viewConfig.orderBy || null
           )
           result[key] = data
           if (error) errors.push(error)
@@ -644,7 +669,8 @@ Deno.serve(async (req) => {
               end,
               limit,
               viewConfig.dateColumn || null,
-              viewConfig.hasDateFilter || false
+              viewConfig.hasDateFilter || false,
+              viewConfig.orderBy || null
             )
             result[resultKey] = data
             // For backwards compatibility, set 'data' from daily view
