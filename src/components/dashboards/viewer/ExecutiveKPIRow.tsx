@@ -27,6 +27,7 @@ import {
   getGoalDirection, 
   getColumnDescription,
   EXECUTIVE_KPIS,
+  EXECUTIVE_KPIS_V3,
   type ColumnLabel,
 } from './labelMap';
 
@@ -48,12 +49,37 @@ interface ExecutiveKPIRowProps {
 }
 
 const KPI_ICONS: Record<string, React.ElementType> = {
+  // Legacy fields
   custo_total: DollarSign,
   leads_total: Users,
   cpl: DollarSign,
   cac: DollarSign,
   venda_total: Target,
   taxa_venda_total: Percent,
+  // V3 fields
+  spend: DollarSign,
+  spend_7d: DollarSign,
+  spend_30d: DollarSign,
+  leads_new: Users,
+  leads_total_7d: Users,
+  leads_total_30d: Users,
+  cpl_7d: DollarSign,
+  cpl_30d: DollarSign,
+  msg_in: Users,
+  msg_in_7d: Users,
+  msg_in_30d: Users,
+  meetings_scheduled: Target,
+  meetings_scheduled_7d: Target,
+  meetings_scheduled_30d: Target,
+  meetings_cancelled_7d: Target,
+  cpm_meeting_7d: DollarSign,
+  cpm_meeting_30d: DollarSign,
+  conv_lead_to_msg_7d: Percent,
+  conv_lead_to_msg_30d: Percent,
+  conv_msg_to_meeting_7d: Percent,
+  conv_msg_to_meeting_30d: Percent,
+  calls_total_7d: Users,
+  calls_total_30d: Users,
 };
 
 function SparklineChart({ data, isPositive }: { data: number[]; isPositive: boolean | null }) {
@@ -239,17 +265,25 @@ export default function ExecutiveKPIRow({
   className,
 }: ExecutiveKPIRowProps) {
   // Build KPIs from data - only show metrics that exist
+  // First try v3 KPIs, then fallback to legacy
   const kpis = useMemo(() => {
     const result: KPIData[] = [];
     
-    EXECUTIVE_KPIS.forEach(key => {
+    // Check if we have v3 data
+    const hasV3Data = EXECUTIVE_KPIS_V3.some(key => data[key] !== undefined && isFinite(data[key]));
+    const kpiList = hasV3Data ? EXECUTIVE_KPIS_V3 : EXECUTIVE_KPIS;
+    
+    kpiList.forEach(key => {
       if (data[key] !== undefined && isFinite(data[key])) {
+        // For sparklines, map v3 fields to daily data
+        const sparklineKey = key.replace('_7d', '').replace('_30d', '');
         result.push({
           key,
           value: data[key],
           previousValue: previousData?.[key],
           sparkline: dailyData.map(row => {
-            const val = row[key];
+            // Try exact key first, then the base key
+            const val = row[key] ?? row[sparklineKey];
             return typeof val === 'number' && isFinite(val) ? val : 0;
           }),
           goal: goals[key],
