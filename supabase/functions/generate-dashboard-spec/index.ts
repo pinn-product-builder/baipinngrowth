@@ -962,27 +962,33 @@ serve(async (req) => {
     if (specIsEmpty && columns.length > 0) {
       console.log('CRITICAL: Empty spec detected after validation, regenerating with minimum fallback');
       
+      // Filter valid columns first
+      const validColumns = columns.filter(c => c && c.name);
+      
+      // Find time column safely
+      const timeColumn = validColumns.find(c => 
+        c.semantic_type === 'time' || 
+        (c.name && (c.name.includes('created') || c.name.includes('data') || c.name.includes('dia')))
+      );
+      
       // Create minimum viable spec
-      const minimumSpec = {
+      const minimumSpec: any = {
         version: 1,
         title: dataset.name,
-        time: columns.find(c => c.semantic_type === 'time' || c.name.includes('created') || c.name.includes('data'))
-          ? { column: columns.find(c => c.semantic_type === 'time' || c.name.includes('created') || c.name.includes('data'))!.name, type: 'date' }
-          : undefined,
-        columns: columns.map(c => ({
+        columns: validColumns.map(c => ({
           name: c.name,
           type: c.semantic_type === 'currency' ? 'currency' : 
                 c.semantic_type === 'percent' ? 'percent' :
                 c.semantic_type === 'time' ? 'date' :
                 ['count', 'metric'].includes(c.semantic_type || '') ? 'number' : 'string',
-          label: c.display_label
+          label: c.display_label || c.name
         })),
-        kpis: columns
+        kpis: validColumns
           .filter(c => ['count', 'currency', 'metric', 'percent'].includes(c.semantic_type || '') || 
                        c.role_hint === 'funnel_step')
           .slice(0, 8)
           .map(c => ({
-            label: c.display_label,
+            label: c.display_label || c.name,
             column: c.name,
             agg: c.semantic_type === 'percent' ? 'avg' : 'sum',
             format: c.semantic_type === 'currency' ? 'currency' : 
@@ -996,16 +1002,23 @@ serve(async (req) => {
         }
       };
       
-      // If still no KPIs, use first 4 numeric-looking columns
+      // Add time if found
+      if (timeColumn) {
+        minimumSpec.time = { column: timeColumn.name, type: 'date' };
+      }
+      
+      // If still no KPIs, use first 4 columns
       if (minimumSpec.kpis.length === 0) {
-        minimumSpec.kpis = columns.slice(0, 4).map(c => ({
-          label: c.display_label,
+        minimumSpec.kpis = validColumns.slice(0, 4).map(c => ({
+          label: c.display_label || c.name,
           column: c.name,
           agg: 'count',
           format: 'integer',
           goalDirection: 'higher_better'
         }));
       }
+      
+      console.log('Minimum spec created with', minimumSpec.kpis.length, 'KPIs');
       
       finalSpec = minimumSpec;
       validation = {
