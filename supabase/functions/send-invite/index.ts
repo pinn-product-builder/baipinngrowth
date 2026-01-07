@@ -269,7 +269,8 @@ Deno.serve(async (req) => {
     const inviteUrl = `${baseUrl}/accept-invite?token=${token_value}`
 
     // Send email
-    const { error: emailError } = await resend.emails.send({
+    console.log(`Attempting to send email to: ${email}`)
+    const { data: emailData, error: emailError } = await resend.emails.send({
       from: 'BAI Analytics <onboarding@resend.dev>',
       to: [email],
       subject: `You're invited to join ${tenantName}`,
@@ -302,9 +303,17 @@ Deno.serve(async (req) => {
     })
 
     if (emailError) {
-      console.error('Email error:', emailError)
-      // Don't fail if email fails, invite is still created
+      console.error('Email send error:', JSON.stringify(emailError))
+      // Return error to user so they know email failed
+      return new Response(
+        JSON.stringify({ 
+          error: `Failed to send email: ${emailError.message || 'Unknown error'}. Note: With resend.dev sandbox, you can only send to your own email.`
+        }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
+    
+    console.log('Email sent successfully:', JSON.stringify(emailData))
 
     // Log activity
     await supabase
