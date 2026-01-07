@@ -71,6 +71,32 @@ interface ColumnStats {
   sample_values?: any[]
 }
 
+// CRM funnel stages - these are boolean/text columns that should be treated as countable
+const CRM_FUNNEL_COLUMNS = new Set([
+  'entrada', 'lead_ativo', 'qualificado', 'exp_agendada', 'exp_realizada',
+  'exp_nao_confirmada', 'faltou_exp', 'reagendou', 'venda', 'perdida', 'aluno_ativo',
+  'entrou', 'lead_entrada', 'fechou', 'ganho', 'qualificacao', 'lead_qualificado'
+])
+
+// Time column aliases
+const TIME_COLUMN_ALIASES = new Set([
+  'created_at', 'updated_at', 'inserted_at', 'data', 'dia', 'day', 'date', 'timestamp', 'created', 'updated'
+])
+
+// Check if a string value looks like a date
+function looksLikeDate(value: any): boolean {
+  if (typeof value !== 'string') return false
+  // YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss or dd/MM/yyyy
+  return /^\d{4}-\d{2}-\d{2}/.test(value) || /^\d{2}\/\d{2}\/\d{4}/.test(value)
+}
+
+// Check if value looks like a CRM truthy value (sim, 1, true, x, etc.)
+function isCRMTruthyValue(value: any): boolean {
+  if (value === null || value === undefined || value === '') return false
+  const v = String(value).toLowerCase().trim()
+  return ['1', 'true', 'sim', 's', 'yes', 'y', 'ok', 'x'].includes(v)
+}
+
 // Semantic type detection based on column name and value patterns
 function detectSemanticType(name: string, dbType: string, sampleValues: any[]): {
   semantic_type: string | null
@@ -80,7 +106,24 @@ function detectSemanticType(name: string, dbType: string, sampleValues: any[]): 
 } {
   const lowerName = name.toLowerCase()
   
-  // Time columns - includes v3 'day' field
+  // CRM funnel columns - detect by name (even if type is text)
+  if (CRM_FUNNEL_COLUMNS.has(lowerName)) {
+    return { semantic_type: 'count', role_hint: 'funnel_step', aggregator_default: 'sum', format: 'integer' }
+  }
+  
+  // Time columns by name pattern - check sample values to confirm
+  if (TIME_COLUMN_ALIASES.has(lowerName) || ['dia', 'day', 'date', 'data'].some(t => lowerName === t) || 
+      lowerName.includes('created') || lowerName.includes('updated') || lowerName.includes('timestamp')) {
+    // Check if sample values look like dates (even if db_type is text)
+    const nonNull = sampleValues.filter(v => v != null)
+    const dateCount = nonNull.filter(v => looksLikeDate(v)).length
+    const dateRate = nonNull.length > 0 ? dateCount / nonNull.length : 0
+    if (dateRate > 0.5) {
+      return { semantic_type: 'time', role_hint: 'x_axis', aggregator_default: 'none', format: 'date' }
+    }
+  }
+  
+  // Time columns - standard patterns
   if (['dia', 'day', 'date', 'data', 'created_at', 'updated_at', 'timestamp'].some(t => lowerName === t || lowerName.includes(t))) {
     return { semantic_type: 'time', role_hint: 'x_axis', aggregator_default: 'none', format: 'date' }
   }
@@ -105,6 +148,18 @@ function detectSemanticType(name: string, dbType: string, sampleValues: any[]): 
       lowerName.includes('venda') || lowerName.includes('msg_') || lowerName === 'impressions' ||
       lowerName === 'clicks' || lowerName === 'reach') {
     return { semantic_type: 'count', role_hint: 'y_axis', aggregator_default: 'sum', format: 'integer' }
+  }
+  
+  // Check if text column is actually a CRM boolean (values like 1/0, sim/não, true/false)
+  if (dbType === 'text' || dbType === 'varchar') {
+    const nonNull = sampleValues.filter(v => v != null)
+    const truthyCount = nonNull.filter(v => isCRMTruthyValue(v)).length
+    const falsyValues = ['0', 'false', 'nao', 'não', 'n', 'no', '']
+    const falsyCount = nonNull.filter(v => falsyValues.includes(String(v).toLowerCase().trim())).length
+    // If most values are truthy or falsy boolean-like values, treat as count
+    if (nonNull.length > 0 && (truthyCount + falsyCount) / nonNull.length > 0.8) {
+      return { semantic_type: 'count', role_hint: 'funnel_step', aggregator_default: 'sum', format: 'integer' }
+    }
   }
   
   // ID columns

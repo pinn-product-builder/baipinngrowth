@@ -435,6 +435,33 @@ export default function DashboardAutoBuilder({
           {/* Step 3: Preview */}
           {step === 'preview' && generatedSpec && (
             <div className="space-y-4 py-4">
+              {/* Spec Empty Warning */}
+              {(!generatedSpec.kpis?.length && !generatedSpec.charts?.length && !generatedSpec.funnel?.steps?.length) && (
+                <div className="p-4 rounded-lg bg-destructive/10 border border-destructive/30">
+                  <p className="text-sm font-medium text-destructive flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4" />
+                    Spec Vazio Detectado
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    O auto-builder não conseguiu gerar KPIs, gráficos ou funil. 
+                    Verifique se o dataset foi introspectado corretamente em Admin → Datasets.
+                  </p>
+                </div>
+              )}
+              
+              {/* Dataset Profile Info */}
+              <div className="p-3 rounded-lg bg-muted/50 border">
+                <p className="text-sm font-medium flex items-center gap-2">
+                  <Database className="h-4 w-4" />
+                  Dataset Detectado
+                </p>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
+                  <div>Colunas: <span className="font-medium text-foreground">{generatedSpec.columns?.length || 0}</span></div>
+                  <div>Tempo: <span className="font-medium text-foreground">{generatedSpec.time?.column || 'Não detectado'}</span></div>
+                  <div>KPIs: <span className="font-medium text-foreground">{generatedSpec.kpis?.length || 0}</span></div>
+                </div>
+              </div>
+              
               {/* Validation messages */}
               {validation && (
                 <div className="space-y-2">
@@ -450,13 +477,13 @@ export default function DashboardAutoBuilder({
                     </div>
                   )}
                   {validation.warnings.length > 0 && (
-                    <div className="p-3 rounded-lg bg-warning/10 border border-warning/20">
-                      <p className="text-sm font-medium text-warning flex items-center gap-2">
+                    <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+                      <p className="text-sm font-medium text-yellow-600 dark:text-yellow-500 flex items-center gap-2">
                         <AlertTriangle className="h-4 w-4" />
                         {validation.warnings.length} aviso(s)
                       </p>
-                      <ul className="mt-1 text-xs text-muted-foreground list-disc list-inside">
-                        {validation.warnings.slice(0, 5).map((w, i) => <li key={i}>{w}</li>)}
+                      <ul className="mt-1 text-xs text-muted-foreground list-disc list-inside max-h-32 overflow-y-auto">
+                        {validation.warnings.map((w, i) => <li key={i}>{w}</li>)}
                       </ul>
                     </div>
                   )}
@@ -617,7 +644,10 @@ export default function DashboardAutoBuilder({
               </Button>
               <Button 
                 onClick={handleSave}
-                disabled={!validation?.valid && validation?.errors?.length > 0}
+                disabled={
+                  (validation?.errors?.length > 0) ||
+                  (!generatedSpec?.kpis?.length && !generatedSpec?.charts?.length && !generatedSpec?.funnel?.steps?.length)
+                }
               >
                 <Check className="h-4 w-4 mr-2" />
                 Criar Dashboard
