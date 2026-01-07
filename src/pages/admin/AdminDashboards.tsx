@@ -37,7 +37,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useActivityLogger } from '@/hooks/useActivityLogger';
 import { useAuditLog } from '@/hooks/useAuditLog';
-import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown, Copy, Database, Wand2, Upload, Sparkles } from 'lucide-react';
+import { BarChart3, Plus, Search, MoreHorizontal, Pencil, Power, ExternalLink, CheckCircle, XCircle, Loader2, ArrowUp, ArrowDown, Copy, Database, Wand2, Upload, Sparkles, Trash2 } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -351,6 +351,28 @@ export default function AdminDashboards() {
       logActivity('create_dashboard', 'dashboard', data.id, { name: data.name, duplicated_from: dashboard.id });
       await logCreate('dashboard', data.id, data.name, { duplicated_from: dashboard.id, name: data.name });
       toast({ title: 'Dashboard duplicado', description: 'Cópia criada com sucesso. Edite e ative quando pronto.' });
+      fetchData();
+    } catch (error: any) {
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    }
+  };
+
+  const deleteDashboard = async (dashboard: Dashboard) => {
+    if (!confirm(`Tem certeza que deseja excluir o dashboard "${dashboard.name}"? Esta ação não pode ser desfeita.`)) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('dashboards')
+        .delete()
+        .eq('id', dashboard.id);
+
+      if (error) throw error;
+      
+      logActivity('delete_dashboard', 'dashboard', dashboard.id, { name: dashboard.name });
+      await logDelete('dashboard', dashboard.id, dashboard.name, { name: dashboard.name });
+      toast({ title: 'Dashboard excluído', description: `${dashboard.name} foi removido com sucesso.` });
       fetchData();
     } catch (error: any) {
       toast({ title: 'Erro', description: error.message, variant: 'destructive' });
@@ -1062,6 +1084,13 @@ export default function AdminDashboards() {
                         <DropdownMenuItem onClick={() => toggleDashboardStatus(dashboard)}>
                           <Power className="mr-2 h-4 w-4" />
                           {dashboard.is_active ? 'Desativar' : 'Ativar'}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem 
+                          onClick={() => deleteDashboard(dashboard)}
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Excluir
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>

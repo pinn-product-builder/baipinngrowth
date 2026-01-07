@@ -20,6 +20,7 @@ type Action =
   | 'user_disabled'
   | 'create_dashboard'
   | 'update_dashboard'
+  | 'delete_dashboard'
   | 'activate_dashboard'
   | 'deactivate_dashboard'
   | 'dashboard_load_error'
