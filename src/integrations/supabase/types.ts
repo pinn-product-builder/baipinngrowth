@@ -300,6 +300,59 @@ export type Database = {
           },
         ]
       }
+      alert_configurations: {
+        Row: {
+          alert_type: string
+          created_at: string | null
+          emails: string[] | null
+          enabled: boolean | null
+          id: string
+          is_global: boolean | null
+          notification_channels: Json | null
+          tenant_id: string | null
+          threshold_unit: string | null
+          threshold_value: number | null
+          updated_at: string | null
+          webhook_url: string | null
+        }
+        Insert: {
+          alert_type: string
+          created_at?: string | null
+          emails?: string[] | null
+          enabled?: boolean | null
+          id?: string
+          is_global?: boolean | null
+          notification_channels?: Json | null
+          tenant_id?: string | null
+          threshold_unit?: string | null
+          threshold_value?: number | null
+          updated_at?: string | null
+          webhook_url?: string | null
+        }
+        Update: {
+          alert_type?: string
+          created_at?: string | null
+          emails?: string[] | null
+          enabled?: boolean | null
+          id?: string
+          is_global?: boolean | null
+          notification_channels?: Json | null
+          tenant_id?: string | null
+          threshold_unit?: string | null
+          threshold_value?: number | null
+          updated_at?: string | null
+          webhook_url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "alert_configurations_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_logs: {
         Row: {
           action: string
@@ -1101,6 +1154,59 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "scheduled_reports_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      system_health_events: {
+        Row: {
+          created_at: string
+          details: Json | null
+          error_code: string | null
+          event_type: string
+          id: string
+          message: string
+          resolved_at: string | null
+          source: string
+          source_id: string | null
+          source_name: string | null
+          tenant_id: string | null
+          trace_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          details?: Json | null
+          error_code?: string | null
+          event_type: string
+          id?: string
+          message: string
+          resolved_at?: string | null
+          source: string
+          source_id?: string | null
+          source_name?: string | null
+          tenant_id?: string | null
+          trace_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          details?: Json | null
+          error_code?: string | null
+          event_type?: string
+          id?: string
+          message?: string
+          resolved_at?: string | null
+          source?: string
+          source_id?: string | null
+          source_name?: string | null
+          tenant_id?: string | null
+          trace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "system_health_events_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"

@@ -20,6 +20,7 @@ import DataSources from "@/pages/admin/DataSources";
 import ActivityLogs from "@/pages/admin/ActivityLogs";
 import ScheduledReports from "@/pages/admin/ScheduledReports";
 import DashboardHealth from "@/pages/admin/DashboardHealth";
+import HealthCenter from "@/pages/admin/HealthCenter";
 import FeatureFlags from "@/pages/admin/FeatureFlags";
 import AuditLogs from "@/pages/admin/AuditLogs";
 import TenantAISettings from "@/pages/admin/TenantAISettings";
@@ -92,6 +93,11 @@ const App = () => (
               <Route path="/admin/health" element={
                 <ProtectedRoute requireAdmin>
                   <DashboardHealth />
+                </ProtectedRoute>
+              } />
+              <Route path="/admin/health-center" element={
+                <ProtectedRoute requireAdmin>
+                  <HealthCenter />
                 </ProtectedRoute>
               } />
               <Route path="/admin/feature-flags" element={

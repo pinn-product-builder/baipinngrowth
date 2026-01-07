@@ -22,7 +22,8 @@ import {
   Moon,
   Monitor,
   Layers,
-  GitBranch
+  GitBranch,
+  HeartPulse
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -53,6 +54,7 @@ const navItems: NavItem[] = [
   { label: 'Feature Flags', href: '/admin/feature-flags', icon: Flag, adminOnly: true },
   { label: 'IA / OpenAI', href: '/admin/ai-settings', icon: Bot, adminOnly: true },
   { label: 'AI Health', href: '/admin/ai-health', icon: Activity, adminOnly: true },
+  { label: 'Health Center', href: '/admin/health-center', icon: HeartPulse, adminOnly: true },
   { label: 'Dashboard Health', href: '/admin/health', icon: Activity, adminOnly: true },
   { label: 'Audit Logs', href: '/admin/audit-logs', icon: FileText, adminOnly: true },
 ];
