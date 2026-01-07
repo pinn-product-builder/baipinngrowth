@@ -80,6 +80,41 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
   const validColumns = columns.filter(c => c && c.name);
   
   const columnNames = new Set(validColumns.map(c => c.name));
+  const columnNamesLower = new Set(validColumns.map(c => c.name.toLowerCase()));
+  
+  // Create mappings for column name resolution (display_label -> column_name, lowercase -> original)
+  const labelToName = new Map<string, string>();
+  const lowerToName = new Map<string, string>();
+  validColumns.forEach(c => {
+    lowerToName.set(c.name.toLowerCase(), c.name);
+    if (c.display_label) {
+      labelToName.set(c.display_label.toLowerCase(), c.name);
+      // Also map label with underscores replaced by spaces
+      labelToName.set(c.display_label.toLowerCase().replace(/_/g, ' '), c.name);
+    }
+  });
+  
+  // Function to resolve column name from AI-generated value
+  const resolveColumnName = (aiColumn: string | undefined): string | null => {
+    if (!aiColumn) return null;
+    
+    // Direct match
+    if (columnNames.has(aiColumn)) return aiColumn;
+    
+    // Lowercase match
+    const lower = aiColumn.toLowerCase();
+    if (lowerToName.has(lower)) return lowerToName.get(lower)!;
+    
+    // Match by display_label
+    if (labelToName.has(lower)) return labelToName.get(lower)!;
+    
+    // Try with spaces converted to underscores
+    const withUnderscores = lower.replace(/\s+/g, '_');
+    if (lowerToName.has(withUnderscores)) return lowerToName.get(withUnderscores)!;
+    
+    return null;
+  };
+  
   const numericColumns = new Set(
     validColumns
       .filter(c => ['currency', 'count', 'metric', 'percent'].includes(c.semantic_type || ''))
@@ -113,34 +148,47 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
     warnings.push('Adicionada versão 1 ao spec');
   }
 
-  // Validate time column - check if exists or try to find one
-  if (!fixed.time?.column || !columnNames.has(fixed.time.column)) {
-    if (allTimeColumns.length > 0) {
-      if (!fixed.time) fixed.time = {};
+  // Validate and fix time column
+  if (fixed.time?.column) {
+    const resolvedTime = resolveColumnName(fixed.time.column);
+    if (resolvedTime) {
+      fixed.time.column = resolvedTime;
+    } else if (allTimeColumns.length > 0) {
       fixed.time.column = allTimeColumns[0];
       fixed.time.type = 'date';
-      warnings.push(`Coluna de tempo definida para ${allTimeColumns[0]}`);
+      warnings.push(`Coluna de tempo corrigida para ${allTimeColumns[0]}`);
     } else {
       delete fixed.time;
       warnings.push('Sem coluna de tempo detectada');
     }
+  } else if (allTimeColumns.length > 0) {
+    fixed.time = { column: allTimeColumns[0], type: 'date' };
+    warnings.push(`Coluna de tempo definida para ${allTimeColumns[0]}`);
   }
 
-  // Validate KPIs
+  // Validate and fix KPIs
   if (Array.isArray(fixed.kpis)) {
-    fixed.kpis = fixed.kpis.filter((kpi: any) => {
-      if (!kpi.column || !columnNames.has(kpi.column)) {
+    fixed.kpis = fixed.kpis.map((kpi: any) => {
+      const resolved = resolveColumnName(kpi.column);
+      if (resolved) {
+        kpi.column = resolved;
+      }
+      return kpi;
+    }).filter((kpi: any) => {
+      const resolved = resolveColumnName(kpi.column);
+      if (!resolved) {
         warnings.push(`KPI removido: coluna ${kpi.column || 'indefinida'} não existe`);
         return false;
       }
       
-      if (!numericColumns.has(kpi.column) && kpi.agg !== 'count') {
-        warnings.push(`KPI ${kpi.label}: coluna ${kpi.column} não é numérica`);
-        return false;
+      // Allow CRM funnel columns to be used as KPIs (they can be counted)
+      const isFunnelColumn = funnelColumnNames.has(resolved.toLowerCase());
+      if (!numericColumns.has(resolved) && !isFunnelColumn && kpi.agg !== 'count') {
+        kpi.agg = 'count'; // Force count aggregation for non-numeric columns
       }
       
       if (!kpi.label || typeof kpi.label !== 'string') {
-        kpi.label = columns.find(c => c.name === kpi.column)?.display_label || kpi.column;
+        kpi.label = validColumns.find(c => c.name === resolved)?.display_label || resolved;
       }
       
       return true;
@@ -149,21 +197,30 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
 
   // Validate funnel - allow CRM columns even if not marked as numeric
   if (fixed.funnel?.steps && Array.isArray(fixed.funnel.steps)) {
-    fixed.funnel.steps = fixed.funnel.steps.filter((step: any) => {
-      if (!step.column || !columnNames.has(step.column)) {
+    fixed.funnel.steps = fixed.funnel.steps.map((step: any) => {
+      const resolved = resolveColumnName(step.column);
+      if (resolved) {
+        step.column = resolved;
+      }
+      return step;
+    }).filter((step: any) => {
+      const resolved = resolveColumnName(step.column);
+      if (!resolved) {
         warnings.push(`Etapa de funil removida: coluna ${step.column || 'indefinida'} não existe`);
         return false;
       }
+      step.column = resolved;
+      
       // Allow if it's numeric OR if it's a known CRM funnel column name
-      const isFunnelColumn = funnelColumnNames.has(step.column.toLowerCase()) ||
-        step.column.toLowerCase().includes('_total') ||
-        step.column.toLowerCase().includes('leads');
-      if (!numericColumns.has(step.column) && !isFunnelColumn) {
-        warnings.push(`Etapa ${step.label}: coluna ${step.column} não é numérica nem funil`);
-        return false;
+      const isFunnelColumn = funnelColumnNames.has(resolved.toLowerCase()) ||
+        resolved.toLowerCase().includes('_total') ||
+        resolved.toLowerCase().includes('leads');
+      if (!numericColumns.has(resolved) && !isFunnelColumn) {
+        // Still allow - we'll use count aggregation
+        warnings.push(`Etapa ${step.label}: usando contagem para ${resolved}`);
       }
       if (!step.label || typeof step.label !== 'string') {
-        step.label = columns.find(c => c.name === step.column)?.display_label || step.column;
+        step.label = validColumns.find(c => c.name === resolved)?.display_label || resolved;
       }
       return true;
     });
@@ -176,11 +233,32 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
 
   // Validate charts
   if (Array.isArray(fixed.charts)) {
-    fixed.charts = fixed.charts.filter((chart: any) => {
-      if (!chart.x || !columnNames.has(chart.x)) {
-        if (timeColumns.length > 0) {
-          chart.x = timeColumns[0];
-          warnings.push(`Chart ${chart.title}: eixo X corrigido para ${timeColumns[0]}`);
+    fixed.charts = fixed.charts.map((chart: any) => {
+      // Fix x axis
+      const resolvedX = resolveColumnName(chart.x);
+      if (resolvedX) {
+        chart.x = resolvedX;
+      } else if (allTimeColumns.length > 0) {
+        chart.x = allTimeColumns[0];
+      }
+      
+      // Fix series
+      if (Array.isArray(chart.series)) {
+        chart.series = chart.series.map((s: any) => {
+          const resolvedY = resolveColumnName(s.y);
+          if (resolvedY) {
+            s.y = resolvedY;
+          }
+          return s;
+        });
+      }
+      return chart;
+    }).filter((chart: any) => {
+      const resolvedX = resolveColumnName(chart.x);
+      if (!resolvedX) {
+        if (allTimeColumns.length > 0) {
+          chart.x = allTimeColumns[0];
+          warnings.push(`Chart ${chart.title}: eixo X corrigido para ${allTimeColumns[0]}`);
         } else {
           warnings.push(`Chart ${chart.title} removido: sem eixo X válido`);
           return false;
@@ -189,16 +267,20 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
 
       if (Array.isArray(chart.series)) {
         chart.series = chart.series.filter((s: any) => {
-          if (!s.y || !columnNames.has(s.y)) {
+          const resolvedY = resolveColumnName(s.y);
+          if (!resolvedY) {
             warnings.push(`Série ${s.label || s.y} removida: coluna não existe`);
             return false;
           }
-          if (!numericColumns.has(s.y)) {
-            warnings.push(`Série ${s.label}: coluna ${s.y} não é numérica`);
-            return false;
+          s.y = resolvedY;
+          
+          // Allow CRM funnel columns in charts
+          const isFunnelColumn = funnelColumnNames.has(resolvedY.toLowerCase());
+          if (!numericColumns.has(resolvedY) && !isFunnelColumn) {
+            warnings.push(`Série ${s.label}: usando contagem para ${resolvedY}`);
           }
           if (!s.label || typeof s.label !== 'string') {
-            s.label = columns.find(c => c.name === s.y)?.display_label || s.y;
+            s.label = validColumns.find(c => c.name === resolvedY)?.display_label || resolvedY;
           }
           return true;
         });
@@ -219,15 +301,23 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
 
   // Validate columns
   if (Array.isArray(fixed.columns)) {
-    fixed.columns = fixed.columns.filter((col: any) => {
+    fixed.columns = fixed.columns.map((col: any) => {
+      const resolved = resolveColumnName(col.name);
+      if (resolved) {
+        col.name = resolved;
+      }
+      return col;
+    }).filter((col: any) => {
       if (!col.name || typeof col.name !== 'string') {
         warnings.push('Coluna sem nome removida');
         return false;
       }
-      if (!columnNames.has(col.name)) {
+      const resolved = resolveColumnName(col.name);
+      if (!resolved) {
         warnings.push(`Coluna ${col.name} removida: não existe no dataset`);
         return false;
       }
+      col.name = resolved;
       return true;
     });
   }
