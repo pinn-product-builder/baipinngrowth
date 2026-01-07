@@ -336,7 +336,7 @@ export default function ModernDashboardViewer({
       const { data: result, error: fnError } = await supabase.functions.invoke('dashboard-data', {
         body: {
           dashboard_id: dashboardId,
-          section: 'executive', // Use new executive section for all views
+          section: 'legacy', // Use legacy section to fetch dashboard's specific view
           start: startStr,
           end: endStr,
         },
@@ -388,7 +388,7 @@ export default function ModernDashboardViewer({
         const { data: prevResult, error: prevError } = await supabase.functions.invoke('dashboard-data', {
           body: {
             dashboard_id: dashboardId,
-            section: 'executive',
+            section: 'legacy',
             start: prevStartStr,
             end: prevEndStr,
           },
