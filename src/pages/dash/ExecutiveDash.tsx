@@ -69,7 +69,7 @@ const KPI_LABELS: Record<string, string> = {
   cac: 'CAC do Período',
 };
 
-const DEFAULT_VIEW = 'vw_dashboard_daily_60d_v3';
+const DEFAULT_VIEW = 'vw_afonsina_custos_funil_dia';
 
 export default function ExecutiveDash() {
   const { tenantId, user } = useAuth();
