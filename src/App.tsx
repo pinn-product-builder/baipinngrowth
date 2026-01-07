@@ -12,6 +12,7 @@ import AcceptInvite from "@/pages/AcceptInvite";
 import ChangePassword from "@/pages/ChangePassword";
 import Dashboards from "@/pages/Dashboards";
 import DashboardView from "@/pages/DashboardView";
+import ExecutiveDash from "@/pages/dash/ExecutiveDash";
 import Account from "@/pages/Account";
 import Tenants from "@/pages/admin/Tenants";
 import Users from "@/pages/admin/Users";
@@ -58,6 +59,10 @@ const App = () => (
             }>
               <Route path="/dashboards" element={<Dashboards />} />
               <Route path="/dashboards/:id" element={<DashboardView />} />
+              
+              {/* Fixed template routes - filter by tenant context */}
+              <Route path="/dash/executivo" element={<ExecutiveDash />} />
+              
               <Route path="/account" element={<Account />} />
               
               {/* Admin routes */}
