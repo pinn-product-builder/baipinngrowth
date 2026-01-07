@@ -361,6 +361,35 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
 }
 
 // =====================================================
+// CRM TRUTHY VALUE PARSING
+// =====================================================
+
+function parseTruthy(value: any): boolean {
+  if (value === null || value === undefined || value === '') return false;
+  const v = String(value).toLowerCase().trim();
+  return ['1', 'true', 'sim', 's', 'yes', 'y', 'ok', 'x'].includes(v);
+}
+
+// Normalize column name for matching
+function normalizeColName(s: string | null | undefined): string {
+  if (!s) return '';
+  return String(s).trim().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove accents
+    .replace(/\s+/g, '_');
+}
+
+// CRM column aliases for matching
+const CRM_ALIASES: Record<string, string[]> = {
+  entrada: ['entrada', 'entrou', 'lead_entrada'],
+  venda: ['venda', 'vendeu', 'fechou', 'ganho', 'venda_total', 'sales'],
+  qualificado: ['qualificado', 'qualificacao', 'lead_qualificado'],
+  tempo: ['created_at', 'data', 'dia', 'date', 'created', 'inserted_at', 'updated_at', 'day'],
+  leads: ['leads', 'leads_total', 'leads_new', 'lead_ativo'],
+  agendada: ['exp_agendada', 'reuniao_agendada', 'meetings_scheduled', 'agendada'],
+  realizada: ['exp_realizada', 'reuniao_realizada', 'meetings_completed', 'realizada'],
+};
+
+// =====================================================
 // FALLBACK HEURISTIC SPEC GENERATOR
 // =====================================================
 
@@ -369,8 +398,33 @@ function generateFallbackSpec(
   datasetName: string,
   introspection?: IntrospectionResult
 ): any {
+  console.log('generateFallbackSpec: Starting with', columns.length, 'columns');
+  
+  // Build normalized name map
+  const normalizedMap = new Map<string, ColumnMeta>();
+  columns.forEach(c => {
+    normalizedMap.set(normalizeColName(c.name), c);
+    if (c.display_label) {
+      normalizedMap.set(normalizeColName(c.display_label), c);
+    }
+  });
+  
+  // Find column by alias
+  const findColumnByAlias = (aliases: string[]): ColumnMeta | undefined => {
+    for (const alias of aliases) {
+      const norm = normalizeColName(alias);
+      if (normalizedMap.has(norm)) {
+        return normalizedMap.get(norm);
+      }
+    }
+    return undefined;
+  };
+  
   // Find time column - check semantic type first, then by name pattern
   let timeCol = columns.find(c => c.semantic_type === 'time');
+  if (!timeCol) {
+    timeCol = findColumnByAlias(CRM_ALIASES.tempo);
+  }
   if (!timeCol) {
     timeCol = columns.find(c => 
       c.name.includes('created') || c.name.includes('date') || 
@@ -379,10 +433,13 @@ function generateFallbackSpec(
     );
   }
   
+  console.log('generateFallbackSpec: Time column:', timeCol?.name || 'NONE');
+  
   const currencyCols = columns.filter(c => c.semantic_type === 'currency');
   const countCols = columns.filter(c => c.semantic_type === 'count');
   const percentCols = columns.filter(c => c.semantic_type === 'percent');
   const metricCols = columns.filter(c => c.semantic_type === 'metric');
+  const dimensionCols = columns.filter(c => c.semantic_type === 'dimension');
 
   // CRM funnel column detection by name (even if type is text/string)
   const funnelColumnNames = [
@@ -392,8 +449,10 @@ function generateFallbackSpec(
   
   // Find funnel columns by name pattern
   const funnelCols = columns.filter(c => 
-    funnelColumnNames.some(fn => c.name.toLowerCase() === fn || c.name.toLowerCase().includes(fn))
+    funnelColumnNames.some(fn => normalizeColName(c.name) === fn || normalizeColName(c.name).includes(fn))
   );
+  
+  console.log('generateFallbackSpec: Found', funnelCols.length, 'funnel columns by name');
 
   // Also check for _total suffix patterns (Afonsina style)
   const totalPatterns = [
@@ -405,7 +464,7 @@ function generateFallbackSpec(
   
   // Try _total pattern first
   for (const pattern of totalPatterns) {
-    const matched = columns.find(c => c.name.toLowerCase() === pattern.toLowerCase());
+    const matched = columns.find(c => normalizeColName(c.name) === normalizeColName(pattern));
     if (matched && !funnelSteps.includes(matched)) {
       funnelSteps.push(matched);
     }
@@ -416,7 +475,7 @@ function generateFallbackSpec(
     // Order funnel columns logically
     const funnelOrder = ['entrada', 'lead_ativo', 'qualificado', 'exp_agendada', 'exp_realizada', 'venda'];
     funnelSteps = funnelOrder
-      .map(name => funnelCols.find(c => c.name.toLowerCase().includes(name)))
+      .map(name => funnelCols.find(c => normalizeColName(c.name).includes(name)))
       .filter((c): c is ColumnMeta => c !== undefined)
       .slice(0, 6);
   }
@@ -432,6 +491,8 @@ function generateFallbackSpec(
     );
     funnelSteps = [...funnelSteps, ...additionalFunnel].slice(0, 6);
   }
+  
+  console.log('generateFallbackSpec: Funnel steps:', funnelSteps.map(f => f.name).join(', '));
 
   const spec: any = {
     version: 1,
@@ -448,33 +509,38 @@ function generateFallbackSpec(
     spec.time = { column: timeCol.name, type: 'date' };
   }
 
-  // Columns config
+  // Columns config - ALWAYS include all columns
   spec.columns = columns.map(c => ({
     name: c.name,
     type: c.semantic_type === 'currency' ? 'currency' : 
           c.semantic_type === 'percent' ? 'percent' :
           c.semantic_type === 'time' ? 'date' :
           ['count', 'metric'].includes(c.semantic_type || '') ? 'number' : 'string',
-    label: c.display_label,
-    scale: c.semantic_type === 'percent' ? '0to1' : undefined
+    label: c.display_label
   }));
 
-  // KPIs - prioritize key metrics
+  // KPIs - prioritize key metrics + CRM funnel columns
   const kpiOrder = [
     'custo_total', 'spend', 'cpl', 'cac',
-    'leads_total', 'leads_new', 'entrada_total',
-    'venda_total', 'sales', 'reuniao_realizada_total', 'meetings_completed'
+    'leads_total', 'leads_new', 'entrada_total', 'entrada',
+    'qualificado', 'exp_agendada', 'exp_realizada',
+    'venda_total', 'sales', 'venda', 'reuniao_realizada_total', 'meetings_completed'
   ];
   
   const orderedKpis = kpiOrder
-    .map(name => columns.find(c => c.name === name))
+    .map(name => columns.find(c => normalizeColName(c.name) === normalizeColName(name)))
     .filter((c): c is ColumnMeta => c !== undefined);
 
+  // Add CRM funnel columns as KPIs if not already included
+  const funnelKpis = funnelCols.filter(c => !orderedKpis.includes(c));
+
   const remainingKpis = [...currencyCols, ...countCols]
-    .filter(c => !orderedKpis.includes(c))
+    .filter(c => !orderedKpis.includes(c) && !funnelKpis.includes(c))
     .slice(0, 6 - orderedKpis.length);
 
-  const kpiCandidates = [...orderedKpis, ...remainingKpis].slice(0, 8);
+  const kpiCandidates = [...orderedKpis, ...funnelKpis, ...remainingKpis].slice(0, 10);
+  
+  console.log('generateFallbackSpec: KPI candidates:', kpiCandidates.map(k => k.name).join(', '));
   
   spec.kpis = kpiCandidates.map(c => ({
     label: c.display_label,
@@ -497,7 +563,7 @@ function generateFallbackSpec(
   spec.kpis.push(...rateKpis);
 
   // Funnel
-  if (funnelSteps.length >= 3) {
+  if (funnelSteps.length >= 2) {
     spec.funnel = {
       steps: funnelSteps.map(c => ({
         label: c.display_label,
@@ -505,19 +571,21 @@ function generateFallbackSpec(
       }))
     };
     spec.ui.tabs.splice(2, 0, 'Funil');
+    console.log('generateFallbackSpec: Funnel added with', funnelSteps.length, 'steps');
   }
 
-  // Charts - if we have time column
+  // Charts - even if no time column, create ranking charts
+  spec.charts = [];
+  
   if (timeCol) {
-    spec.charts = [];
-    
     // Primary metrics chart (cost vs results)
     const costMetrics = currencyCols.filter(c => 
       c.name.includes('custo') || c.name === 'spend'
     ).slice(0, 1);
-    const resultMetrics = countCols.filter(c => 
-      c.name.includes('leads') || c.name.includes('venda') || c.name.includes('sales')
-    ).slice(0, 2);
+    const resultMetrics = [...countCols, ...funnelCols].filter(c => 
+      c.name.includes('leads') || c.name.includes('venda') || c.name.includes('sales') ||
+      c.name.includes('entrada') || c.name.includes('qualificado')
+    ).slice(0, 3);
     
     if (costMetrics.length > 0 || resultMetrics.length > 0) {
       spec.charts.push({
@@ -528,6 +596,20 @@ function generateFallbackSpec(
           label: c.display_label,
           y: c.name,
           format: c.semantic_type === 'currency' ? 'currency' : 'number'
+        }))
+      });
+    }
+
+    // Funnel progression chart
+    if (funnelSteps.length >= 2) {
+      spec.charts.push({
+        type: 'line',
+        title: 'Evolução do Funil',
+        x: timeCol.name,
+        series: funnelSteps.slice(0, 4).map(c => ({
+          label: c.display_label,
+          y: c.name,
+          format: 'number'
         }))
       });
     }
@@ -562,11 +644,37 @@ function generateFallbackSpec(
         }))
       });
     }
-
-    if (spec.charts.length > 0) {
-      spec.ui.tabs.splice(-1, 0, 'Tendências');
-    }
   }
+
+  // Add Tendências tab if we have charts
+  if (spec.charts.length > 0) {
+    spec.ui.tabs.splice(-1, 0, 'Tendências');
+  }
+  
+  // === CRITICAL: Ensure minimum dashboard structure ===
+  // If we got here with empty spec, create minimum dashboard
+  if (spec.kpis.length === 0 && spec.columns.length === 0 && !spec.funnel) {
+    console.log('generateFallbackSpec: Empty spec detected, creating minimum dashboard');
+    
+    // Use first 6 columns as KPIs with count aggregation
+    const allCols = columns.slice(0, 6);
+    spec.kpis = allCols.map(c => ({
+      label: c.display_label || c.name,
+      column: c.name,
+      agg: 'count',
+      format: 'integer',
+      goalDirection: 'higher_better'
+    }));
+    
+    // Ensure columns are populated
+    spec.columns = columns.map(c => ({
+      name: c.name,
+      type: 'string',
+      label: c.display_label || c.name
+    }));
+  }
+
+  console.log('generateFallbackSpec: Final spec - KPIs:', spec.kpis.length, 'Charts:', spec.charts.length, 'Columns:', spec.columns.length);
 
   return spec;
 }
@@ -841,7 +949,72 @@ serve(async (req) => {
     }
 
     // Validate and fix spec
-    const validation = validateAndFixSpec(spec, columns);
+    let validation = validateAndFixSpec(spec, columns);
+    let finalSpec = validation.fixedSpec || spec;
+    
+    // === CRITICAL: Never allow empty spec ===
+    const specIsEmpty = (
+      (!finalSpec.kpis || finalSpec.kpis.length === 0) &&
+      (!finalSpec.charts || finalSpec.charts.length === 0) &&
+      (!finalSpec.funnel || !finalSpec.funnel.steps || finalSpec.funnel.steps.length === 0)
+    );
+    
+    if (specIsEmpty && columns.length > 0) {
+      console.log('CRITICAL: Empty spec detected after validation, regenerating with minimum fallback');
+      
+      // Create minimum viable spec
+      const minimumSpec = {
+        version: 1,
+        title: dataset.name,
+        time: columns.find(c => c.semantic_type === 'time' || c.name.includes('created') || c.name.includes('data'))
+          ? { column: columns.find(c => c.semantic_type === 'time' || c.name.includes('created') || c.name.includes('data'))!.name, type: 'date' }
+          : undefined,
+        columns: columns.map(c => ({
+          name: c.name,
+          type: c.semantic_type === 'currency' ? 'currency' : 
+                c.semantic_type === 'percent' ? 'percent' :
+                c.semantic_type === 'time' ? 'date' :
+                ['count', 'metric'].includes(c.semantic_type || '') ? 'number' : 'string',
+          label: c.display_label
+        })),
+        kpis: columns
+          .filter(c => ['count', 'currency', 'metric', 'percent'].includes(c.semantic_type || '') || 
+                       c.role_hint === 'funnel_step')
+          .slice(0, 8)
+          .map(c => ({
+            label: c.display_label,
+            column: c.name,
+            agg: c.semantic_type === 'percent' ? 'avg' : 'sum',
+            format: c.semantic_type === 'currency' ? 'currency' : 
+                    c.semantic_type === 'percent' ? 'percent' : 'integer',
+            goalDirection: 'higher_better'
+          })),
+        ui: {
+          tabs: ['Decisões', 'Executivo', 'Detalhes'],
+          defaultTab: 'Decisões',
+          comparePeriods: true
+        }
+      };
+      
+      // If still no KPIs, use first 4 numeric-looking columns
+      if (minimumSpec.kpis.length === 0) {
+        minimumSpec.kpis = columns.slice(0, 4).map(c => ({
+          label: c.display_label,
+          column: c.name,
+          agg: 'count',
+          format: 'integer',
+          goalDirection: 'higher_better'
+        }));
+      }
+      
+      finalSpec = minimumSpec;
+      validation = {
+        valid: true,
+        errors: [],
+        warnings: ['Spec mínimo gerado automaticamente (fallback de emergência)'],
+        fixedSpec: minimumSpec
+      };
+    }
     
     if (!validation.valid) {
       console.warn('Spec validation errors:', validation.errors);
@@ -851,20 +1024,22 @@ serve(async (req) => {
       console.log('Spec validation warnings:', validation.warnings);
     }
 
-    const finalSpec = validation.fixedSpec || spec;
-
     // Build debug info
     const debug = {
       dataset_name: dataset.name,
       dataset_id: dataset.id,
       column_count: columns.length,
+      columns_detected: columns.map(c => ({ name: c.name, semantic: c.semantic_type, label: c.display_label })),
       time_column: introspection.primary_time_column,
       grain: introspection.grain_hint,
       funnel_candidates: introspection.detected_roles?.funnel_candidates || [],
       ai_used: source === 'ai',
       ai_error: aiError,
       validation_errors: validation.errors,
-      validation_warnings: validation.warnings
+      validation_warnings: validation.warnings,
+      final_kpis: finalSpec.kpis?.length || 0,
+      final_charts: finalSpec.charts?.length || 0,
+      final_funnel_steps: finalSpec.funnel?.steps?.length || 0
     };
 
     return successResponse({
