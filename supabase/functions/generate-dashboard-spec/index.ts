@@ -23,7 +23,7 @@ function successResponse(data: Record<string, any>) {
 }
 
 // =====================================================
-// SPEC VALIDATION
+// COLUMN METADATA TYPE
 // =====================================================
 
 interface ColumnMeta {
@@ -35,6 +35,36 @@ interface ColumnMeta {
   aggregator_default: string;
   format: string | null;
 }
+
+interface ColumnStats {
+  null_count: number;
+  null_rate: number;
+  distinct_count: number;
+  min?: number | string;
+  max?: number | string;
+  avg?: number;
+}
+
+interface IntrospectionResult {
+  columns: ColumnMeta[];
+  row_count: number;
+  primary_time_column: string | null;
+  grain_hint: string;
+  sql_definition?: string;
+  column_stats?: Record<string, ColumnStats>;
+  sample_rows?: any[];
+  detected_roles?: {
+    time_columns: string[];
+    metric_columns: string[];
+    percent_columns: string[];
+    dimension_columns: string[];
+    funnel_candidates: string[];
+  };
+}
+
+// =====================================================
+// SPEC VALIDATION
+// =====================================================
 
 interface ValidationResult {
   valid: boolean;
@@ -77,19 +107,16 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
   // Validate KPIs
   if (Array.isArray(fixed.kpis)) {
     fixed.kpis = fixed.kpis.filter((kpi: any) => {
-      // Check column exists
       if (!kpi.column || !columnNames.has(kpi.column)) {
         warnings.push(`KPI removido: coluna ${kpi.column || 'indefinida'} não existe`);
         return false;
       }
       
-      // Check column is numeric for aggregations
       if (!numericColumns.has(kpi.column) && kpi.agg !== 'count') {
         warnings.push(`KPI ${kpi.label}: coluna ${kpi.column} não é numérica`);
         return false;
       }
       
-      // Ensure label is string
       if (!kpi.label || typeof kpi.label !== 'string') {
         kpi.label = columns.find(c => c.name === kpi.column)?.display_label || kpi.column;
       }
@@ -124,7 +151,6 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
   // Validate charts
   if (Array.isArray(fixed.charts)) {
     fixed.charts = fixed.charts.filter((chart: any) => {
-      // Validate x-axis
       if (!chart.x || !columnNames.has(chart.x)) {
         if (timeColumns.length > 0) {
           chart.x = timeColumns[0];
@@ -135,7 +161,6 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
         }
       }
 
-      // Validate series
       if (Array.isArray(chart.series)) {
         chart.series = chart.series.filter((s: any) => {
           if (!s.y || !columnNames.has(s.y)) {
@@ -223,12 +248,43 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
 // FALLBACK HEURISTIC SPEC GENERATOR
 // =====================================================
 
-function generateFallbackSpec(columns: ColumnMeta[], datasetName: string): any {
+function generateFallbackSpec(
+  columns: ColumnMeta[], 
+  datasetName: string,
+  introspection?: IntrospectionResult
+): any {
   const timeCol = columns.find(c => c.semantic_type === 'time');
   const currencyCols = columns.filter(c => c.semantic_type === 'currency');
   const countCols = columns.filter(c => c.semantic_type === 'count');
   const percentCols = columns.filter(c => c.semantic_type === 'percent');
   const metricCols = columns.filter(c => c.semantic_type === 'metric');
+
+  // Detect Afonsina-style funnel pattern
+  const funnelPatterns = [
+    ['leads_total', 'entrada_total', 'reuniao_agendada_total', 'reuniao_realizada_total', 'venda_total'],
+    ['leads_new', 'meetings_scheduled', 'meetings_completed', 'sales'],
+    ['leads', 'entradas', 'reunioes', 'vendas']
+  ];
+
+  let funnelSteps: ColumnMeta[] = [];
+  for (const pattern of funnelPatterns) {
+    const matched = pattern
+      .map(p => columns.find(c => c.name.toLowerCase().includes(p.toLowerCase())))
+      .filter((c): c is ColumnMeta => c !== undefined);
+    if (matched.length >= 3) {
+      funnelSteps = matched;
+      break;
+    }
+  }
+
+  // Fallback: use count columns if no pattern matched
+  if (funnelSteps.length < 3) {
+    funnelSteps = countCols.filter(c => 
+      c.name.includes('_total') || c.name.includes('leads') || c.name.includes('entrada') || 
+      c.name.includes('reuniao') || c.name.includes('venda') || c.name.includes('meetings') ||
+      c.name.includes('sales')
+    ).slice(0, 6);
+  }
 
   const spec: any = {
     version: 1,
@@ -245,7 +301,7 @@ function generateFallbackSpec(columns: ColumnMeta[], datasetName: string): any {
     spec.time = { column: timeCol.name, type: 'date' };
   }
 
-  // Columns
+  // Columns config
   spec.columns = columns.map(c => ({
     name: c.name,
     type: c.semantic_type === 'currency' ? 'currency' : 
@@ -256,25 +312,47 @@ function generateFallbackSpec(columns: ColumnMeta[], datasetName: string): any {
     scale: c.semantic_type === 'percent' ? '0to1' : undefined
   }));
 
-  // KPIs - pick top metrics
-  const kpiCandidates = [...currencyCols, ...countCols.slice(0, 4), ...percentCols.slice(0, 2)];
-  spec.kpis = kpiCandidates.slice(0, 6).map(c => ({
+  // KPIs - prioritize key metrics
+  const kpiOrder = [
+    'custo_total', 'spend', 'cpl', 'cac',
+    'leads_total', 'leads_new', 'entrada_total',
+    'venda_total', 'sales', 'reuniao_realizada_total', 'meetings_completed'
+  ];
+  
+  const orderedKpis = kpiOrder
+    .map(name => columns.find(c => c.name === name))
+    .filter((c): c is ColumnMeta => c !== undefined);
+
+  const remainingKpis = [...currencyCols, ...countCols]
+    .filter(c => !orderedKpis.includes(c))
+    .slice(0, 6 - orderedKpis.length);
+
+  const kpiCandidates = [...orderedKpis, ...remainingKpis].slice(0, 8);
+  
+  spec.kpis = kpiCandidates.map(c => ({
     label: c.display_label,
     column: c.name,
     agg: c.aggregator_default === 'avg' ? 'avg' : 'sum',
     format: c.semantic_type === 'currency' ? 'currency' : 
             c.semantic_type === 'percent' ? 'percent' : 'integer',
-    goalDirection: c.semantic_type === 'currency' ? 'lower_better' : 'higher_better'
+    goalDirection: ['cpl', 'cac', 'custo'].some(k => c.name.toLowerCase().includes(k)) 
+      ? 'lower_better' : 'higher_better'
   }));
 
-  // Funnel - from count columns if we have progression
-  const funnelCandidates = countCols.filter(c => 
-    c.name.includes('_total') || c.name.includes('leads') || c.name.includes('entrada') || 
-    c.name.includes('reuniao') || c.name.includes('venda')
-  );
-  if (funnelCandidates.length >= 3) {
+  // Add rate KPIs
+  const rateKpis = percentCols.slice(0, 4).map(c => ({
+    label: c.display_label,
+    column: c.name,
+    agg: 'avg',
+    format: 'percent',
+    goalDirection: 'higher_better'
+  }));
+  spec.kpis.push(...rateKpis);
+
+  // Funnel
+  if (funnelSteps.length >= 3) {
     spec.funnel = {
-      steps: funnelCandidates.slice(0, 6).map(c => ({
+      steps: funnelSteps.map(c => ({
         label: c.display_label,
         column: c.name
       }))
@@ -286,14 +364,20 @@ function generateFallbackSpec(columns: ColumnMeta[], datasetName: string): any {
   if (timeCol) {
     spec.charts = [];
     
-    // Primary metrics chart
-    const chartMetrics = [...currencyCols.slice(0, 2), ...countCols.slice(0, 2)];
-    if (chartMetrics.length > 0) {
+    // Primary metrics chart (cost vs results)
+    const costMetrics = currencyCols.filter(c => 
+      c.name.includes('custo') || c.name === 'spend'
+    ).slice(0, 1);
+    const resultMetrics = countCols.filter(c => 
+      c.name.includes('leads') || c.name.includes('venda') || c.name.includes('sales')
+    ).slice(0, 2);
+    
+    if (costMetrics.length > 0 || resultMetrics.length > 0) {
       spec.charts.push({
         type: 'line',
-        title: 'Tendência Principal',
+        title: 'Investimento e Resultados',
         x: timeCol.name,
-        series: chartMetrics.map(c => ({
+        series: [...costMetrics, ...resultMetrics].map(c => ({
           label: c.display_label,
           y: c.name,
           format: c.semantic_type === 'currency' ? 'currency' : 'number'
@@ -301,19 +385,33 @@ function generateFallbackSpec(columns: ColumnMeta[], datasetName: string): any {
       });
     }
 
-    // Efficiency chart
+    // Efficiency chart (CPL/CAC)
     const efficiencyMetrics = columns.filter(c => 
       c.name.includes('cpl') || c.name.includes('cac') || c.name.includes('custo_por')
     );
     if (efficiencyMetrics.length > 0) {
       spec.charts.push({
         type: 'line',
-        title: 'Eficiência',
+        title: 'Custos por Etapa',
         x: timeCol.name,
         series: efficiencyMetrics.map(c => ({
           label: c.display_label,
           y: c.name,
           format: 'currency'
+        }))
+      });
+    }
+
+    // Conversion rates chart
+    if (percentCols.length > 0) {
+      spec.charts.push({
+        type: 'line',
+        title: 'Taxas de Conversão',
+        x: timeCol.name,
+        series: percentCols.slice(0, 4).map(c => ({
+          label: c.display_label,
+          y: c.name,
+          format: 'percent'
         }))
       });
     }
@@ -327,10 +425,14 @@ function generateFallbackSpec(columns: ColumnMeta[], datasetName: string): any {
 }
 
 // =====================================================
-// AI SPEC GENERATION
+// AI SPEC GENERATION WITH SQL CONTEXT
 // =====================================================
 
-async function generateSpecWithAI(columns: ColumnMeta[], datasetName: string, stats: any): Promise<any> {
+async function generateSpecWithAI(
+  columns: ColumnMeta[], 
+  datasetName: string, 
+  introspection: IntrospectionResult
+): Promise<any> {
   const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
   
   if (!lovableApiKey) {
@@ -347,16 +449,38 @@ async function generateSpecWithAI(columns: ColumnMeta[], datasetName: string, st
     role: c.role_hint
   }));
 
+  // Add stats summary if available
+  let statsSummary = '';
+  if (introspection.column_stats) {
+    const statsEntries = Object.entries(introspection.column_stats)
+      .filter(([_, s]) => s.min !== undefined || s.avg !== undefined)
+      .map(([name, s]) => `${name}: min=${s.min}, max=${s.max}, avg=${s.avg?.toFixed(2)}`)
+      .slice(0, 10);
+    if (statsEntries.length > 0) {
+      statsSummary = `\n\nEstatísticas de colunas numéricas:\n${statsEntries.join('\n')}`;
+    }
+  }
+
   const systemPrompt = `Você é um especialista em Business Intelligence que cria especificações de dashboards.
 Sua tarefa é criar um DashboardSpec JSON para visualizar os dados de forma clara e acionável.
 
 REGRAS OBRIGATÓRIAS:
 1. Use APENAS colunas que existem no dataset (fornecidas abaixo)
-2. KPIs devem usar APENAS colunas numéricas (currency, count, metric)
-3. Funnel deve ter etapas com colunas numéricas que representem progressão
+2. KPIs devem usar APENAS colunas numéricas (currency, count, metric, percent)
+3. Funnel deve ter etapas com colunas numéricas que representem progressão lógica
 4. Charts devem ter x = coluna de tempo e series = colunas numéricas
 5. Labels devem ser claros e em português
-6. Não invente colunas ou métricas
+6. Não invente colunas ou métricas que não existam
+
+PADRÃO DE FUNIL ESPERADO (se houver dados de marketing/vendas):
+- Leads → Entradas/Qualificados → Reuniões Agendadas → Reuniões Realizadas → Vendas
+
+KPIS PRIORITÁRIOS:
+- Custo total / Investimento
+- CPL (custo por lead) - goalDirection: lower_better
+- CAC (custo por aquisição) - goalDirection: lower_better
+- Leads, Vendas - goalDirection: higher_better
+- Taxas de conversão - goalDirection: higher_better
 
 ESTRUTURA DO SPEC:
 {
@@ -366,29 +490,32 @@ ESTRUTURA DO SPEC:
   "columns": [{ "name": "col", "type": "currency|number|percent|date|string", "label": "Label", "scale": "0to1" }],
   "kpis": [{ "label": "Label", "column": "col", "agg": "sum|avg|min|max|last", "format": "currency|number|percent|integer", "goalDirection": "higher_better|lower_better" }],
   "funnel": { "steps": [{ "label": "Etapa", "column": "col" }] },
-  "charts": [{ "type": "line|bar|area", "title": "Título", "x": "col_tempo", "series": [{ "label": "Label", "y": "col", "format": "currency|number|percent" }] }],
+  "charts": [
+    { "type": "line|bar|area", "title": "Título", "x": "col_tempo", "series": [{ "label": "Label", "y": "col", "format": "currency|number|percent" }] }
+  ],
   "ui": { "tabs": ["Decisões", "Executivo", "Funil", "Tendências", "Detalhes"], "defaultTab": "Decisões", "comparePeriods": true }
-}
-
-DICAS:
-- Priorize métricas de custo, leads, vendas, taxas
-- CPL/CAC devem ter goalDirection: "lower_better"
-- Taxas de conversão devem ter goalDirection: "higher_better"
-- Identifique colunas de funil pela semântica (leads → entrada → reunião → venda)`;
+}`;
 
   const userPrompt = `Dataset: "${datasetName}"
 
 Colunas disponíveis:
 ${JSON.stringify(columnSummary, null, 2)}
 
-${stats ? `Estatísticas:
-- Total de linhas: ${stats.row_count}
-- Período: ${stats.grain_hint}
-- Coluna de tempo principal: ${stats.primary_time_column || 'nenhuma'}` : ''}
+${introspection.sql_definition ? `SQL da View:\n${introspection.sql_definition.slice(0, 1000)}\n` : ''}
 
-Gere o DashboardSpec JSON ideal para este dataset. Retorne APENAS o JSON, sem explicações.`;
+Informações detectadas:
+- Total de linhas: ${introspection.row_count}
+- Período: ${introspection.grain_hint}
+- Coluna de tempo principal: ${introspection.primary_time_column || 'nenhuma'}
+- Candidatos a funil: ${introspection.detected_roles?.funnel_candidates?.join(', ') || 'não detectados'}
+${statsSummary}
+
+Gere o DashboardSpec JSON ideal para este dataset. 
+IMPORTANTE: Retorne APENAS o JSON válido, sem explicações ou markdown.`;
 
   try {
+    console.log('Calling Lovable AI for spec generation...');
+    
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -402,7 +529,7 @@ Gere o DashboardSpec JSON ideal para este dataset. Retorne APENAS o JSON, sem ex
           { role: 'user', content: userPrompt }
         ],
         max_tokens: 4000,
-        temperature: 0.3,
+        temperature: 0.2, // Lower for more consistent output
       }),
     });
 
@@ -427,10 +554,19 @@ Gere o DashboardSpec JSON ideal para este dataset. Retorne APENAS o JSON, sem ex
       jsonStr = jsonMatch[1];
     }
 
+    // Clean up potential issues
+    jsonStr = jsonStr.trim();
+    if (jsonStr.startsWith('```')) {
+      jsonStr = jsonStr.replace(/^```\w*\n?/, '').replace(/```$/, '');
+    }
+
     try {
-      return JSON.parse(jsonStr.trim());
+      const parsed = JSON.parse(jsonStr);
+      console.log('AI spec parsed successfully');
+      return parsed;
     } catch (parseErr) {
-      console.error('Failed to parse AI response as JSON:', parseErr, jsonStr.slice(0, 500));
+      console.error('Failed to parse AI response as JSON:', parseErr);
+      console.error('Raw content (first 500 chars):', jsonStr.slice(0, 500));
       return null;
     }
   } catch (err) {
@@ -483,7 +619,7 @@ serve(async (req) => {
 
     // Parse request
     const body = await req.json();
-    const { dataset_id, use_ai = true } = body;
+    const { dataset_id, use_ai = true, introspection_data } = body;
 
     if (!dataset_id) {
       return errorResponse('VALIDATION_ERROR', 'dataset_id é obrigatório');
@@ -519,28 +655,44 @@ serve(async (req) => {
 
     console.log(`Generating spec for dataset ${dataset.name} with ${columns.length} columns`);
 
-    // Stats for AI context
-    const stats = {
+    // Build introspection data for AI context
+    const introspection: IntrospectionResult = introspection_data || {
+      columns,
       row_count: dataset.row_limit_default || 10000,
-      grain_hint: dataset.grain_hint,
-      primary_time_column: dataset.primary_time_column
+      grain_hint: dataset.grain_hint || 'day',
+      primary_time_column: dataset.primary_time_column,
+      detected_roles: {
+        time_columns: columns.filter(c => c.semantic_type === 'time').map(c => c.name),
+        metric_columns: columns.filter(c => ['currency', 'count', 'metric'].includes(c.semantic_type || '')).map(c => c.name),
+        percent_columns: columns.filter(c => c.semantic_type === 'percent').map(c => c.name),
+        dimension_columns: columns.filter(c => c.semantic_type === 'dimension').map(c => c.name),
+        funnel_candidates: columns
+          .filter(c => c.semantic_type === 'count')
+          .map(c => c.name)
+      }
     };
 
     // Try AI generation first
     let spec: any = null;
     let source = 'fallback';
+    let aiError: string | null = null;
 
     if (use_ai) {
-      spec = await generateSpecWithAI(columns, dataset.name, stats);
-      if (spec) {
-        source = 'ai';
-        console.log('AI spec generated successfully');
+      try {
+        spec = await generateSpecWithAI(columns, dataset.name, introspection);
+        if (spec) {
+          source = 'ai';
+          console.log('AI spec generated successfully');
+        }
+      } catch (err: any) {
+        aiError = err.message;
+        console.error('AI generation failed:', err);
       }
     }
 
     // Fallback to heuristic
     if (!spec) {
-      spec = generateFallbackSpec(columns, dataset.name);
+      spec = generateFallbackSpec(columns, dataset.name, introspection);
       console.log('Using fallback spec generator');
     }
 
@@ -549,7 +701,6 @@ serve(async (req) => {
     
     if (!validation.valid) {
       console.warn('Spec validation errors:', validation.errors);
-      // Still use fixed spec but log errors
     }
 
     if (validation.warnings.length > 0) {
@@ -558,6 +709,20 @@ serve(async (req) => {
 
     const finalSpec = validation.fixedSpec || spec;
 
+    // Build debug info
+    const debug = {
+      dataset_name: dataset.name,
+      dataset_id: dataset.id,
+      column_count: columns.length,
+      time_column: introspection.primary_time_column,
+      grain: introspection.grain_hint,
+      funnel_candidates: introspection.detected_roles?.funnel_candidates || [],
+      ai_used: source === 'ai',
+      ai_error: aiError,
+      validation_errors: validation.errors,
+      validation_warnings: validation.warnings
+    };
+
     return successResponse({
       spec: finalSpec,
       source,
@@ -565,7 +730,8 @@ serve(async (req) => {
         valid: validation.valid,
         errors: validation.errors,
         warnings: validation.warnings
-      }
+      },
+      debug
     });
 
   } catch (error: any) {
