@@ -515,6 +515,31 @@ export default function ModernDashboardViewer({
   // Check if user is admin/manager for diagnostics
   const isAdminOrManager = userRole === 'admin' || userRole === 'manager';
 
+  // Persist tab selection per dashboard (MOVED UP - must be before any returns)
+  useEffect(() => {
+    const storedTab = localStorage.getItem(`dashboard-tab-${dashboardId}`);
+    if (storedTab && ['executivo', 'funil', 'eficiencia', 'tendencias', 'detalhes'].includes(storedTab)) {
+      setActiveTab(storedTab as TabType);
+    }
+  }, [dashboardId]);
+
+  const handleTabChange = useCallback((tab: TabType) => {
+    setActiveTab(tab);
+    localStorage.setItem(`dashboard-tab-${dashboardId}`, tab);
+  }, [dashboardId]);
+
+  // Warnings summary for executive view
+  const warningsSummary = useMemo(() => {
+    if (!normalizedData || normalizedData.warnings.length === 0) return null;
+    const count = normalizedData.warnings.length;
+    return {
+      count,
+      message: count === 1 
+        ? 'Detectamos 1 inconsistência nos dados.' 
+        : `Detectamos ${count} inconsistências nos dados.`
+    };
+  }, [normalizedData]);
+
   // Session expired state
   if (sessionExpired) {
     return <SessionExpiredView onLogin={handleLoginRedirect} />;
@@ -596,31 +621,6 @@ export default function ModernDashboardViewer({
       </div>
     );
   }
-
-  // Persist tab selection per dashboard
-  useEffect(() => {
-    const storedTab = localStorage.getItem(`dashboard-tab-${dashboardId}`);
-    if (storedTab && ['executivo', 'funil', 'eficiencia', 'tendencias', 'detalhes'].includes(storedTab)) {
-      setActiveTab(storedTab as TabType);
-    }
-  }, [dashboardId]);
-
-  const handleTabChange = useCallback((tab: TabType) => {
-    setActiveTab(tab);
-    localStorage.setItem(`dashboard-tab-${dashboardId}`, tab);
-  }, [dashboardId]);
-
-  // Warnings summary for executive view
-  const warningsSummary = useMemo(() => {
-    if (!normalizedData || normalizedData.warnings.length === 0) return null;
-    const count = normalizedData.warnings.length;
-    return {
-      count,
-      message: count === 1 
-        ? 'Detectamos 1 inconsistência nos dados.' 
-        : `Detectamos ${count} inconsistências nos dados.`
-    };
-  }, [normalizedData]);
 
   return (
     <div className="space-y-6">
