@@ -62,6 +62,7 @@ interface ColumnInfo {
 }
 
 // Semantic type detection based on column name and value patterns
+// Supports both legacy (dia, custo_total) and v3 fields (day, spend, leads_new)
 function detectSemanticType(name: string, dbType: string, sampleValues: any[]): {
   semantic_type: string | null
   role_hint: string | null
@@ -70,25 +71,30 @@ function detectSemanticType(name: string, dbType: string, sampleValues: any[]): 
 } {
   const lowerName = name.toLowerCase()
   
-  // Time columns
-  if (['dia', 'date', 'data', 'created_at', 'updated_at', 'timestamp'].some(t => lowerName.includes(t))) {
+  // Time columns - includes v3 'day' field
+  if (['dia', 'day', 'date', 'data', 'created_at', 'updated_at', 'timestamp'].some(t => lowerName === t || lowerName.includes(t))) {
     return { semantic_type: 'time', role_hint: 'x_axis', aggregator_default: 'none', format: 'date' }
   }
   
-  // Currency columns
+  // Currency columns - includes v3 'spend' field
   if (lowerName.includes('custo') || lowerName.includes('valor') || lowerName.includes('receita') || 
       lowerName.includes('invest') || lowerName.includes('fatur') || lowerName.includes('spent') ||
-      lowerName === 'cpl' || lowerName === 'cac' || lowerName.startsWith('custo_por_')) {
+      lowerName === 'spend' || lowerName === 'cpl' || lowerName === 'cac' || lowerName.startsWith('custo_por_')) {
     return { semantic_type: 'currency', role_hint: 'y_axis', aggregator_default: 'sum', format: 'brl' }
   }
   
-  // Percentage columns
-  if (lowerName.startsWith('taxa_') || lowerName.includes('rate') || lowerName.includes('percent') || lowerName.includes('%')) {
+  // Percentage columns - includes v3 rate fields
+  if (lowerName.startsWith('taxa_') || lowerName.includes('rate') || lowerName.includes('percent') || 
+      lowerName.includes('%') || lowerName.startsWith('conv_') || lowerName.includes('_rate')) {
     return { semantic_type: 'percent', role_hint: 'y_axis', aggregator_default: 'avg', format: 'percent' }
   }
   
-  // Count columns
-  if (lowerName.endsWith('_total') || lowerName.includes('count') || lowerName.includes('qtd') || lowerName.includes('quantidade')) {
+  // Count/funnel columns - includes v3 fields (leads_new, meetings_scheduled, etc.)
+  if (lowerName.endsWith('_total') || lowerName.includes('count') || lowerName.includes('qtd') || 
+      lowerName.includes('quantidade') || lowerName.includes('leads') || lowerName.includes('meetings') ||
+      lowerName.includes('sales') || lowerName.includes('entrada') || lowerName.includes('reuniao') ||
+      lowerName.includes('venda') || lowerName.includes('msg_') || lowerName === 'impressions' ||
+      lowerName === 'clicks' || lowerName === 'reach') {
     return { semantic_type: 'count', role_hint: 'y_axis', aggregator_default: 'sum', format: 'integer' }
   }
   
@@ -116,9 +122,11 @@ function detectSemanticType(name: string, dbType: string, sampleValues: any[]): 
 }
 
 // Generate human-readable label from column name
+// Supports both legacy and v3 field naming conventions
 function generateDisplayLabel(name: string): string {
-  // Known mappings
+  // Known mappings - includes v3 fields
   const labelMap: Record<string, string> = {
+    // Legacy fields
     custo_total: 'Investimento',
     leads_total: 'Leads',
     entrada_total: 'Entradas',
@@ -130,6 +138,25 @@ function generateDisplayLabel(name: string): string {
     falta_total: 'Faltas',
     desmarque_total: 'Desmarques',
     dia: 'Data',
+    // V3 fields
+    day: 'Data',
+    spend: 'Investimento',
+    leads_new: 'Novos Leads',
+    meetings_scheduled: 'Reuniões Agendadas',
+    meetings_completed: 'Reuniões Realizadas',
+    meetings_no_show: 'No-Show',
+    sales: 'Vendas',
+    msg_in: 'Mensagens Recebidas',
+    msg_out: 'Mensagens Enviadas',
+    impressions: 'Impressões',
+    clicks: 'Cliques',
+    reach: 'Alcance',
+    ctr: 'CTR',
+    cpc: 'CPC',
+    cpm: 'CPM',
+    conv_rate_lead: 'Taxa Conv. Lead',
+    conv_rate_meeting: 'Taxa Conv. Reunião',
+    conv_rate_sale: 'Taxa Conv. Venda',
   }
   
   if (labelMap[name.toLowerCase()]) {
@@ -139,6 +166,7 @@ function generateDisplayLabel(name: string): string {
   // Transform snake_case to Title Case
   let label = name
     .replace(/_total$/, '')
+    .replace(/_new$/, ' Novos')
     .replace(/_/g, ' ')
     .replace(/\b\w/g, c => c.toUpperCase())
   
@@ -148,6 +176,9 @@ function generateDisplayLabel(name: string): string {
   }
   if (label.toLowerCase().startsWith('custo por ')) {
     label = 'Custo por ' + label.slice(10).charAt(0).toUpperCase() + label.slice(11)
+  }
+  if (label.toLowerCase().startsWith('conv ')) {
+    label = 'Conv. ' + label.slice(5)
   }
   
   return label

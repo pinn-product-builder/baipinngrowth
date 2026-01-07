@@ -43,6 +43,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -63,10 +64,14 @@ import {
   XCircle,
   Loader2,
   Columns,
-  Clock
+  Clock,
+  Wand2,
+  BarChart3
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { useNavigate } from 'react-router-dom';
+import DashboardAutoBuilder from '@/components/dashboards/wizard/DashboardAutoBuilder';
 
 interface Dataset {
   id: string;
@@ -123,6 +128,12 @@ export default function Datasets() {
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null);
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [isLoadingColumns, setIsLoadingColumns] = useState(false);
+  
+  // Auto-builder wizard state
+  const [isAutoBuilderOpen, setIsAutoBuilderOpen] = useState(false);
+  const [autoBuilderTenantId, setAutoBuilderTenantId] = useState<string | undefined>();
+  
+  const navigate = useNavigate();
   
   // Form state
   const [formData, setFormData] = useState({
@@ -422,6 +433,21 @@ export default function Datasets() {
     return <Badge className={colors[type] || 'bg-muted'}>{type}</Badge>;
   };
 
+  const openAutoBuilder = (ds?: Dataset) => {
+    if (ds) {
+      setAutoBuilderTenantId(ds.tenant_id);
+    }
+    setIsAutoBuilderOpen(true);
+  };
+
+  const handleAutoBuilderSuccess = (dashboardId: string) => {
+    toast({
+      title: 'Dashboard criado!',
+      description: 'O dashboard foi gerado com sucesso.',
+    });
+    navigate(`/dashboards/${dashboardId}`);
+  };
+
   if (isLoading) return <LoadingPage />;
 
   return (
@@ -430,10 +456,16 @@ export default function Datasets() {
         title="Datasets"
         description="Gerencie tabelas e views conectadas aos seus data sources."
         actions={
-          <Button onClick={() => { resetForm(); setIsDialogOpen(true); }}>
-            <Plus className="mr-2 h-4 w-4" />
-            Novo Dataset
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => openAutoBuilder()}>
+              <Wand2 className="mr-2 h-4 w-4" />
+              Auto-gerar Dashboard
+            </Button>
+            <Button onClick={() => { resetForm(); setIsDialogOpen(true); }}>
+              <Plus className="mr-2 h-4 w-4" />
+              Novo Dataset
+            </Button>
+          </div>
         }
       />
 
@@ -524,6 +556,11 @@ export default function Datasets() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => openAutoBuilder(ds)}>
+                          <Wand2 className="mr-2 h-4 w-4" />
+                          Auto-gerar Dashboard
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
                         <DropdownMenuItem onClick={() => openEditDialog(ds)}>
                           <Pencil className="mr-2 h-4 w-4" />
                           Editar
@@ -540,6 +577,7 @@ export default function Datasets() {
                           <Power className="mr-2 h-4 w-4" />
                           {ds.is_active ? 'Desativar' : 'Ativar'}
                         </DropdownMenuItem>
+                        <DropdownMenuSeparator />
                         <DropdownMenuItem 
                           onClick={() => deleteDataset(ds)}
                           className="text-destructive"
@@ -788,6 +826,14 @@ export default function Datasets() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Auto-Builder Wizard */}
+      <DashboardAutoBuilder
+        open={isAutoBuilderOpen}
+        onOpenChange={setIsAutoBuilderOpen}
+        onSuccess={handleAutoBuilderSuccess}
+        tenantId={autoBuilderTenantId}
+      />
     </div>
   );
 }
