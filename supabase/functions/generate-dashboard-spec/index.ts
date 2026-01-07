@@ -682,7 +682,7 @@ serve(async (req) => {
     }
 
     const body = await req.json();
-    const { dataset_id, use_ai = true, user_prompt, dataset_profile } = body;
+    const { dataset_id, use_ai = true, user_prompt, dataset_profile, dataset_mapping } = body;
 
     if (!dataset_id) {
       return errorResponse('VALIDATION_ERROR', 'dataset_id é obrigatório');
@@ -726,6 +726,67 @@ serve(async (req) => {
 
     // Cast dataset_profile to proper type
     const profile = dataset_profile as DatasetProfile | null;
+    
+    // Apply manual mapping overrides to profile if provided
+    interface DatasetMappingInput {
+      time_column?: string | null;
+      id_column?: string | null;
+      dimension_columns?: string[];
+      funnel_stages?: string[];
+      truthy_rule?: 'default' | 'custom';
+      custom_truthy_values?: string[];
+    }
+    
+    const mapping = dataset_mapping as DatasetMappingInput | null;
+    
+    if (mapping && profile) {
+      console.log('Applying manual mapping overrides:', mapping);
+      
+      // Override time column
+      if (mapping.time_column) {
+        profile.detected_candidates = profile.detected_candidates || {
+          time_columns: [],
+          funnel_stages: [],
+          metric_columns: [],
+          currency_columns: [],
+          percent_columns: [],
+          dimension_columns: []
+        };
+        profile.detected_candidates.time_columns = [
+          { name: mapping.time_column, confidence: 1.0, parseable_rate: 1.0 }
+        ];
+      }
+      
+      // Override funnel stages
+      if (mapping.funnel_stages && mapping.funnel_stages.length > 0) {
+        profile.detected_candidates = profile.detected_candidates || {
+          time_columns: [],
+          funnel_stages: [],
+          metric_columns: [],
+          currency_columns: [],
+          percent_columns: [],
+          dimension_columns: []
+        };
+        profile.detected_candidates.funnel_stages = mapping.funnel_stages.map((name, idx) => ({
+          name,
+          label: name,
+          order: idx
+        }));
+      }
+      
+      // Override dimension columns
+      if (mapping.dimension_columns && mapping.dimension_columns.length > 0) {
+        profile.detected_candidates = profile.detected_candidates || {
+          time_columns: [],
+          funnel_stages: [],
+          metric_columns: [],
+          currency_columns: [],
+          percent_columns: [],
+          dimension_columns: []
+        };
+        profile.detected_candidates.dimension_columns = mapping.dimension_columns;
+      }
+    }
 
     // Try AI generation
     let spec: any = null;
