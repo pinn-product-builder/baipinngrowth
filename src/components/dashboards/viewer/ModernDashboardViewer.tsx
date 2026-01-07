@@ -27,7 +27,7 @@ import ExecutiveKPIRow from './ExecutiveKPIRow';
 import ExecutiveFunnel from './ExecutiveFunnel';
 import ExecutiveTrendCharts from './ExecutiveTrendCharts';
 import DiagnosticsPanel from './DiagnosticsPanel';
-import DecisionCenter from './DecisionCenter';
+import DecisionCenter from './DecisionCenterV2';
 
 interface ModernDashboardViewerProps {
   dashboardId: string;
