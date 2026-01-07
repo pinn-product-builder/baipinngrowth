@@ -40,17 +40,34 @@ export default function DiagnosticsPanel({
   const diagnostics = useMemo(() => {
     const alerts: DiagnosticAlert[] = [];
     
-    // Check for days with cost but no leads
-    const costNoLeads = data.filter(row => 
-      (row.custo_total > 0) && (!row.leads_total || row.leads_total === 0)
-    );
+    // Helper to get date from row (supports both 'dia' and 'day')
+    const getRowDate = (row: Record<string, any>): Date | null => {
+      const dateVal = row.dia || row.day;
+      if (!dateVal) return null;
+      if (dateVal instanceof Date) return dateVal;
+      try {
+        return parseISO(dateVal);
+      } catch {
+        return null;
+      }
+    };
+    
+    // Check for days with cost but no leads (supports both schemas)
+    const costNoLeads = data.filter(row => {
+      const cost = row.custo_total ?? row.spend ?? 0;
+      const leads = row.leads_total ?? row.leads_new ?? 0;
+      return cost > 0 && leads === 0;
+    });
     if (costNoLeads.length > 0) {
+      const totalCost = costNoLeads.reduce((sum, r) => 
+        sum + (r.custo_total ?? r.spend ?? 0), 0
+      );
       alerts.push({
         type: 'critical',
         title: 'Dias com custo sem leads',
         description: `${costNoLeads.length} dia(s) com investimento mas nenhum lead gerado. Verifique a integração de dados ou a campanha.`,
         metric: 'custo_total',
-        value: costNoLeads.reduce((sum, r) => sum + (r.custo_total || 0), 0),
+        value: totalCost,
       });
     }
     
@@ -86,32 +103,30 @@ export default function DiagnosticsPanel({
       }
     }
     
-    // Check for date gaps
+    // Check for date gaps - with safe date parsing
     if (data.length > 1) {
-      const sortedData = [...data].sort((a, b) => {
-        const dateA = a.dia instanceof Date ? a.dia : parseISO(a.dia);
-        const dateB = b.dia instanceof Date ? b.dia : parseISO(b.dia);
-        return dateA.getTime() - dateB.getTime();
-      });
+      const datesWithRows = data
+        .map(row => ({ row, date: getRowDate(row) }))
+        .filter(item => item.date !== null) as Array<{ row: any; date: Date }>;
       
-      let gaps = 0;
-      for (let i = 1; i < sortedData.length; i++) {
-        const prevDate = sortedData[i-1].dia instanceof Date 
-          ? sortedData[i-1].dia 
-          : parseISO(sortedData[i-1].dia);
-        const currDate = sortedData[i].dia instanceof Date 
-          ? sortedData[i].dia 
-          : parseISO(sortedData[i].dia);
-        const diff = differenceInDays(currDate, prevDate);
-        if (diff > 1) gaps++;
-      }
-      
-      if (gaps > 0) {
-        alerts.push({
-          type: 'info',
-          title: 'Lacunas de data',
-          description: `${gaps} lacuna(s) encontrada(s) nos dados. Alguns dias podem estar sem informação.`,
-        });
+      if (datesWithRows.length > 1) {
+        const sortedData = datesWithRows.sort((a, b) => 
+          a.date.getTime() - b.date.getTime()
+        );
+        
+        let gaps = 0;
+        for (let i = 1; i < sortedData.length; i++) {
+          const diff = differenceInDays(sortedData[i].date, sortedData[i-1].date);
+          if (diff > 1) gaps++;
+        }
+        
+        if (gaps > 0) {
+          alerts.push({
+            type: 'info',
+            title: 'Lacunas de data',
+            description: `${gaps} lacuna(s) encontrada(s) nos dados. Alguns dias podem estar sem informação.`,
+          });
+        }
       }
     }
     
@@ -136,12 +151,13 @@ export default function DiagnosticsPanel({
       });
     }
     
-    // Data quality check
+    // Data quality check - supports both schemas
     const totalRows = data.length;
-    const rowsWithAllData = data.filter(row => 
-      row.custo_total !== undefined && 
-      row.leads_total !== undefined
-    ).length;
+    const rowsWithAllData = data.filter(row => {
+      const hasCost = (row.custo_total ?? row.spend) !== undefined;
+      const hasLeads = (row.leads_total ?? row.leads_new) !== undefined;
+      return hasCost && hasLeads;
+    }).length;
     
     const dataQuality = totalRows > 0 ? (rowsWithAllData / totalRows) * 100 : 0;
     if (dataQuality < 100) {
