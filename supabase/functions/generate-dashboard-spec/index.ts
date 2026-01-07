@@ -83,6 +83,21 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
       .map(c => c.name)
   );
   const timeColumns = columns.filter(c => c.semantic_type === 'time').map(c => c.name);
+  
+  // Also detect time columns by name pattern if semantic type not set
+  const timeByName = columns.filter(c => 
+    c.name.includes('created') || c.name.includes('date') || 
+    c.name.includes('dia') || c.name.includes('data') ||
+    c.name.includes('time') || c.name.includes('timestamp')
+  ).map(c => c.name);
+  
+  const allTimeColumns = [...new Set([...timeColumns, ...timeByName])];
+  
+  // CRM funnel column names that should be treated as countable
+  const funnelColumnNames = new Set([
+    'entrada', 'lead_ativo', 'qualificado', 'exp_agendada', 'exp_realizada',
+    'exp_nao_confirmada', 'faltou_exp', 'reagendou', 'venda', 'perdida', 'aluno_ativo'
+  ]);
 
   // Deep clone spec to fix
   const fixed = JSON.parse(JSON.stringify(spec));
@@ -93,14 +108,16 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
     warnings.push('Adicionada versão 1 ao spec');
   }
 
-  // Validate time column
-  if (fixed.time?.column && !columnNames.has(fixed.time.column)) {
-    if (timeColumns.length > 0) {
-      fixed.time.column = timeColumns[0];
-      warnings.push(`Coluna de tempo corrigida para ${timeColumns[0]}`);
+  // Validate time column - check if exists or try to find one
+  if (!fixed.time?.column || !columnNames.has(fixed.time.column)) {
+    if (allTimeColumns.length > 0) {
+      if (!fixed.time) fixed.time = {};
+      fixed.time.column = allTimeColumns[0];
+      fixed.time.type = 'date';
+      warnings.push(`Coluna de tempo definida para ${allTimeColumns[0]}`);
     } else {
       delete fixed.time;
-      warnings.push('Removida configuração de tempo (sem coluna válida)');
+      warnings.push('Sem coluna de tempo detectada');
     }
   }
 
@@ -125,15 +142,19 @@ function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult 
     });
   }
 
-  // Validate funnel
+  // Validate funnel - allow CRM columns even if not marked as numeric
   if (fixed.funnel?.steps && Array.isArray(fixed.funnel.steps)) {
     fixed.funnel.steps = fixed.funnel.steps.filter((step: any) => {
       if (!step.column || !columnNames.has(step.column)) {
         warnings.push(`Etapa de funil removida: coluna ${step.column || 'indefinida'} não existe`);
         return false;
       }
-      if (!numericColumns.has(step.column)) {
-        warnings.push(`Etapa ${step.label}: coluna ${step.column} não é numérica`);
+      // Allow if it's numeric OR if it's a known CRM funnel column name
+      const isFunnelColumn = funnelColumnNames.has(step.column.toLowerCase()) ||
+        step.column.toLowerCase().includes('_total') ||
+        step.column.toLowerCase().includes('leads');
+      if (!numericColumns.has(step.column) && !isFunnelColumn) {
+        warnings.push(`Etapa ${step.label}: coluna ${step.column} não é numérica nem funil`);
         return false;
       }
       if (!step.label || typeof step.label !== 'string') {
@@ -253,37 +274,68 @@ function generateFallbackSpec(
   datasetName: string,
   introspection?: IntrospectionResult
 ): any {
-  const timeCol = columns.find(c => c.semantic_type === 'time');
+  // Find time column - check semantic type first, then by name pattern
+  let timeCol = columns.find(c => c.semantic_type === 'time');
+  if (!timeCol) {
+    timeCol = columns.find(c => 
+      c.name.includes('created') || c.name.includes('date') || 
+      c.name.includes('dia') || c.name.includes('data') ||
+      c.name.includes('time') || c.name.includes('timestamp')
+    );
+  }
+  
   const currencyCols = columns.filter(c => c.semantic_type === 'currency');
   const countCols = columns.filter(c => c.semantic_type === 'count');
   const percentCols = columns.filter(c => c.semantic_type === 'percent');
   const metricCols = columns.filter(c => c.semantic_type === 'metric');
 
-  // Detect Afonsina-style funnel pattern
-  const funnelPatterns = [
-    ['leads_total', 'entrada_total', 'reuniao_agendada_total', 'reuniao_realizada_total', 'venda_total'],
-    ['leads_new', 'meetings_scheduled', 'meetings_completed', 'sales'],
-    ['leads', 'entradas', 'reunioes', 'vendas']
+  // CRM funnel column detection by name (even if type is text/string)
+  const funnelColumnNames = [
+    'entrada', 'lead_ativo', 'qualificado', 'exp_agendada', 'exp_realizada',
+    'exp_nao_confirmada', 'faltou_exp', 'reagendou', 'venda', 'perdida', 'aluno_ativo'
   ];
+  
+  // Find funnel columns by name pattern
+  const funnelCols = columns.filter(c => 
+    funnelColumnNames.some(fn => c.name.toLowerCase() === fn || c.name.toLowerCase().includes(fn))
+  );
 
+  // Also check for _total suffix patterns (Afonsina style)
+  const totalPatterns = [
+    'leads_total', 'entrada_total', 'reuniao_agendada_total', 'reuniao_realizada_total', 'venda_total',
+    'leads_new', 'meetings_scheduled', 'meetings_completed', 'sales'
+  ];
+  
   let funnelSteps: ColumnMeta[] = [];
-  for (const pattern of funnelPatterns) {
-    const matched = pattern
-      .map(p => columns.find(c => c.name.toLowerCase().includes(p.toLowerCase())))
-      .filter((c): c is ColumnMeta => c !== undefined);
-    if (matched.length >= 3) {
-      funnelSteps = matched;
-      break;
+  
+  // Try _total pattern first
+  for (const pattern of totalPatterns) {
+    const matched = columns.find(c => c.name.toLowerCase() === pattern.toLowerCase());
+    if (matched && !funnelSteps.includes(matched)) {
+      funnelSteps.push(matched);
     }
   }
+  
+  // If not enough from _total pattern, use CRM funnel columns
+  if (funnelSteps.length < 3 && funnelCols.length >= 3) {
+    // Order funnel columns logically
+    const funnelOrder = ['entrada', 'lead_ativo', 'qualificado', 'exp_agendada', 'exp_realizada', 'venda'];
+    funnelSteps = funnelOrder
+      .map(name => funnelCols.find(c => c.name.toLowerCase().includes(name)))
+      .filter((c): c is ColumnMeta => c !== undefined)
+      .slice(0, 6);
+  }
 
-  // Fallback: use count columns if no pattern matched
+  // Fallback: use count columns if still not enough
   if (funnelSteps.length < 3) {
-    funnelSteps = countCols.filter(c => 
-      c.name.includes('_total') || c.name.includes('leads') || c.name.includes('entrada') || 
-      c.name.includes('reuniao') || c.name.includes('venda') || c.name.includes('meetings') ||
-      c.name.includes('sales')
-    ).slice(0, 6);
+    const additionalFunnel = countCols.filter(c => 
+      !funnelSteps.includes(c) && (
+        c.name.includes('_total') || c.name.includes('leads') || c.name.includes('entrada') || 
+        c.name.includes('reuniao') || c.name.includes('venda') || c.name.includes('meetings') ||
+        c.name.includes('sales')
+      )
+    );
+    funnelSteps = [...funnelSteps, ...additionalFunnel].slice(0, 6);
   }
 
   const spec: any = {
@@ -461,57 +513,54 @@ async function generateSpecWithAI(
     }
   }
 
+  // Build list of valid column names for AI reference
+  const validColumnNames = columns.map(c => c.name);
+  
   const systemPrompt = `Você é um especialista em Business Intelligence que cria especificações de dashboards.
 Sua tarefa é criar um DashboardSpec JSON para visualizar os dados de forma clara e acionável.
 
-REGRAS OBRIGATÓRIAS:
-1. Use APENAS colunas que existem no dataset (fornecidas abaixo)
-2. KPIs devem usar APENAS colunas numéricas (currency, count, metric, percent)
-3. Funnel deve ter etapas com colunas numéricas que representem progressão lógica
-4. Charts devem ter x = coluna de tempo e series = colunas numéricas
-5. Labels devem ser claros e em português
-6. Não invente colunas ou métricas que não existam
+REGRAS CRÍTICAS - VOCÊ DEVE SEGUIR EXATAMENTE:
+1. Use APENAS os nomes de colunas EXATOS fornecidos na lista abaixo
+2. O campo "column" em KPIs DEVE ser o nome exato da coluna (ex: "entrada", NÃO "Entrada")
+3. O campo "y" em series DEVE ser o nome exato da coluna
+4. O campo "x" em charts DEVE ser o nome exato da coluna de tempo
+5. Nomes de colunas são CASE-SENSITIVE - use exatamente como fornecidos
+6. NUNCA invente nomes de colunas que não existam na lista
 
-PADRÃO DE FUNIL ESPERADO (se houver dados de marketing/vendas):
-- Leads → Entradas/Qualificados → Reuniões Agendadas → Reuniões Realizadas → Vendas
+Lista de nomes de colunas válidos:
+${validColumnNames.join(', ')}
 
-KPIS PRIORITÁRIOS:
-- Custo total / Investimento
-- CPL (custo por lead) - goalDirection: lower_better
-- CAC (custo por aquisição) - goalDirection: lower_better
-- Leads, Vendas - goalDirection: higher_better
-- Taxas de conversão - goalDirection: higher_better
+PADRÃO DE FUNIL ESPERADO (use colunas que existam):
+- leads/entrada → qualificado → agendada → realizada → venda
 
 ESTRUTURA DO SPEC:
 {
   "version": 1,
   "title": "Nome do Dashboard",
-  "time": { "column": "coluna_data", "type": "date" },
-  "columns": [{ "name": "col", "type": "currency|number|percent|date|string", "label": "Label", "scale": "0to1" }],
-  "kpis": [{ "label": "Label", "column": "col", "agg": "sum|avg|min|max|last", "format": "currency|number|percent|integer", "goalDirection": "higher_better|lower_better" }],
-  "funnel": { "steps": [{ "label": "Etapa", "column": "col" }] },
-  "charts": [
-    { "type": "line|bar|area", "title": "Título", "x": "col_tempo", "series": [{ "label": "Label", "y": "col", "format": "currency|number|percent" }] }
-  ],
+  "time": { "column": "NOME_EXATO_COLUNA_TEMPO", "type": "date" },
+  "columns": [{ "name": "NOME_EXATO", "type": "currency|number|percent|date|string", "label": "Label Amigável" }],
+  "kpis": [{ "label": "Label Amigável", "column": "NOME_EXATO", "agg": "sum|avg", "format": "currency|number|percent|integer", "goalDirection": "higher_better|lower_better" }],
+  "funnel": { "steps": [{ "label": "Label Amigável", "column": "NOME_EXATO" }] },
+  "charts": [{ "type": "line", "title": "Título", "x": "NOME_EXATO_TEMPO", "series": [{ "label": "Label", "y": "NOME_EXATO", "format": "number" }] }],
   "ui": { "tabs": ["Decisões", "Executivo", "Funil", "Tendências", "Detalhes"], "defaultTab": "Decisões", "comparePeriods": true }
 }`;
 
   const userPrompt = `Dataset: "${datasetName}"
 
-Colunas disponíveis:
+COLUNAS DISPONÍVEIS (use EXATAMENTE estes nomes):
 ${JSON.stringify(columnSummary, null, 2)}
 
 ${introspection.sql_definition ? `SQL da View:\n${introspection.sql_definition.slice(0, 1000)}\n` : ''}
 
-Informações detectadas:
-- Total de linhas: ${introspection.row_count}
-- Período: ${introspection.grain_hint}
-- Coluna de tempo principal: ${introspection.primary_time_column || 'nenhuma'}
-- Candidatos a funil: ${introspection.detected_roles?.funnel_candidates?.join(', ') || 'não detectados'}
+Detecções:
+- Linhas: ${introspection.row_count}
+- Granularidade: ${introspection.grain_hint}
+- Coluna tempo: ${introspection.primary_time_column || 'detectar por nome'}
+- Funil candidatos: ${introspection.detected_roles?.funnel_candidates?.join(', ') || 'detectar'}
 ${statsSummary}
 
-Gere o DashboardSpec JSON ideal para este dataset. 
-IMPORTANTE: Retorne APENAS o JSON válido, sem explicações ou markdown.`;
+Gere o DashboardSpec JSON usando APENAS os nomes de colunas listados acima.
+IMPORTANTE: Retorne APENAS o JSON válido, sem markdown ou explicações.`;
 
   try {
     console.log('Calling Lovable AI for spec generation...');
