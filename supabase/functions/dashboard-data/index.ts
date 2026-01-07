@@ -5,49 +5,54 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// View mapping by context/section
-const VIEW_CONFIG = {
-  // Main executive dashboard
+// View configuration with date column info
+const VIEW_CONFIG: Record<string, { views: Record<string, { name: string; dateColumn?: string; hasDateFilter?: boolean }> }> = {
   executive: {
-    kpis: 'vw_dashboard_kpis_30d_v3',
-    daily: 'vw_dashboard_daily_60d_v3',
-    funnel: 'vw_funnel_current_exec',
+    views: {
+      kpis: { name: 'vw_dashboard_kpis_30d_v3', hasDateFilter: false },
+      daily: { name: 'vw_dashboard_daily_60d_v3', dateColumn: 'dia', hasDateFilter: true },
+      funnel: { name: 'vw_funnel_current_exec', hasDateFilter: false },
+    }
   },
-  // Traffic/Ads section
   trafego: {
-    kpis_7d: 'vw_trafego_kpis_7d',
-    kpis_30d: 'vw_trafego_kpis_30d',
-    daily: 'vw_trafego_daily_30d',
-    top_ads: 'vw_spend_top_ads_30d_v2',
+    views: {
+      kpis_30d: { name: 'vw_trafego_kpis_30d', hasDateFilter: false },
+      daily: { name: 'vw_trafego_daily_30d', dateColumn: 'dia', hasDateFilter: true },
+      top_ads: { name: 'vw_spend_top_ads_30d_v2', hasDateFilter: false },
+    }
   },
-  // AI Agent section
   agente: {
-    kpis_7d: 'vw_agente_kpis_7d',
-    kpis_30d: 'vw_agente_kpis_30d',
+    views: {
+      kpis_30d: { name: 'vw_agente_kpis_30d', hasDateFilter: false },
+    }
   },
-  // Messages/Conversations
   mensagens: {
-    heatmap: 'vw_kommo_msg_in_heatmap_30d_v3',
+    views: {
+      heatmap: { name: 'vw_kommo_msg_in_heatmap_30d_v3', hasDateFilter: false },
+    }
   },
-  // Meetings
   reunioes: {
-    upcoming: 'vw_meetings_upcoming_v3',
+    views: {
+      upcoming: { name: 'vw_meetings_upcoming_v3', hasDateFilter: false },
+    }
   },
-  // Calls (VAPI)
   ligacoes: {
-    kpis_7d: 'vw_calls_kpis_7d',
-    kpis_30d: 'vw_calls_kpis_30d',
-    daily: 'vw_calls_daily_30d',
-    recent: 'vw_calls_last_50',
+    views: {
+      kpis_30d: { name: 'vw_calls_kpis_30d', hasDateFilter: false },
+      daily: { name: 'vw_calls_daily_30d', dateColumn: 'dia', hasDateFilter: true },
+      recent: { name: 'vw_calls_last_50', hasDateFilter: false },
+    }
   },
-  // Admin/Mapping
   admin: {
-    coverage: 'vw_funnel_mapping_coverage',
-    unmapped: 'vw_funnel_unmapped_candidates',
+    views: {
+      coverage: { name: 'vw_funnel_mapping_coverage', hasDateFilter: false },
+      unmapped: { name: 'vw_funnel_unmapped_candidates', hasDateFilter: false },
+    }
   },
-  // Legacy compatibility - original view
   legacy: {
-    main: 'vw_afonsina_custos_funil_dia',
+    views: {
+      main: { name: 'vw_afonsina_custos_funil_dia', dateColumn: 'dia', hasDateFilter: true },
+    }
   },
 }
 
@@ -151,7 +156,8 @@ async function fetchFromView(
   start: string | null,
   end: string | null,
   limit: string,
-  dateColumn: string = 'dia'
+  dateColumn: string | null = null,
+  hasDateFilter: boolean = false
 ): Promise<{ data: any[]; error: string | null }> {
   try {
     let restUrl = `${remoteUrl}/rest/v1/${viewName}?select=*`
@@ -161,22 +167,15 @@ async function fetchFromView(
       restUrl += `&org_id=eq.${orgId}`
     }
     
-    // Date filters - only apply if the view likely has the date column
-    const hasDateColumn = !viewName.includes('upcoming') && 
-                          !viewName.includes('last_50') && 
-                          !viewName.includes('coverage') &&
-                          !viewName.includes('unmapped') &&
-                          !viewName.includes('heatmap')
-    
-    if (hasDateColumn && start) {
-      restUrl += `&${dateColumn}=gte.${start}`
-    }
-    if (hasDateColumn && end) {
-      restUrl += `&${dateColumn}=lte.${end}`
-    }
-    
-    // Order by date if applicable
-    if (hasDateColumn) {
+    // Date filters - only apply if view has date filtering
+    if (hasDateFilter && dateColumn) {
+      if (start) {
+        restUrl += `&${dateColumn}=gte.${start}`
+      }
+      if (end) {
+        restUrl += `&${dateColumn}=lte.${end}`
+      }
+      // Order by date column
       restUrl += `&order=${dateColumn}.asc`
     }
     
@@ -258,8 +257,8 @@ Deno.serve(async (req) => {
     let start: string | null = null
     let end: string | null = null
     let limit: string = '1000'
-    let section: string = 'all' // New: which section to fetch
-    let orgId: string | null = null // New: org_id filter
+    let section: string = 'legacy' // Default to legacy for backwards compatibility
+    let orgId: string | null = null
 
     if (req.method === 'POST') {
       try {
@@ -268,7 +267,7 @@ Deno.serve(async (req) => {
         start = body.start
         end = body.end
         limit = body.limit || '1000'
-        section = body.section || 'all'
+        section = body.section || 'legacy'
         orgId = body.org_id || null
       } catch (e) {
         console.error('Failed to parse request body:', e)
@@ -283,7 +282,7 @@ Deno.serve(async (req) => {
       start = url.searchParams.get('start')
       end = url.searchParams.get('end')
       limit = url.searchParams.get('limit') || '1000'
-      section = url.searchParams.get('section') || 'all'
+      section = url.searchParams.get('section') || 'legacy'
       orgId = url.searchParams.get('org_id')
     }
 
@@ -405,136 +404,108 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Determine which views to fetch based on section
+    // Helper to check if view is allowed
     const allowedViews = dataSource.allowed_views || []
+    const isAllowed = (view: string) => allowedViews.includes(view)
+
+    // For backwards compatibility: if section is 'legacy' or not specified, 
+    // use the dashboard's view_name directly
+    if (section === 'legacy' || !section) {
+      const viewName = dashboard.view_name
+      if (!viewName) {
+        return new Response(JSON.stringify({ error: 'Dashboard não tem view_name configurado' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      if (!isAllowed(viewName)) {
+        return new Response(JSON.stringify({ error: 'View não permitida' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      console.log('Using legacy mode with view:', viewName)
+      const { data, error } = await fetchFromView(
+        remoteUrl, 
+        remoteKey, 
+        viewName, 
+        orgId, 
+        start, 
+        end, 
+        limit,
+        'dia',
+        true
+      )
+
+      if (error) {
+        console.error('Legacy view error:', error)
+      }
+
+      // Cache the result
+      const ttl = dashboard.cache_ttl_seconds || 300
+      const result = { data }
+      setCache(cacheKey, result, ttl)
+
+      return new Response(JSON.stringify({ data, cached: false }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
+    // Handle section-based fetching for new views
     const result: Record<string, any> = {}
     const errors: string[] = []
 
-    // Helper to check if view is allowed
-    const isAllowed = (view: string) => allowedViews.includes(view)
-
-    if (section === 'all' || section === 'executive') {
-      // Fetch executive views
-      const execViews = VIEW_CONFIG.executive
-      
-      if (isAllowed(execViews.kpis)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, execViews.kpis, orgId, null, null, '100')
-        result.kpis = data
-        if (error) errors.push(error)
-      }
-      
-      if (isAllowed(execViews.daily)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, execViews.daily, orgId, start, end, limit)
-        result.daily = data
-        // Also set as main 'data' for backwards compatibility
-        result.data = data
-        if (error) errors.push(error)
-      }
-      
-      if (isAllowed(execViews.funnel)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, execViews.funnel, orgId, null, null, '50')
-        result.funnel = data
-        if (error) errors.push(error)
+    // Fetch views based on section
+    const sectionConfig = VIEW_CONFIG[section]
+    if (sectionConfig) {
+      for (const [key, viewConfig] of Object.entries(sectionConfig.views)) {
+        if (isAllowed(viewConfig.name)) {
+          const { data, error } = await fetchFromView(
+            remoteUrl,
+            remoteKey,
+            viewConfig.name,
+            orgId,
+            start,
+            end,
+            limit,
+            viewConfig.dateColumn || null,
+            viewConfig.hasDateFilter || false
+          )
+          result[key] = data
+          if (error) errors.push(error)
+        }
       }
     }
 
-    if (section === 'all' || section === 'trafego') {
-      const trafegoViews = VIEW_CONFIG.trafego
-      
-      if (isAllowed(trafegoViews.kpis_30d)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, trafegoViews.kpis_30d, orgId, null, null, '100')
-        result.trafego_kpis = data
-        if (error) errors.push(error)
-      }
-      
-      if (isAllowed(trafegoViews.daily)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, trafegoViews.daily, orgId, start, end, limit)
-        result.trafego_daily = data
-        if (error) errors.push(error)
-      }
-      
-      if (isAllowed(trafegoViews.top_ads)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, trafegoViews.top_ads, orgId, null, null, '20')
-        result.top_ads = data
-        if (error) errors.push(error)
-      }
-    }
-
-    if (section === 'all' || section === 'agente') {
-      const agenteViews = VIEW_CONFIG.agente
-      
-      if (isAllowed(agenteViews.kpis_30d)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, agenteViews.kpis_30d, orgId, null, null, '100')
-        result.agente_kpis = data
-        if (error) errors.push(error)
-      }
-    }
-
-    if (section === 'all' || section === 'mensagens') {
-      const msgViews = VIEW_CONFIG.mensagens
-      
-      if (isAllowed(msgViews.heatmap)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, msgViews.heatmap, orgId, null, null, '500')
-        result.heatmap = data
-        if (error) errors.push(error)
-      }
-    }
-
-    if (section === 'all' || section === 'reunioes') {
-      const reunioesViews = VIEW_CONFIG.reunioes
-      
-      if (isAllowed(reunioesViews.upcoming)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, reunioesViews.upcoming, orgId, null, null, '50')
-        result.reunioes = data
-        if (error) errors.push(error)
-      }
-    }
-
-    if (section === 'all' || section === 'ligacoes') {
-      const ligacoesViews = VIEW_CONFIG.ligacoes
-      
-      if (isAllowed(ligacoesViews.kpis_30d)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, ligacoesViews.kpis_30d, orgId, null, null, '100')
-        result.ligacoes_kpis = data
-        if (error) errors.push(error)
-      }
-      
-      if (isAllowed(ligacoesViews.daily)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, ligacoesViews.daily, orgId, start, end, limit)
-        result.ligacoes_daily = data
-        if (error) errors.push(error)
-      }
-      
-      if (isAllowed(ligacoesViews.recent)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, ligacoesViews.recent, orgId, null, null, '50')
-        result.ligacoes_recent = data
-        if (error) errors.push(error)
-      }
-    }
-
-    if (section === 'admin') {
-      const adminViews = VIEW_CONFIG.admin
-      
-      if (isAllowed(adminViews.coverage)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, adminViews.coverage, orgId, null, null, '500')
-        result.coverage = data
-        if (error) errors.push(error)
-      }
-      
-      if (isAllowed(adminViews.unmapped)) {
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, adminViews.unmapped, orgId, null, null, '500')
-        result.unmapped = data
-        if (error) errors.push(error)
-      }
-    }
-
-    // Legacy fallback: if no data yet and legacy view is allowed, fetch it
-    if (!result.data && !result.daily && dashboard.view_name) {
-      if (isAllowed(dashboard.view_name)) {
-        console.log('Using legacy view:', dashboard.view_name)
-        const { data, error } = await fetchFromView(remoteUrl, remoteKey, dashboard.view_name, orgId, start, end, limit)
-        result.data = data
-        if (error) errors.push(error)
+    // If section is 'all', fetch from multiple sections
+    if (section === 'all') {
+      for (const [sectionName, sectionConf] of Object.entries(VIEW_CONFIG)) {
+        if (sectionName === 'legacy') continue // Skip legacy in 'all' mode
+        
+        for (const [key, viewConfig] of Object.entries(sectionConf.views)) {
+          if (isAllowed(viewConfig.name)) {
+            const resultKey = sectionName === 'executive' ? key : `${sectionName}_${key}`
+            const { data, error } = await fetchFromView(
+              remoteUrl,
+              remoteKey,
+              viewConfig.name,
+              orgId,
+              start,
+              end,
+              limit,
+              viewConfig.dateColumn || null,
+              viewConfig.hasDateFilter || false
+            )
+            result[resultKey] = data
+            // For backwards compatibility, set 'data' from daily view
+            if (key === 'daily' && sectionName === 'executive') {
+              result.data = data
+            }
+            if (error) errors.push(error)
+          }
+        }
       }
     }
 
