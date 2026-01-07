@@ -108,7 +108,7 @@ function detectSemanticType(name: string, dbType: string, sampleValues: any[]): 
   
   // CRM funnel columns - detect by name (even if type is text)
   if (CRM_FUNNEL_COLUMNS.has(lowerName)) {
-    return { semantic_type: 'count', role_hint: 'funnel_step', aggregator_default: 'sum', format: 'integer' }
+    return { semantic_type: 'count', role_hint: 'stage', aggregator_default: 'sum', format: 'integer' }
   }
   
   // Time columns by name pattern - check sample values to confirm
@@ -158,7 +158,7 @@ function detectSemanticType(name: string, dbType: string, sampleValues: any[]): 
     const falsyCount = nonNull.filter(v => falsyValues.includes(String(v).toLowerCase().trim())).length
     // If most values are truthy or falsy boolean-like values, treat as count
     if (nonNull.length > 0 && (truthyCount + falsyCount) / nonNull.length > 0.8) {
-      return { semantic_type: 'count', role_hint: 'funnel_step', aggregator_default: 'sum', format: 'integer' }
+      return { semantic_type: 'count', role_hint: 'stage', aggregator_default: 'sum', format: 'integer' }
     }
   }
   

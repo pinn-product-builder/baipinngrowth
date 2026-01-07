@@ -539,7 +539,7 @@ export default function DashboardAutoBuilder({
     c.name?.includes('created') || c.name?.includes('date') || c.name?.includes('data')
   ).map((c: any) => c.name) || [];
   const availableFunnelColumns = datasetProfile?.columns?.filter((c: any) =>
-    c.role_hint === 'funnel_step' || c.semantic_type === 'funnel' ||
+    c.role_hint === 'stage' || c.semantic_type === 'funnel' ||
     c.stats?.boolean_rate > 0.3 ||
     ['entrada', 'qualificado', 'exp', 'venda', 'perdida', 'lead'].some(kw => c.name?.toLowerCase().includes(kw))
   ).map((c: any) => c.name) || [];
