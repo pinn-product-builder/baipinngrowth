@@ -698,7 +698,7 @@ serve(async (req) => {
       return errorResponse('NOT_FOUND', 'Dataset não encontrado');
     }
 
-    const { data: columnsData, error: colError } = await adminClient
+    let { data: columnsData, error: colError } = await adminClient
       .from('dataset_columns')
       .select('*')
       .eq('dataset_id', dataset_id)
@@ -706,6 +706,48 @@ serve(async (req) => {
 
     if (colError) {
       return errorResponse('DB_ERROR', 'Erro ao buscar colunas', colError.message);
+    }
+
+    // Auto-introspect if no columns found
+    if (!columnsData || columnsData.length === 0) {
+      console.log('No columns found, auto-running introspection...');
+      
+      try {
+        const introspectUrl = `${supabaseUrl}/functions/v1/introspect-dataset`;
+        const introspectResponse = await fetch(introspectUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': authHeader,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ 
+            dataset_id: dataset_id, 
+            save_columns: true 
+          })
+        });
+        
+        if (introspectResponse.ok) {
+          const introspectResult = await introspectResponse.json();
+          if (introspectResult.ok) {
+            console.log(`Introspection completed: ${introspectResult.columns?.length || 0} columns`);
+            
+            // Re-fetch columns after introspection
+            const { data: newColumnsData } = await adminClient
+              .from('dataset_columns')
+              .select('*')
+              .eq('dataset_id', dataset_id)
+              .order('sort_priority');
+            
+            columnsData = newColumnsData;
+          } else {
+            console.error('Introspection failed:', introspectResult.error);
+          }
+        } else {
+          console.error('Introspection request failed:', introspectResponse.status);
+        }
+      } catch (introspectErr) {
+        console.error('Error calling introspect-dataset:', introspectErr);
+      }
     }
 
     const columns: ColumnMeta[] = (columnsData || []).filter(c => c && c.column_name).map(c => ({
@@ -719,7 +761,7 @@ serve(async (req) => {
     }));
 
     if (columns.length === 0) {
-      return errorResponse('NO_COLUMNS', 'Dataset não possui colunas. Execute introspecção primeiro.');
+      return errorResponse('NO_COLUMNS', 'Dataset não possui colunas. Verifique se o data source está configurado corretamente.');
     }
 
     console.log(`Generating spec for ${dataset.name} with ${columns.length} columns`);
