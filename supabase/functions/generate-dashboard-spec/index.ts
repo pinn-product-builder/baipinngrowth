@@ -76,19 +76,24 @@ interface ValidationResult {
 function validateAndFixSpec(spec: any, columns: ColumnMeta[]): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const columnNames = new Set(columns.map(c => c.name));
+  // Filter out any columns with undefined/null names
+  const validColumns = columns.filter(c => c && c.name);
+  
+  const columnNames = new Set(validColumns.map(c => c.name));
   const numericColumns = new Set(
-    columns
+    validColumns
       .filter(c => ['currency', 'count', 'metric', 'percent'].includes(c.semantic_type || ''))
       .map(c => c.name)
   );
-  const timeColumns = columns.filter(c => c.semantic_type === 'time').map(c => c.name);
+  const timeColumns = validColumns.filter(c => c.semantic_type === 'time').map(c => c.name);
   
   // Also detect time columns by name pattern if semantic type not set
-  const timeByName = columns.filter(c => 
-    c.name.includes('created') || c.name.includes('date') || 
-    c.name.includes('dia') || c.name.includes('data') ||
-    c.name.includes('time') || c.name.includes('timestamp')
+  const timeByName = validColumns.filter(c => 
+    c.name && (
+      c.name.includes('created') || c.name.includes('date') || 
+      c.name.includes('dia') || c.name.includes('data') ||
+      c.name.includes('time') || c.name.includes('timestamp')
+    )
   ).map(c => c.name);
   
   const allTimeColumns = [...new Set([...timeColumns, ...timeByName])];
