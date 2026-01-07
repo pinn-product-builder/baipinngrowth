@@ -65,3 +65,6 @@ verify_jwt = false
 
 [functions.derive-crm-funnel]
 verify_jwt = false
+
+[functions.dataset-profile]
+verify_jwt = false

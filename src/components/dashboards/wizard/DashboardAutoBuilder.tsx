@@ -10,19 +10,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useToast } from '@/hooks/use-toast';
 import { 
   Wand2, 
@@ -30,11 +24,16 @@ import {
   Check, 
   AlertTriangle, 
   Database,
-  BarChart3,
   Table,
   Sparkles,
   ChevronRight,
-  Eye
+  ChevronDown,
+  Clock,
+  Filter,
+  BarChart3,
+  Copy,
+  CheckCircle2,
+  XCircle
 } from 'lucide-react';
 
 interface Dataset {
@@ -55,7 +54,37 @@ interface DashboardAutoBuilderProps {
   tenantId?: string;
 }
 
+interface ProgressStep {
+  id: string;
+  label: string;
+  status: 'pending' | 'running' | 'done' | 'error';
+}
+
+interface DiagnosticInfo {
+  columns_detected: { name: string; semantic: string | null; label: string }[];
+  time_column: string | null;
+  time_parseable_rate?: number;
+  funnel_candidates: string[];
+  warnings: string[];
+  errors: string[];
+  assumptions: string[];
+}
+
 type WizardStep = 'select' | 'generate' | 'preview' | 'save';
+
+const DEFAULT_PROMPT = `Você é um especialista em BI para CRM e tráfego pago.
+Sua tarefa é gerar um DashboardSpec (JSON) para um SaaS de dashboards, usando APENAS as colunas fornecidas no dataset profile.
+O dashboard deve seguir um layout padrão em abas: Decisões, Executivo, Funil, Tendências, Detalhes.
+
+Regras:
+- Nunca referencie colunas que não existam (use match case-insensitive e normalize underscores).
+- Se não houver coluna de data válida, ainda assim gere um dashboard útil com KPIs + Funil total + Detalhes (sem séries temporais).
+- Para campos de funil em texto (ex.: entrada, qualificado, venda), trate como boolean "truthy" (1/true/sim/x/ok) e gere contagens.
+- KPIs devem ser poucos (máximo 8) e focados em tomada de decisão.
+- Tendências: se existir data, use séries por dia com métricas principais.
+- Detalhes: sempre incluir tabela completa com export CSV.
+
+Saída obrigatória: um JSON válido no schema DashboardSpec v1 contendo time, kpis, charts, tabs, table.`;
 
 export default function DashboardAutoBuilder({
   open,
@@ -67,7 +96,8 @@ export default function DashboardAutoBuilder({
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string>('');
   const [dashboardName, setDashboardName] = useState('');
-  const [dashboardDescription, setDashboardDescription] = useState('');
+  const [dashboardPrompt, setDashboardPrompt] = useState(DEFAULT_PROMPT);
+  const [specificRequirements, setSpecificRequirements] = useState('');
   const [isLoadingDatasets, setIsLoadingDatasets] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -78,6 +108,9 @@ export default function DashboardAutoBuilder({
     warnings: string[];
   } | null>(null);
   const [specSource, setSpecSource] = useState<'ai' | 'fallback'>('fallback');
+  const [diagnostics, setDiagnostics] = useState<DiagnosticInfo | null>(null);
+  const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
+  const [debugOpen, setDebugOpen] = useState(false);
   const { toast } = useToast();
 
   // Load datasets on open
@@ -92,9 +125,12 @@ export default function DashboardAutoBuilder({
     setStep('select');
     setSelectedDatasetId('');
     setDashboardName('');
-    setDashboardDescription('');
+    setDashboardPrompt(DEFAULT_PROMPT);
+    setSpecificRequirements('');
     setGeneratedSpec(null);
     setValidation(null);
+    setDiagnostics(null);
+    setProgressSteps([]);
   };
 
   const loadDatasets = async () => {
@@ -147,20 +183,33 @@ export default function DashboardAutoBuilder({
     }
   };
 
+  const updateProgress = (stepId: string, status: ProgressStep['status']) => {
+    setProgressSteps(prev => prev.map(s => 
+      s.id === stepId ? { ...s, status } : s
+    ));
+  };
+
   const handleGenerate = async () => {
     if (!selectedDatasetId) return;
 
     const dataset = datasets.find(d => d.id === selectedDatasetId);
     
-    // Check if dataset has columns
-    if (dataset && (!dataset._column_count || dataset._column_count === 0)) {
-      // Introspect first
-      toast({ 
-        title: 'Analisando dataset...', 
-        description: 'Detectando colunas automaticamente'
-      });
+    // Initialize progress steps
+    setProgressSteps([
+      { id: 'columns', label: 'Lendo colunas...', status: 'pending' },
+      { id: 'sample', label: 'Amostrando dados...', status: 'pending' },
+      { id: 'generate', label: 'Gerando spec...', status: 'pending' },
+      { id: 'validate', label: 'Validando...', status: 'pending' },
+    ]);
+
+    setStep('generate');
+    setIsGenerating(true);
+
+    try {
+      // Step 1: Check columns / introspect if needed
+      updateProgress('columns', 'running');
       
-      try {
+      if (dataset && (!dataset._column_count || dataset._column_count === 0)) {
         const { data: introspectResult, error: introspectError } = await supabase.functions.invoke(
           'introspect-dataset',
           { body: { dataset_id: selectedDatasetId, save_columns: true } }
@@ -169,23 +218,41 @@ export default function DashboardAutoBuilder({
         if (introspectError || !introspectResult?.ok) {
           throw new Error(introspectResult?.error?.message || 'Erro na introspecção');
         }
-      } catch (err: any) {
-        toast({ 
-          title: 'Erro', 
-          description: `Falha ao analisar dataset: ${err.message}`,
-          variant: 'destructive'
-        });
-        return;
       }
-    }
+      updateProgress('columns', 'done');
 
-    setStep('generate');
-    setIsGenerating(true);
+      // Step 2: Get dataset profile
+      updateProgress('sample', 'running');
+      
+      const { data: profileResult, error: profileError } = await supabase.functions.invoke(
+        'dataset-profile',
+        { body: { dataset_id: selectedDatasetId, sample_limit: 200 } }
+      );
 
-    try {
+      if (profileError) {
+        console.error('Profile error:', profileError);
+        // Continue without profile - fallback will handle it
+      }
+      updateProgress('sample', 'done');
+
+      // Step 3: Generate spec with LLM
+      updateProgress('generate', 'running');
+      
+      // Combine prompts
+      const fullPrompt = specificRequirements.trim() 
+        ? `${dashboardPrompt}\n\nRequisitos específicos do usuário: ${specificRequirements}`
+        : dashboardPrompt;
+
       const { data: result, error } = await supabase.functions.invoke(
         'generate-dashboard-spec',
-        { body: { dataset_id: selectedDatasetId, use_ai: true } }
+        { 
+          body: { 
+            dataset_id: selectedDatasetId, 
+            use_ai: true,
+            user_prompt: fullPrompt,
+            dataset_profile: profileResult || null
+          } 
+        }
       );
 
       if (error) throw error;
@@ -193,10 +260,28 @@ export default function DashboardAutoBuilder({
       if (!result?.ok) {
         throw new Error(result?.error?.message || 'Erro ao gerar spec');
       }
+      updateProgress('generate', 'done');
 
+      // Step 4: Validation
+      updateProgress('validate', 'running');
+      
       setGeneratedSpec(result.spec);
       setSpecSource(result.source || 'fallback');
       setValidation(result.validation || { valid: true, errors: [], warnings: [] });
+      
+      // Build diagnostics from debug info
+      const debug = result.debug || {};
+      setDiagnostics({
+        columns_detected: debug.columns_detected || [],
+        time_column: debug.time_column || null,
+        time_parseable_rate: debug.time_parseable_rate,
+        funnel_candidates: debug.funnel_candidates || [],
+        warnings: result.validation?.warnings || [],
+        errors: result.validation?.errors || [],
+        assumptions: debug.assumptions || []
+      });
+
+      updateProgress('validate', 'done');
       setStep('preview');
 
       toast({
@@ -207,6 +292,11 @@ export default function DashboardAutoBuilder({
       });
 
     } catch (err: any) {
+      const failedStep = progressSteps.find(s => s.status === 'running');
+      if (failedStep) {
+        updateProgress(failedStep.id, 'error');
+      }
+      
       toast({ 
         title: 'Erro', 
         description: err.message,
@@ -243,7 +333,7 @@ export default function DashboardAutoBuilder({
         .insert({
           tenant_id: datasetData.tenant_id,
           name: dashboardName.trim(),
-          description: dashboardDescription.trim() || null,
+          description: specificRequirements.trim() || null,
           source_kind: 'supabase_view',
           display_type: 'json',
           data_source_id: datasetData.datasource_id,
@@ -287,6 +377,19 @@ export default function DashboardAutoBuilder({
     }
   };
 
+  const copyDiagnostics = () => {
+    if (!diagnostics) return;
+    
+    const text = JSON.stringify({
+      diagnostics,
+      spec: generatedSpec,
+      validation
+    }, null, 2);
+    
+    navigator.clipboard.writeText(text);
+    toast({ title: 'Diagnóstico copiado!' });
+  };
+
   const selectedDataset = datasets.find(d => d.id === selectedDatasetId);
 
   return (
@@ -295,10 +398,10 @@ export default function DashboardAutoBuilder({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Wand2 className="h-5 w-5 text-primary" />
-            Auto-Builder de Dashboard
+            Auto-Builder de Dashboard (LLM)
           </DialogTitle>
           <DialogDescription>
-            Crie um dashboard automaticamente a partir de um dataset
+            Crie um dashboard automaticamente com IA a partir de um dataset
           </DialogDescription>
         </DialogHeader>
 
@@ -350,7 +453,7 @@ export default function DashboardAutoBuilder({
                     </CardContent>
                   </Card>
                 ) : (
-                  <div className="grid gap-2">
+                  <div className="grid gap-2 max-h-48 overflow-y-auto">
                     {datasets.map(ds => (
                       <Card 
                         key={ds.id}
@@ -379,11 +482,6 @@ export default function DashboardAutoBuilder({
                             ) : (
                               <Badge variant="secondary">Não analisado</Badge>
                             )}
-                            {ds.primary_time_column && (
-                              <Badge variant="outline" className="text-xs">
-                                {ds.grain_hint || 'daily'}
-                              </Badge>
-                            )}
                           </div>
                         </CardContent>
                       </Card>
@@ -393,7 +491,7 @@ export default function DashboardAutoBuilder({
               </div>
 
               {selectedDataset && (
-                <div className="space-y-3 pt-4 border-t">
+                <div className="space-y-4 pt-4 border-t">
                   <div className="space-y-2">
                     <Label htmlFor="name">Nome do Dashboard</Label>
                     <Input
@@ -403,32 +501,75 @@ export default function DashboardAutoBuilder({
                       placeholder="Ex: Dashboard de Vendas"
                     />
                   </div>
+                  
                   <div className="space-y-2">
-                    <Label htmlFor="desc">Descrição (opcional)</Label>
+                    <Label htmlFor="prompt">Prompt do Dashboard (padrão)</Label>
                     <Textarea
-                      id="desc"
-                      value={dashboardDescription}
-                      onChange={e => setDashboardDescription(e.target.value)}
-                      placeholder="Descreva o objetivo do dashboard..."
+                      id="prompt"
+                      value={dashboardPrompt}
+                      onChange={e => setDashboardPrompt(e.target.value)}
+                      placeholder="Instruções para o LLM..."
+                      rows={4}
+                      className="font-mono text-xs"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Prompt padrão que guia a IA na geração do dashboard. Pode ser editado.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="requirements">Requisitos específicos do Dashboard (opcional)</Label>
+                    <Textarea
+                      id="requirements"
+                      value={specificRequirements}
+                      onChange={e => setSpecificRequirements(e.target.value)}
+                      placeholder="Ex: Priorizar funil de experiência e taxa de comparecimento / Destacar vendas por vendedora..."
                       rows={2}
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Instruções adicionais específicas para este dashboard.
+                    </p>
                   </div>
                 </div>
               )}
             </div>
           )}
 
-          {/* Step 2: Generating */}
+          {/* Step 2: Generating with Progress */}
           {step === 'generate' && (
-            <div className="flex flex-col items-center justify-center py-16">
-              <div className="relative">
+            <div className="flex flex-col items-center justify-center py-12">
+              <div className="relative mb-6">
                 <Sparkles className="h-12 w-12 text-primary animate-pulse" />
                 <Loader2 className="h-16 w-16 absolute -top-2 -left-2 animate-spin text-primary/30" />
               </div>
-              <p className="mt-4 font-medium">Gerando dashboard com IA...</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Analisando colunas e criando layout otimizado
-              </p>
+              
+              <p className="font-medium mb-6">Gerando dashboard com IA...</p>
+              
+              <div className="space-y-3 w-full max-w-sm">
+                {progressSteps.map((ps) => (
+                  <div key={ps.id} className="flex items-center gap-3">
+                    {ps.status === 'pending' && (
+                      <div className="w-5 h-5 rounded-full border-2 border-muted" />
+                    )}
+                    {ps.status === 'running' && (
+                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    )}
+                    {ps.status === 'done' && (
+                      <CheckCircle2 className="h-5 w-5 text-green-500" />
+                    )}
+                    {ps.status === 'error' && (
+                      <XCircle className="h-5 w-5 text-destructive" />
+                    )}
+                    <span className={`text-sm ${
+                      ps.status === 'running' ? 'text-primary font-medium' : 
+                      ps.status === 'done' ? 'text-muted-foreground' : 
+                      ps.status === 'error' ? 'text-destructive' : ''
+                    }`}>
+                      {ps.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -444,23 +585,123 @@ export default function DashboardAutoBuilder({
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
                     O auto-builder não conseguiu gerar KPIs, gráficos ou funil. 
-                    Verifique se o dataset foi introspectado corretamente em Admin → Datasets.
+                    Verifique se o dataset foi introspectado corretamente.
                   </p>
                 </div>
               )}
               
-              {/* Dataset Profile Info */}
-              <div className="p-3 rounded-lg bg-muted/50 border">
-                <p className="text-sm font-medium flex items-center gap-2">
-                  <Database className="h-4 w-4" />
-                  Dataset Detectado
-                </p>
-                <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
-                  <div>Colunas: <span className="font-medium text-foreground">{generatedSpec.columns?.length || 0}</span></div>
-                  <div>Tempo: <span className="font-medium text-foreground">{generatedSpec.time?.column || 'Não detectado'}</span></div>
-                  <div>KPIs: <span className="font-medium text-foreground">{generatedSpec.kpis?.length || 0}</span></div>
-                </div>
-              </div>
+              {/* Diagnostics Panel */}
+              {diagnostics && (
+                <Collapsible open={debugOpen} onOpenChange={setDebugOpen}>
+                  <CollapsibleTrigger asChild>
+                    <div className="p-3 rounded-lg bg-muted/50 border cursor-pointer hover:bg-muted/70 transition-colors">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium flex items-center gap-2">
+                          <Database className="h-4 w-4" />
+                          Diagnóstico do Dataset
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <Button 
+                            variant="ghost" 
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copyDiagnostics();
+                            }}
+                          >
+                            <Copy className="h-3 w-3 mr-1" />
+                            Copiar
+                          </Button>
+                          <ChevronDown className={`h-4 w-4 transition-transform ${debugOpen ? 'rotate-180' : ''}`} />
+                        </div>
+                      </div>
+                      
+                      <div className="mt-2 grid grid-cols-4 gap-2 text-xs text-muted-foreground">
+                        <div>Colunas: <span className="font-medium text-foreground">{diagnostics.columns_detected?.length || 0}</span></div>
+                        <div className="flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          <span className="font-medium text-foreground">{diagnostics.time_column || 'Não detectado'}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Filter className="h-3 w-3" />
+                          <span className="font-medium text-foreground">{diagnostics.funnel_candidates?.length || 0} etapas</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <BarChart3 className="h-3 w-3" />
+                          <span className="font-medium text-foreground">{generatedSpec.kpis?.length || 0} KPIs</span>
+                        </div>
+                      </div>
+                    </div>
+                  </CollapsibleTrigger>
+                  
+                  <CollapsibleContent className="mt-2">
+                    <div className="p-3 rounded-lg bg-muted/30 border space-y-3 text-xs">
+                      {/* Columns */}
+                      <div>
+                        <p className="font-medium mb-1">Colunas Detectadas:</p>
+                        <div className="flex flex-wrap gap-1">
+                          {diagnostics.columns_detected?.slice(0, 20).map((col, i) => (
+                            <Badge key={i} variant="outline" className="text-xs">
+                              {col.name}
+                              {col.semantic && <span className="text-muted-foreground ml-1">({col.semantic})</span>}
+                            </Badge>
+                          ))}
+                          {(diagnostics.columns_detected?.length || 0) > 20 && (
+                            <Badge variant="secondary">+{diagnostics.columns_detected!.length - 20}</Badge>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Time Column */}
+                      <div>
+                        <p className="font-medium mb-1">Coluna de Tempo:</p>
+                        <p className={diagnostics.time_column ? 'text-green-600' : 'text-yellow-600'}>
+                          {diagnostics.time_column || 'Não encontrada - dashboard sem tendências temporais'}
+                          {diagnostics.time_parseable_rate !== undefined && (
+                            <span className="text-muted-foreground ml-2">
+                              ({Math.round(diagnostics.time_parseable_rate * 100)}% parseável)
+                            </span>
+                          )}
+                        </p>
+                      </div>
+
+                      {/* Funnel */}
+                      <div>
+                        <p className="font-medium mb-1">Etapas de Funil:</p>
+                        {diagnostics.funnel_candidates?.length ? (
+                          <div className="flex flex-wrap gap-1">
+                            {diagnostics.funnel_candidates.map((f, i) => (
+                              <Badge key={i} variant="secondary">{f}</Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-yellow-600">Nenhuma etapa de funil detectada</p>
+                        )}
+                      </div>
+
+                      {/* Warnings */}
+                      {diagnostics.warnings?.length > 0 && (
+                        <div>
+                          <p className="font-medium mb-1 text-yellow-600">Warnings:</p>
+                          <ul className="list-disc list-inside text-yellow-600">
+                            {diagnostics.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Errors */}
+                      {diagnostics.errors?.length > 0 && (
+                        <div>
+                          <p className="font-medium mb-1 text-destructive">Erros:</p>
+                          <ul className="list-disc list-inside text-destructive">
+                            {diagnostics.errors.map((e, i) => <li key={i}>{e}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
               
               {/* Validation messages */}
               {validation && (
@@ -482,131 +723,86 @@ export default function DashboardAutoBuilder({
                         <AlertTriangle className="h-4 w-4" />
                         {validation.warnings.length} aviso(s)
                       </p>
-                      <ul className="mt-1 text-xs text-muted-foreground list-disc list-inside max-h-32 overflow-y-auto">
-                        {validation.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                      <ul className="mt-1 text-xs text-yellow-600/80 list-disc list-inside">
+                        {validation.warnings.slice(0, 5).map((w, i) => <li key={i}>{w}</li>)}
                       </ul>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Spec preview */}
+              {/* Spec Preview Tabs */}
               <Tabs defaultValue="visual" className="w-full">
-                <TabsList className="w-full">
-                  <TabsTrigger value="visual" className="flex-1">
-                    <Eye className="h-4 w-4 mr-1" />
-                    Visual
-                  </TabsTrigger>
-                  <TabsTrigger value="json" className="flex-1">
-                    JSON
-                  </TabsTrigger>
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="visual">Resumo Visual</TabsTrigger>
+                  <TabsTrigger value="json">JSON</TabsTrigger>
                 </TabsList>
-
-                <TabsContent value="visual" className="space-y-4">
-                  {/* KPIs Preview */}
+                
+                <TabsContent value="visual" className="mt-4 space-y-4">
+                  {/* KPIs */}
                   {generatedSpec.kpis?.length > 0 && (
-                    <Card>
-                      <CardHeader className="py-3">
-                        <CardTitle className="text-sm">KPIs ({generatedSpec.kpis.length})</CardTitle>
-                      </CardHeader>
-                      <CardContent className="py-2">
-                        <div className="flex flex-wrap gap-2">
-                          {generatedSpec.kpis.map((kpi: any, i: number) => (
-                            <Badge key={i} variant="outline">
-                              {kpi.label}
-                              <span className="ml-1 text-muted-foreground">
-                                ({kpi.agg})
-                              </span>
-                            </Badge>
-                          ))}
-                        </div>
-                      </CardContent>
-                    </Card>
+                    <div>
+                      <p className="text-sm font-medium mb-2">KPIs ({generatedSpec.kpis.length})</p>
+                      <div className="flex flex-wrap gap-2">
+                        {generatedSpec.kpis.map((kpi: any, i: number) => (
+                          <Badge key={i} variant="outline">
+                            {kpi.label || kpi.column}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
                   )}
 
-                  {/* Funnel Preview */}
+                  {/* Funnel */}
                   {generatedSpec.funnel?.steps?.length > 0 && (
-                    <Card>
-                      <CardHeader className="py-3">
-                        <CardTitle className="text-sm">Funil ({generatedSpec.funnel.steps.length} etapas)</CardTitle>
-                      </CardHeader>
-                      <CardContent className="py-2">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {generatedSpec.funnel.steps.map((step: any, i: number) => (
-                            <div key={i} className="flex items-center gap-2">
-                              <Badge>{step.label}</Badge>
-                              {i < generatedSpec.funnel.steps.length - 1 && (
-                                <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </CardContent>
-                    </Card>
+                    <div>
+                      <p className="text-sm font-medium mb-2">Funil ({generatedSpec.funnel.steps.length} etapas)</p>
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {generatedSpec.funnel.steps.map((step: any, i: number) => (
+                          <div key={i} className="flex items-center gap-1">
+                            <Badge variant="secondary">{step.label || step.column}</Badge>
+                            {i < generatedSpec.funnel.steps.length - 1 && (
+                              <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
 
-                  {/* Charts Preview */}
+                  {/* Charts */}
                   {generatedSpec.charts?.length > 0 && (
-                    <Card>
-                      <CardHeader className="py-3">
-                        <CardTitle className="text-sm">Gráficos ({generatedSpec.charts.length})</CardTitle>
-                      </CardHeader>
-                      <CardContent className="py-2">
-                        <div className="space-y-2">
-                          {generatedSpec.charts.map((chart: any, i: number) => (
-                            <div key={i} className="flex items-center gap-2">
-                              <BarChart3 className="h-4 w-4 text-muted-foreground" />
-                              <span className="text-sm">{chart.title}</span>
-                              <Badge variant="outline" className="text-xs">
-                                {chart.type}
-                              </Badge>
-                              <span className="text-xs text-muted-foreground">
-                                {chart.series?.length || 0} séries
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </CardContent>
-                    </Card>
+                    <div>
+                      <p className="text-sm font-medium mb-2">Gráficos ({generatedSpec.charts.length})</p>
+                      <div className="space-y-1">
+                        {generatedSpec.charts.map((chart: any, i: number) => (
+                          <p key={i} className="text-xs text-muted-foreground">
+                            • {chart.title} ({chart.type})
+                          </p>
+                        ))}
+                      </div>
+                    </div>
                   )}
 
-                  {/* Tabs Preview */}
-                  {generatedSpec.ui?.tabs && (
-                    <Card>
-                      <CardHeader className="py-3">
-                        <CardTitle className="text-sm">Abas do Dashboard</CardTitle>
-                      </CardHeader>
-                      <CardContent className="py-2">
-                        <div className="flex gap-2 flex-wrap">
-                          {generatedSpec.ui.tabs.map((tab: string, i: number) => (
-                            <Badge 
-                              key={i} 
-                              variant={tab === generatedSpec.ui.defaultTab ? 'default' : 'outline'}
-                            >
-                              {tab}
-                            </Badge>
-                          ))}
-                        </div>
-                      </CardContent>
-                    </Card>
+                  {/* Tabs */}
+                  {generatedSpec.ui?.tabs?.length > 0 && (
+                    <div>
+                      <p className="text-sm font-medium mb-2">Abas</p>
+                      <div className="flex gap-2">
+                        {generatedSpec.ui.tabs.map((tab: string, i: number) => (
+                          <Badge key={i} variant="outline">{tab}</Badge>
+                        ))}
+                      </div>
+                    </div>
                   )}
-
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Sparkles className="h-4 w-4" />
-                    Gerado via {specSource === 'ai' ? 'Inteligência Artificial' : 'Heurística'}
-                  </div>
                 </TabsContent>
-
-                <TabsContent value="json">
-                  <Card>
-                    <CardContent className="p-0">
-                      <ScrollArea className="h-[300px]">
-                        <pre className="p-4 text-xs overflow-x-auto">
-                          {JSON.stringify(generatedSpec, null, 2)}
-                        </pre>
-                      </ScrollArea>
-                    </CardContent>
-                  </Card>
+                
+                <TabsContent value="json" className="mt-4">
+                  <div className="max-h-64 overflow-auto rounded-lg bg-muted/50 border p-3">
+                    <pre className="text-xs font-mono whitespace-pre-wrap">
+                      {JSON.stringify(generatedSpec, null, 2)}
+                    </pre>
+                  </div>
                 </TabsContent>
               </Tabs>
             </div>
@@ -615,8 +811,8 @@ export default function DashboardAutoBuilder({
           {/* Step 4: Saving */}
           {step === 'save' && (
             <div className="flex flex-col items-center justify-center py-16">
-              <Loader2 className="h-10 w-10 animate-spin text-primary" />
-              <p className="mt-4 font-medium">Salvando dashboard...</p>
+              <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
+              <p className="font-medium">Criando dashboard...</p>
             </div>
           )}
         </ScrollArea>
@@ -631,24 +827,24 @@ export default function DashboardAutoBuilder({
                 onClick={handleGenerate}
                 disabled={!selectedDatasetId || !dashboardName.trim()}
               >
-                <Wand2 className="h-4 w-4 mr-2" />
+                <Sparkles className="h-4 w-4 mr-2" />
                 Auto-Gerar
               </Button>
             </>
           )}
-
+          
+          {step === 'generate' && (
+            <Button variant="outline" onClick={() => setStep('select')} disabled={isGenerating}>
+              Cancelar
+            </Button>
+          )}
+          
           {step === 'preview' && (
             <>
               <Button variant="outline" onClick={() => setStep('select')}>
                 Voltar
               </Button>
-              <Button 
-                onClick={handleSave}
-                disabled={
-                  (validation?.errors?.length > 0) ||
-                  (!generatedSpec?.kpis?.length && !generatedSpec?.charts?.length && !generatedSpec?.funnel?.steps?.length)
-                }
-              >
+              <Button onClick={handleSave} disabled={!generatedSpec}>
                 <Check className="h-4 w-4 mr-2" />
                 Criar Dashboard
               </Button>
