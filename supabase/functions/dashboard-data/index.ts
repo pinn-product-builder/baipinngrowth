@@ -259,6 +259,7 @@ Deno.serve(async (req) => {
     let limit: string = '1000'
     let section: string = 'legacy' // Default to legacy for backwards compatibility
     let orgId: string | null = null
+    let directView: string | null = null // For direct view access without dashboard
 
     if (req.method === 'POST') {
       try {
@@ -268,7 +269,8 @@ Deno.serve(async (req) => {
         end = body.end
         limit = body.limit || '1000'
         section = body.section || 'legacy'
-        orgId = body.org_id || null
+        orgId = body.orgId || body.org_id || null
+        directView = body.view || null
       } catch (e) {
         console.error('Failed to parse request body:', e)
         return new Response(JSON.stringify({ error: 'Corpo da requisição inválido' }), {
@@ -284,13 +286,125 @@ Deno.serve(async (req) => {
       limit = url.searchParams.get('limit') || '1000'
       section = url.searchParams.get('section') || 'legacy'
       orgId = url.searchParams.get('org_id')
+      directView = url.searchParams.get('view')
+    }
+
+    // Support direct view access (without dashboard_id) - uses user's tenant context
+    if (!dashboardId && directView) {
+      console.log(`Direct view access: ${directView}, period: ${start} to ${end}, org_id: ${orgId}`)
+      
+      const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+      const adminClient = createClient(supabaseUrl, supabaseServiceKey)
+      
+      // Get user's tenant and data source
+      const { data: profile } = await adminClient
+        .from('profiles')
+        .select('tenant_id')
+        .eq('id', userId)
+        .maybeSingle()
+      
+      if (!profile?.tenant_id) {
+        return new Response(JSON.stringify({ error: 'Usuário sem tenant associado' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+      
+      // Get the active data source for this tenant
+      const { data: dataSource, error: dsError } = await adminClient
+        .from('tenant_data_sources')
+        .select('*')
+        .eq('tenant_id', profile.tenant_id)
+        .eq('is_active', true)
+        .maybeSingle()
+      
+      if (dsError || !dataSource) {
+        console.error('Data source error:', dsError)
+        return new Response(JSON.stringify({ error: 'Data source não encontrado para este tenant' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+      
+      // Get credentials
+      const remoteUrl = dataSource.project_url
+      let remoteKey: string | null = null
+
+      if (dataSource.anon_key_encrypted) {
+        try {
+          remoteKey = await decrypt(dataSource.anon_key_encrypted)
+          console.log('Successfully decrypted anon_key for direct view')
+        } catch (e) {
+          console.error('Failed to decrypt anon_key:', e)
+        }
+      }
+
+      if (!remoteKey && dataSource.service_role_key_encrypted) {
+        try {
+          remoteKey = await decrypt(dataSource.service_role_key_encrypted)
+          console.log('Successfully decrypted service_role_key for direct view')
+        } catch (e) {
+          console.error('Failed to decrypt service_role_key:', e)
+        }
+      }
+
+      // Fallback to Afonsina env keys
+      if (!remoteKey) {
+        const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
+        const afonsinaServiceKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY')
+        const afonsinaAnonKey = Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
+        
+        if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
+          remoteKey = afonsinaAnonKey || afonsinaServiceKey || null
+          console.log('Using Afonsina fallback keys for direct view')
+        }
+      }
+
+      if (!remoteKey) {
+        return new Response(JSON.stringify({ 
+          error: 'Credenciais do data source não configuradas',
+          error_type: 'config'
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+      
+      // Fetch the view directly
+      const result = await fetchFromView(
+        remoteUrl,
+        remoteKey,
+        directView,
+        orgId || profile.tenant_id,
+        start,
+        end,
+        limit,
+        'dia', // default date column
+        true   // has date filter
+      )
+      
+      if (result.error) {
+        return new Response(JSON.stringify({ error: result.error }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+      
+      return new Response(JSON.stringify({ 
+        data: result.data,
+        view: directView,
+        tenant_id: profile.tenant_id
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
     }
 
     if (!dashboardId) {
-      return new Response(JSON.stringify({ error: 'dashboard_id é obrigatório' }), {
+      return new Response(JSON.stringify({ error: 'dashboard_id ou view é obrigatório' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      }
+    )
     }
 
     console.log(`Fetching dashboard ${dashboardId}, section: ${section}, period: ${start} to ${end}, org_id: ${orgId}`)
