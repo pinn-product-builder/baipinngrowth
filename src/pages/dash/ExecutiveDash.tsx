@@ -1,16 +1,16 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { format, subDays, parseISO } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { PageHeader } from '@/components/ui/page-header';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Calendar } from '@/components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { 
   LineChart, 
   Line, 
@@ -19,28 +19,100 @@ import {
   CartesianGrid, 
   Tooltip, 
   Legend, 
-  ResponsiveContainer 
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  Cell
 } from 'recharts';
 import { 
-  CalendarIcon, 
   RefreshCw, 
   DollarSign, 
   Users, 
   TrendingUp, 
   TrendingDown, 
-  Target, 
-  ArrowRightLeft, 
-  Briefcase, 
-  Minus,
-  AlertCircle
+  MessageSquare, 
+  Calendar,
+  Phone,
+  Target,
+  ArrowRight,
+  AlertCircle,
+  Sparkles,
+  Video,
+  Clock,
+  ChevronRight
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-interface DateRange {
-  start: Date;
-  end: Date;
+// ============ Types ============
+interface KPIs7d {
+  leads_total_7d: number;
+  spend_7d: number;
+  cpl_7d: number;
+  msg_in_7d: number;
+  meetings_scheduled_7d: number;
+  meetings_cancelled_7d: number;
+  cpm_meeting_7d: number;
+  conv_lead_to_msg_7d: number;
+  conv_msg_to_meeting_7d: number;
+  calls_total_7d?: number;
+  meetings_upcoming?: number;
 }
 
+interface KPIs30d {
+  leads_total_30d: number;
+  spend_30d: number;
+  cpl_30d: number;
+  msg_in_30d: number;
+  meetings_scheduled_30d: number;
+  meetings_cancelled_30d: number;
+  cpm_meeting_30d: number;
+  conv_lead_to_msg_30d: number;
+  conv_msg_to_meeting_30d: number;
+  calls_total_30d?: number;
+}
+
+interface DailySeries {
+  day: string;
+  leads_new: number;
+  spend: number;
+  msg_in: number;
+  meetings_scheduled: number;
+}
+
+interface FunnelStage {
+  stage_name: string;
+  stage_rank: number;
+  leads_total: number;
+}
+
+interface UpcomingMeeting {
+  start_at: string;
+  end_at: string;
+  summary: string;
+  lead_name: string;
+  lead_email: string;
+  lead_phone: string;
+  status: string;
+  html_link: string;
+  meeting_url: string;
+}
+
+interface AIInsight {
+  alerts: Array<{ type: string; message: string; severity: string }>;
+  insights: Array<{ title: string; description: string }>;
+  recommendations: Array<{ action: string; priority: string }>;
+}
+
+interface DashboardData {
+  kpis7d: KPIs7d | null;
+  kpis30d: KPIs30d | null;
+  dailySeries: DailySeries[];
+  funnel: FunnelStage[];
+  upcomingMeetings: UpcomingMeeting[];
+  aiInsights: AIInsight | null;
+}
+
+// ============ Helpers ============
 const formatCurrency = (value: number) => {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0);
 };
@@ -49,48 +121,63 @@ const formatInteger = (value: number) => {
   return (value || 0).toLocaleString('pt-BR');
 };
 
-const KPI_ICONS: Record<string, any> = {
-  custo_total: DollarSign,
-  leads_total: Users,
-  entrada_total: ArrowRightLeft,
-  reuniao_realizada_total: Briefcase,
-  venda_total: Target,
-  cpl: TrendingUp,
-  cac: DollarSign,
+const formatPercent = (value: number) => {
+  return `${((value || 0) * 100).toFixed(1)}%`;
 };
 
-const KPI_LABELS: Record<string, string> = {
-  custo_total: 'Investimento',
-  leads_total: 'Leads',
-  entrada_total: 'Entradas',
-  reuniao_realizada_total: 'Reuniões Realizadas',
-  venda_total: 'Vendas',
-  cpl: 'CPL do Período',
-  cac: 'CAC do Período',
+const formatDate = (dateStr: string) => {
+  try {
+    return format(parseISO(dateStr), 'dd/MM', { locale: ptBR });
+  } catch {
+    return dateStr;
+  }
 };
 
-const DEFAULT_VIEW = 'vw_afonsina_custos_funil_dia';
+const formatDateFull = (dateStr: string) => {
+  try {
+    return format(parseISO(dateStr), 'dd/MM/yyyy', { locale: ptBR });
+  } catch {
+    return dateStr;
+  }
+};
 
+const formatDateTime = (dateStr: string) => {
+  try {
+    return format(parseISO(dateStr), "dd/MM 'às' HH:mm", { locale: ptBR });
+  } catch {
+    return dateStr;
+  }
+};
+
+// Funnel colors
+const FUNNEL_COLORS = [
+  'hsl(var(--primary))',
+  'hsl(var(--chart-2))',
+  'hsl(var(--chart-3))',
+  'hsl(var(--chart-4))',
+  'hsl(var(--chart-5))',
+];
+
+// ============ Component ============
 export default function ExecutiveDash() {
-  const { tenantId, user } = useAuth();
+  const { tenantId } = useAuth();
   const { toast } = useToast();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   
   // State
-  const [data, setData] = useState<any[]>([]);
+  const [data, setData] = useState<DashboardData>({
+    kpis7d: null,
+    kpis30d: null,
+    dailySeries: [],
+    funnel: [],
+    upcomingMeetings: [],
+    aiInsights: null,
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dateRange, setDateRange] = useState<DateRange>(() => {
-    const startParam = searchParams.get('start');
-    const endParam = searchParams.get('end');
-    return {
-      start: startParam ? parseISO(startParam) : subDays(new Date(), 30),
-      end: endParam ? parseISO(endParam) : new Date(),
-    };
-  });
 
-  // Fetch data using tenant context
+  // Fetch all data from multiple views
   const fetchData = useCallback(async (showRefresh = false) => {
     if (!tenantId) {
       setError('Tenant não identificado');
@@ -106,30 +193,77 @@ export default function ExecutiveDash() {
       }
       setError(null);
 
-      const startStr = format(dateRange.start, 'yyyy-MM-dd');
-      const endStr = format(dateRange.end, 'yyyy-MM-dd');
+      // Fetch all views in parallel
+      const [kpis7dRes, kpis30dRes, dailyRes, funnelRes, meetingsRes, callsRes, insightsRes] = await Promise.all([
+        // KPIs 7 dias
+        supabase.functions.invoke('dashboard-data', {
+          body: { view: 'vw_dashboard_kpis_7d_v3', orgId: tenantId },
+        }),
+        // KPIs 30 dias
+        supabase.functions.invoke('dashboard-data', {
+          body: { view: 'vw_dashboard_kpis_30d_v3', orgId: tenantId },
+        }),
+        // Série diária 60 dias
+        supabase.functions.invoke('dashboard-data', {
+          body: { view: 'vw_dashboard_daily_60d_v3', orgId: tenantId, limit: 60 },
+        }),
+        // Funil atual
+        supabase.functions.invoke('dashboard-data', {
+          body: { view: 'vw_funnel_current_v3', orgId: tenantId },
+        }),
+        // Próximas reuniões
+        supabase.functions.invoke('dashboard-data', {
+          body: { view: 'vw_meetings_upcoming_v3', orgId: tenantId, limit: 10 },
+        }),
+        // Ligações KPIs
+        supabase.functions.invoke('dashboard-data', {
+          body: { view: 'vw_calls_kpis_7d', orgId: tenantId },
+        }),
+        // AI Insights
+        supabase.functions.invoke('dashboard-data', {
+          body: { view: 'ai_insights', orgId: tenantId, limit: 1 },
+        }),
+      ]);
 
-      // Call the dashboard-data edge function with tenant context
-      const { data: result, error: fetchError } = await supabase.functions.invoke('dashboard-data', {
-        body: {
-          view: DEFAULT_VIEW,
-          orgId: tenantId,
-          start: startStr,
-          end: endStr,
-        },
+      // Process KPIs 7d
+      const kpis7d = kpis7dRes.data?.data?.[0] || null;
+      
+      // Merge calls data into kpis7d
+      if (kpis7d && callsRes.data?.data?.[0]) {
+        kpis7d.calls_total_7d = callsRes.data.data[0].calls_total_7d;
+      }
+
+      // Process KPIs 30d
+      const kpis30d = kpis30dRes.data?.data?.[0] || null;
+
+      // Process daily series
+      const dailySeries = (dailyRes.data?.data || [])
+        .sort((a: DailySeries, b: DailySeries) => 
+          new Date(a.day).getTime() - new Date(b.day).getTime()
+        );
+
+      // Process funnel
+      const funnel = (funnelRes.data?.data || [])
+        .sort((a: FunnelStage, b: FunnelStage) => a.stage_rank - b.stage_rank);
+
+      // Process upcoming meetings
+      const upcomingMeetings = (meetingsRes.data?.data || [])
+        .sort((a: UpcomingMeeting, b: UpcomingMeeting) => 
+          new Date(a.start_at).getTime() - new Date(b.start_at).getTime()
+        );
+
+      // Process AI insights
+      const aiInsights = insightsRes.data?.data?.[0]?.payload || null;
+
+      setData({
+        kpis7d,
+        kpis30d,
+        dailySeries,
+        funnel,
+        upcomingMeetings,
+        aiInsights,
       });
 
-      if (fetchError) throw fetchError;
-
-      if (result?.data) {
-        // Sort by date
-        const sortedData = [...result.data].sort((a, b) => 
-          new Date(a.dia).getTime() - new Date(b.dia).getTime()
-        );
-        setData(sortedData);
-      } else {
-        setData([]);
-      }
     } catch (err: any) {
       console.error('Error fetching executive data:', err);
       setError(err.message || 'Erro ao carregar dados');
@@ -142,79 +276,66 @@ export default function ExecutiveDash() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [tenantId, dateRange, toast]);
+  }, [tenantId, toast]);
 
   // Initial load
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  // Update URL params when date changes
-  useEffect(() => {
-    const newParams = new URLSearchParams(searchParams);
-    newParams.set('start', format(dateRange.start, 'yyyy-MM-dd'));
-    newParams.set('end', format(dateRange.end, 'yyyy-MM-dd'));
-    setSearchParams(newParams, { replace: true });
-  }, [dateRange, setSearchParams, searchParams]);
-
-  // Aggregated KPIs
-  const aggregatedKpis = useMemo(() => {
-    if (data.length === 0) return {};
-
-    const sums: Record<string, number> = {};
-    const kpiList = ['custo_total', 'leads_total', 'entrada_total', 'reuniao_realizada_total', 'venda_total'];
-    
-    data.forEach(row => {
-      kpiList.forEach((key: string) => {
-        if (typeof row[key] === 'number') {
-          sums[key] = (sums[key] || 0) + row[key];
-        }
-      });
-    });
-
-    // Calculate derived metrics
-    if (sums.custo_total !== undefined) {
-      if (sums.leads_total && sums.leads_total > 0) {
-        sums.cpl = sums.custo_total / sums.leads_total;
-      }
-      if (sums.venda_total && sums.venda_total > 0) {
-        sums.cac = sums.custo_total / sums.venda_total;
-      }
-    }
-
-    return sums;
-  }, [data]);
-
-  const uniqueKpis = ['custo_total', 'leads_total', 'entrada_total', 'reuniao_realizada_total', 'venda_total', 'cpl', 'cac'];
-
-  const formatValue = (key: string, value: number) => {
-    if (key === 'cpl' || key === 'cac' || key.includes('custo')) {
-      return formatCurrency(value);
-    }
-    return formatInteger(value);
-  };
-
-  const formatDate = (dateStr: string) => {
-    try {
-      return format(parseISO(dateStr), 'dd/MM', { locale: ptBR });
-    } catch {
-      return dateStr;
-    }
-  };
-
-  const formatDateFull = (dateStr: string) => {
-    try {
-      return format(parseISO(dateStr), 'dd/MM/yyyy', { locale: ptBR });
-    } catch {
-      return dateStr;
-    }
-  };
-
   const handleRefresh = () => {
     fetchData(true);
   };
 
-  // Loading state
+  // ============ KPI Card Component ============
+  const KPICard = ({ 
+    label, 
+    value7d, 
+    value30d, 
+    format: formatFn = formatInteger,
+    icon: Icon = TrendingUp,
+    showComparison = true
+  }: { 
+    label: string; 
+    value7d: number | undefined; 
+    value30d?: number | undefined;
+    format?: (v: number) => string;
+    icon?: any;
+    showComparison?: boolean;
+  }) => {
+    const change = value7d !== undefined && value30d !== undefined && value30d > 0
+      ? ((value7d - (value30d / 30 * 7)) / (value30d / 30 * 7)) * 100
+      : null;
+
+    return (
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
+          <Icon className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold">
+            {value7d !== undefined ? formatFn(value7d) : '-'}
+          </div>
+          {showComparison && value30d !== undefined && (
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-muted-foreground">
+                30d: {formatFn(value30d)}
+              </span>
+              {change !== null && (
+                <Badge variant={change >= 0 ? 'default' : 'destructive'} className="text-xs">
+                  {change >= 0 ? <TrendingUp className="h-3 w-3 mr-1" /> : <TrendingDown className="h-3 w-3 mr-1" />}
+                  {Math.abs(change).toFixed(0)}%
+                </Badge>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    );
+  };
+
+  // ============ Loading State ============
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -222,35 +343,24 @@ export default function ExecutiveDash() {
           title="Dashboard Executivo"
           description="Visão geral dos principais indicadores"
         />
-        <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
-          {Array.from({ length: 7 }).map((_, i) => (
+        <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
+          {Array.from({ length: 10 }).map((_, i) => (
             <Card key={i}>
               <CardHeader className="pb-2">
                 <Skeleton className="h-4 w-24" />
               </CardHeader>
               <CardContent>
                 <Skeleton className="h-8 w-20" />
+                <Skeleton className="h-4 w-16 mt-2" />
               </CardContent>
             </Card>
           ))}
-        </div>
-        <div className="grid gap-6 lg:grid-cols-2">
-          <Card>
-            <CardContent className="pt-6">
-              <Skeleton className="h-[280px] w-full" />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <Skeleton className="h-[280px] w-full" />
-            </CardContent>
-          </Card>
         </div>
       </div>
     );
   }
 
-  // Error state
+  // ============ Error State ============
   if (error) {
     return (
       <div className="space-y-6">
@@ -275,116 +385,168 @@ export default function ExecutiveDash() {
     );
   }
 
+  const { kpis7d, kpis30d, dailySeries, funnel, upcomingMeetings, aiInsights } = data;
+
   return (
     <div className="space-y-6">
-      {/* Header with filters */}
+      {/* Header */}
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <PageHeader
           title="Dashboard Executivo"
           description="Visão geral dos principais indicadores"
         />
         
-        <div className="flex items-center gap-2">
-          {/* Date Range Picker */}
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="justify-start text-left font-normal">
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {format(dateRange.start, 'dd/MM/yyyy')} - {format(dateRange.end, 'dd/MM/yyyy')}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
-              <Calendar
-                initialFocus
-                mode="range"
-                defaultMonth={dateRange.start}
-                selected={{ from: dateRange.start, to: dateRange.end }}
-                onSelect={(range) => {
-                  if (range?.from && range?.to) {
-                    setDateRange({ start: range.from, end: range.to });
-                  }
-                }}
-                numberOfMonths={2}
-              />
-            </PopoverContent>
-          </Popover>
-          
-          <Button 
-            variant="outline" 
-            size="icon" 
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-          >
-            <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
-          </Button>
-        </div>
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={handleRefresh}
+          disabled={isRefreshing}
+        >
+          <RefreshCw className={cn("h-4 w-4 mr-2", isRefreshing && "animate-spin")} />
+          Atualizar
+        </Button>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
-        {uniqueKpis.map((key) => {
-          if (aggregatedKpis[key] === undefined) return null;
-          const Icon = KPI_ICONS[key] || TrendingUp;
-          
-          return (
-            <Card key={key} className="overflow-hidden">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">{KPI_LABELS[key] || key}</CardTitle>
-                <Icon className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{formatValue(key, aggregatedKpis[key])}</div>
-              </CardContent>
-            </Card>
-          );
-        })}
+      {/* AI Insights Alert */}
+      {aiInsights?.alerts && aiInsights.alerts.length > 0 && (
+        <Card className="border-amber-500/50 bg-amber-500/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-amber-500" />
+              Alertas de IA
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {aiInsights.alerts.slice(0, 3).map((alert, i) => (
+                <div key={i} className="flex items-start gap-2 text-sm">
+                  <Badge variant={alert.severity === 'high' ? 'destructive' : 'secondary'} className="text-xs">
+                    {alert.type}
+                  </Badge>
+                  <span>{alert.message}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* KPIs Grid - 7d with 30d comparison */}
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
+        <KPICard 
+          label="Leads" 
+          value7d={kpis7d?.leads_total_7d} 
+          value30d={kpis30d?.leads_total_30d}
+          icon={Users}
+        />
+        <KPICard 
+          label="Investimento" 
+          value7d={kpis7d?.spend_7d} 
+          value30d={kpis30d?.spend_30d}
+          format={formatCurrency}
+          icon={DollarSign}
+        />
+        <KPICard 
+          label="CPL" 
+          value7d={kpis7d?.cpl_7d} 
+          value30d={kpis30d?.cpl_30d}
+          format={formatCurrency}
+          icon={Target}
+        />
+        <KPICard 
+          label="Mensagens" 
+          value7d={kpis7d?.msg_in_7d} 
+          value30d={kpis30d?.msg_in_30d}
+          icon={MessageSquare}
+        />
+        <KPICard 
+          label="Reuniões Agendadas" 
+          value7d={kpis7d?.meetings_scheduled_7d} 
+          value30d={kpis30d?.meetings_scheduled_30d}
+          icon={Calendar}
+        />
+        <KPICard 
+          label="Reuniões Canceladas" 
+          value7d={kpis7d?.meetings_cancelled_7d} 
+          value30d={kpis30d?.meetings_cancelled_30d}
+          icon={Calendar}
+        />
+        <KPICard 
+          label="Custo/Reunião" 
+          value7d={kpis7d?.cpm_meeting_7d} 
+          value30d={kpis30d?.cpm_meeting_30d}
+          format={formatCurrency}
+          icon={DollarSign}
+        />
+        <KPICard 
+          label="Conv. Lead→Msg" 
+          value7d={kpis7d?.conv_lead_to_msg_7d} 
+          value30d={kpis30d?.conv_lead_to_msg_30d}
+          format={formatPercent}
+          icon={ArrowRight}
+        />
+        <KPICard 
+          label="Conv. Msg→Reunião" 
+          value7d={kpis7d?.conv_msg_to_meeting_7d} 
+          value30d={kpis30d?.conv_msg_to_meeting_30d}
+          format={formatPercent}
+          icon={ArrowRight}
+        />
+        <KPICard 
+          label="Ligações" 
+          value7d={kpis7d?.calls_total_7d} 
+          showComparison={false}
+          icon={Phone}
+        />
       </div>
 
-      {/* Charts */}
+      {/* Charts Row */}
       <div className="grid gap-6 lg:grid-cols-2">
+        {/* Daily Leads & Spend Chart */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Custo e Leads por Dia</CardTitle>
+            <CardTitle className="text-base">Leads e Investimento (60 dias)</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="h-[280px]">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data}>
+                <LineChart data={dailySeries}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                  <XAxis dataKey="dia" tickFormatter={formatDate} tick={{ fontSize: 11 }} />
+                  <XAxis dataKey="day" tickFormatter={formatDate} tick={{ fontSize: 11 }} />
                   <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
                   <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
                   <Tooltip 
                     labelFormatter={formatDateFull}
                     formatter={(value: number, name: string) => {
-                      if (name === 'Custo') return formatCurrency(value);
+                      if (name === 'Investimento') return formatCurrency(value);
                       return formatInteger(value);
                     }}
                   />
                   <Legend />
-                  <Line yAxisId="left" type="monotone" dataKey="custo_total" name="Custo" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
-                  <Line yAxisId="right" type="monotone" dataKey="leads_total" name="Leads" stroke="hsl(var(--accent))" strokeWidth={2} dot={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="spend" name="Investimento" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+                  <Line yAxisId="left" type="monotone" dataKey="leads_new" name="Leads" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           </CardContent>
         </Card>
 
+        {/* Meetings & Messages Chart */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">CPL e CAC por Dia</CardTitle>
+            <CardTitle className="text-base">Mensagens e Reuniões (60 dias)</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="h-[280px]">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data}>
+                <LineChart data={dailySeries}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                  <XAxis dataKey="dia" tickFormatter={formatDate} tick={{ fontSize: 11 }} />
+                  <XAxis dataKey="day" tickFormatter={formatDate} tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip labelFormatter={formatDateFull} formatter={(value: number) => formatCurrency(value)} />
+                  <Tooltip labelFormatter={formatDateFull} formatter={(value: number) => formatInteger(value)} />
                   <Legend />
-                  <Line type="monotone" dataKey="cpl" name="CPL" stroke="hsl(38, 92%, 50%)" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="cac" name="CAC" stroke="hsl(0, 72%, 50%)" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="msg_in" name="Mensagens" stroke="hsl(var(--chart-3))" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="meetings_scheduled" name="Reuniões" stroke="hsl(var(--chart-4))" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -392,9 +554,134 @@ export default function ExecutiveDash() {
         </Card>
       </div>
 
-      {/* Data info */}
+      {/* Funnel & Meetings Row */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Conversion Funnel */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Funil de Conversão</CardTitle>
+            <CardDescription>Distribuição atual por etapa</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {funnel.length > 0 ? (
+              <div className="h-[280px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={funnel} layout="vertical">
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                    <XAxis type="number" tick={{ fontSize: 11 }} />
+                    <YAxis 
+                      type="category" 
+                      dataKey="stage_name" 
+                      tick={{ fontSize: 11 }} 
+                      width={120}
+                    />
+                    <Tooltip formatter={(value: number) => formatInteger(value)} />
+                    <Bar dataKey="leads_total" radius={[0, 4, 4, 0]}>
+                      {funnel.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={FUNNEL_COLORS[index % FUNNEL_COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="h-[280px] flex items-center justify-center text-muted-foreground">
+                Nenhum dado de funil disponível
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Upcoming Meetings */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Video className="h-4 w-4" />
+              Próximas Reuniões
+            </CardTitle>
+            <CardDescription>{upcomingMeetings.length} reuniões agendadas</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {upcomingMeetings.length > 0 ? (
+              <ScrollArea className="h-[280px]">
+                <div className="space-y-3">
+                  {upcomingMeetings.map((meeting, i) => (
+                    <div 
+                      key={i} 
+                      className="flex items-start gap-3 p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
+                    >
+                      <div className="flex-shrink-0 w-12 text-center">
+                        <div className="text-xs text-muted-foreground">
+                          {format(parseISO(meeting.start_at), 'dd/MM')}
+                        </div>
+                        <div className="text-sm font-medium">
+                          {format(parseISO(meeting.start_at), 'HH:mm')}
+                        </div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm truncate">{meeting.summary || 'Reunião'}</p>
+                        <p className="text-xs text-muted-foreground truncate">{meeting.lead_name}</p>
+                        {meeting.lead_phone && (
+                          <p className="text-xs text-muted-foreground">{meeting.lead_phone}</p>
+                        )}
+                      </div>
+                      <div className="flex-shrink-0">
+                        <Badge variant={meeting.status === 'confirmed' ? 'default' : 'secondary'}>
+                          {meeting.status}
+                        </Badge>
+                      </div>
+                      {meeting.meeting_url && (
+                        <a 
+                          href={meeting.meeting_url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="flex-shrink-0"
+                        >
+                          <Button size="icon" variant="ghost" className="h-8 w-8">
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            ) : (
+              <div className="h-[280px] flex items-center justify-center text-muted-foreground">
+                Nenhuma reunião próxima
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* AI Recommendations */}
+      {aiInsights?.recommendations && aiInsights.recommendations.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Sparkles className="h-4 w-4" />
+              Recomendações de IA
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {aiInsights.recommendations.map((rec, i) => (
+                <div key={i} className="p-3 rounded-lg border bg-card">
+                  <Badge variant={rec.priority === 'high' ? 'default' : 'secondary'} className="mb-2">
+                    {rec.priority === 'high' ? 'Alta' : rec.priority === 'medium' ? 'Média' : 'Baixa'}
+                  </Badge>
+                  <p className="text-sm">{rec.action}</p>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Footer info */}
       <div className="text-xs text-muted-foreground text-right">
-        {data.length} registros • Atualizado em {format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
+        Atualizado em {format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
       </div>
     </div>
   );
