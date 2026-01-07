@@ -403,12 +403,13 @@ Deno.serve(async (req) => {
         })
       }
       
-      // Fetch the view directly
+      // Fetch the view directly - Note: vw_afonsina views don't have org_id column
+      // so we don't filter by org_id for now (data is already tenant-scoped in the view)
       const result = await fetchFromView(
         remoteUrl,
         remoteKey,
         directView,
-        orgId || profile.tenant_id,
+        null, // Don't filter by org_id - view is already tenant-scoped
         start,
         end,
         limit,
