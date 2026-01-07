@@ -33,8 +33,12 @@ import {
   BarChart3,
   Copy,
   CheckCircle2,
-  XCircle
+  XCircle,
+  Settings2,
+  MapPin
 } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 interface Dataset {
   id: string;
@@ -70,7 +74,16 @@ interface DiagnosticInfo {
   assumptions: string[];
 }
 
-type WizardStep = 'select' | 'generate' | 'preview' | 'save';
+interface DatasetMapping {
+  time_column: string | null;
+  id_column: string | null;
+  dimension_columns: string[];
+  funnel_stages: string[];
+  truthy_rule: 'default' | 'custom';
+  custom_truthy_values?: string[];
+}
+
+type WizardStep = 'select' | 'generate' | 'mapping' | 'preview' | 'save';
 
 const DEFAULT_PROMPT = `Você é um especialista em BI para CRM e tráfego pago.
 Sua tarefa é gerar um DashboardSpec (JSON) para um SaaS de dashboards, usando APENAS as colunas fornecidas no dataset profile.
@@ -111,6 +124,15 @@ export default function DashboardAutoBuilder({
   const [diagnostics, setDiagnostics] = useState<DiagnosticInfo | null>(null);
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [datasetProfile, setDatasetProfile] = useState<any>(null);
+  const [datasetMapping, setDatasetMapping] = useState<DatasetMapping>({
+    time_column: null,
+    id_column: null,
+    dimension_columns: [],
+    funnel_stages: [],
+    truthy_rule: 'default'
+  });
+  const [needsMapping, setNeedsMapping] = useState(false);
   const { toast } = useToast();
 
   // Load datasets on open
@@ -131,6 +153,15 @@ export default function DashboardAutoBuilder({
     setValidation(null);
     setDiagnostics(null);
     setProgressSteps([]);
+    setDatasetProfile(null);
+    setDatasetMapping({
+      time_column: null,
+      id_column: null,
+      dimension_columns: [],
+      funnel_stages: [],
+      truthy_rule: 'default'
+    });
+    setNeedsMapping(false);
   };
 
   const loadDatasets = async () => {
@@ -233,6 +264,25 @@ export default function DashboardAutoBuilder({
         console.error('Profile error:', profileError);
         // Continue without profile - fallback will handle it
       }
+      
+      // Store profile for mapping step
+      setDatasetProfile(profileResult);
+      
+      // Pre-populate mapping from profile
+      if (profileResult?.detected_candidates) {
+        const candidates = profileResult.detected_candidates;
+        setDatasetMapping(prev => ({
+          ...prev,
+          time_column: candidates.time_columns?.[0]?.name || null,
+          funnel_stages: candidates.funnel_stages?.map((f: any) => f.name) || [],
+          dimension_columns: candidates.dimension_columns || [],
+          id_column: profileResult.columns?.find((c: any) => 
+            c.name?.toLowerCase().includes('lead_id') || 
+            c.name?.toLowerCase().includes('id')
+          )?.name || null
+        }));
+      }
+      
       updateProgress('sample', 'done');
 
       // Step 3: Generate spec with LLM
@@ -250,7 +300,8 @@ export default function DashboardAutoBuilder({
             dataset_id: selectedDatasetId, 
             use_ai: true,
             user_prompt: fullPrompt,
-            dataset_profile: profileResult || null
+            dataset_profile: profileResult || null,
+            dataset_mapping: datasetMapping
           } 
         }
       );
@@ -271,7 +322,7 @@ export default function DashboardAutoBuilder({
       
       // Build diagnostics from debug info
       const debug = result.debug || {};
-      setDiagnostics({
+      const diagInfo: DiagnosticInfo = {
         columns_detected: debug.columns_detected || [],
         time_column: debug.time_column || null,
         time_parseable_rate: debug.time_parseable_rate,
@@ -279,17 +330,36 @@ export default function DashboardAutoBuilder({
         warnings: result.validation?.warnings || [],
         errors: result.validation?.errors || [],
         assumptions: debug.assumptions || []
-      });
+      };
+      setDiagnostics(diagInfo);
 
       updateProgress('validate', 'done');
-      setStep('preview');
-
-      toast({
-        title: 'Spec gerado!',
-        description: result.source === 'ai' 
-          ? 'Dashboard gerado com IA' 
-          : 'Dashboard gerado automaticamente'
-      });
+      
+      // Check if mapping step is needed
+      const warningsCount = result.validation?.warnings?.length || 0;
+      const noTimeColumn = !debug.time_column;
+      const funnelStepsRemoved = (result.validation?.warnings || []).some((w: string) => 
+        w.includes('Etapa de funil removida') || w.includes('Funil removido')
+      );
+      
+      const needsMappingStep = warningsCount > 5 || noTimeColumn || funnelStepsRemoved;
+      setNeedsMapping(needsMappingStep);
+      
+      if (needsMappingStep) {
+        setStep('mapping');
+        toast({
+          title: 'Mapeamento necessário',
+          description: 'Ajuste o mapeamento das colunas para melhorar o dashboard'
+        });
+      } else {
+        setStep('preview');
+        toast({
+          title: 'Spec gerado!',
+          description: result.source === 'ai' 
+            ? 'Dashboard gerado com IA' 
+            : 'Dashboard gerado automaticamente'
+        });
+      }
 
     } catch (err: any) {
       const failedStep = progressSteps.find(s => s.status === 'running');
@@ -390,6 +460,94 @@ export default function DashboardAutoBuilder({
     toast({ title: 'Diagnóstico copiado!' });
   };
 
+  // Regenerate spec with updated mapping
+  const handleRegenerateWithMapping = async () => {
+    if (!selectedDatasetId) return;
+
+    setIsGenerating(true);
+    setStep('generate');
+    setProgressSteps([
+      { id: 'regenerate', label: 'Regerando com mapeamento...', status: 'running' },
+    ]);
+
+    try {
+      const fullPrompt = specificRequirements.trim() 
+        ? `${dashboardPrompt}\n\nRequisitos específicos do usuário: ${specificRequirements}`
+        : dashboardPrompt;
+
+      const { data: result, error } = await supabase.functions.invoke(
+        'generate-dashboard-spec',
+        { 
+          body: { 
+            dataset_id: selectedDatasetId, 
+            use_ai: true,
+            user_prompt: fullPrompt,
+            dataset_profile: datasetProfile,
+            dataset_mapping: datasetMapping
+          } 
+        }
+      );
+
+      if (error) throw error;
+      
+      if (!result?.ok) {
+        throw new Error(result?.error?.message || 'Erro ao gerar spec');
+      }
+
+      setProgressSteps([
+        { id: 'regenerate', label: 'Regerando com mapeamento...', status: 'done' },
+      ]);
+
+      setGeneratedSpec(result.spec);
+      setSpecSource(result.source || 'fallback');
+      setValidation(result.validation || { valid: true, errors: [], warnings: [] });
+      
+      const debug = result.debug || {};
+      setDiagnostics({
+        columns_detected: debug.columns_detected || [],
+        time_column: debug.time_column || null,
+        time_parseable_rate: debug.time_parseable_rate,
+        funnel_candidates: debug.funnel_candidates || [],
+        warnings: result.validation?.warnings || [],
+        errors: result.validation?.errors || [],
+        assumptions: debug.assumptions || []
+      });
+
+      setStep('preview');
+      toast({
+        title: 'Spec regerado!',
+        description: 'Dashboard atualizado com mapeamento manual'
+      });
+
+    } catch (err: any) {
+      toast({ 
+        title: 'Erro', 
+        description: err.message,
+        variant: 'destructive' 
+      });
+      setStep('mapping');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Get available columns for mapping dropdowns
+  const availableColumns = datasetProfile?.columns?.map((c: any) => c.name) || [];
+  const availableTimeColumns = datasetProfile?.columns?.filter((c: any) => 
+    c.db_type?.includes('time') || c.db_type?.includes('date') ||
+    c.stats?.date_parseable_rate > 0.3 ||
+    c.name?.includes('created') || c.name?.includes('date') || c.name?.includes('data')
+  ).map((c: any) => c.name) || [];
+  const availableFunnelColumns = datasetProfile?.columns?.filter((c: any) =>
+    c.role_hint === 'funnel_step' || c.semantic_type === 'funnel' ||
+    c.stats?.boolean_rate > 0.3 ||
+    ['entrada', 'qualificado', 'exp', 'venda', 'perdida', 'lead'].some(kw => c.name?.toLowerCase().includes(kw))
+  ).map((c: any) => c.name) || [];
+  const availableDimensionColumns = datasetProfile?.columns?.filter((c: any) =>
+    c.db_type === 'text' || c.db_type?.includes('varchar') ||
+    c.semantic_type === 'dimension' || c.role_hint === 'dimension'
+  ).map((c: any) => c.name) || [];
+
   const selectedDataset = datasets.find(d => d.id === selectedDatasetId);
 
   return (
@@ -406,31 +564,41 @@ export default function DashboardAutoBuilder({
         </DialogHeader>
 
         {/* Progress Steps */}
-        <div className="flex items-center gap-2 px-2 py-3 border-b">
-          {(['select', 'generate', 'preview', 'save'] as WizardStep[]).map((s, i) => (
-            <div key={s} className="flex items-center gap-2">
-              <div className={`
-                flex items-center justify-center w-7 h-7 rounded-full text-xs font-medium
-                ${step === s ? 'bg-primary text-primary-foreground' : 
-                  i < ['select', 'generate', 'preview', 'save'].indexOf(step) 
-                    ? 'bg-primary/20 text-primary' 
-                    : 'bg-muted text-muted-foreground'}
-              `}>
-                {i < ['select', 'generate', 'preview', 'save'].indexOf(step) ? (
-                  <Check className="h-4 w-4" />
-                ) : (
-                  i + 1
-                )}
+        <div className="flex items-center gap-2 px-2 py-3 border-b overflow-x-auto">
+          {(['select', 'generate', 'mapping', 'preview', 'save'] as WizardStep[]).map((s, i) => {
+            const allSteps: WizardStep[] = ['select', 'generate', 'mapping', 'preview', 'save'];
+            const currentIdx = allSteps.indexOf(step);
+            const stepIdx = allSteps.indexOf(s);
+            
+            // Skip mapping step if not needed
+            if (s === 'mapping' && !needsMapping && step !== 'mapping') return null;
+            
+            return (
+              <div key={s} className="flex items-center gap-2">
+                <div className={`
+                  flex items-center justify-center w-7 h-7 rounded-full text-xs font-medium shrink-0
+                  ${step === s ? 'bg-primary text-primary-foreground' : 
+                    stepIdx < currentIdx 
+                      ? 'bg-primary/20 text-primary' 
+                      : 'bg-muted text-muted-foreground'}
+                `}>
+                  {stepIdx < currentIdx ? (
+                    <Check className="h-4 w-4" />
+                  ) : (
+                    i + 1
+                  )}
+                </div>
+                <span className={`text-sm whitespace-nowrap ${step === s ? 'font-medium' : 'text-muted-foreground'}`}>
+                  {s === 'select' && 'Dataset'}
+                  {s === 'generate' && 'Gerar'}
+                  {s === 'mapping' && 'Mapeamento'}
+                  {s === 'preview' && 'Preview'}
+                  {s === 'save' && 'Salvar'}
+                </span>
+                {i < allSteps.length - 1 && <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
               </div>
-              <span className={`text-sm ${step === s ? 'font-medium' : 'text-muted-foreground'}`}>
-                {s === 'select' && 'Dataset'}
-                {s === 'generate' && 'Gerar'}
-                {s === 'preview' && 'Preview'}
-                {s === 'save' && 'Salvar'}
-              </span>
-              {i < 3 && <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <ScrollArea className="flex-1 px-1">
@@ -570,6 +738,178 @@ export default function DashboardAutoBuilder({
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Step 2.5: Mapping (Conditional) */}
+          {step === 'mapping' && (
+            <div className="space-y-4 py-4">
+              <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
+                <p className="text-sm font-medium text-yellow-600 dark:text-yellow-500 flex items-center gap-2">
+                  <Settings2 className="h-4 w-4" />
+                  Mapeamento Assistido
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  O dataset precisa de ajustes manuais para gerar um dashboard mais preciso.
+                  Configure as colunas abaixo e clique em "Regerar Dashboard".
+                </p>
+              </div>
+
+              {/* Time Column */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Clock className="h-4 w-4" />
+                  Coluna de Tempo
+                </Label>
+                <Select
+                  value={datasetMapping.time_column || 'none'}
+                  onValueChange={(v) => setDatasetMapping(prev => ({
+                    ...prev,
+                    time_column: v === 'none' ? null : v
+                  }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione a coluna de data/tempo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Nenhuma (sem gráficos temporais)</SelectItem>
+                    {(availableTimeColumns.length > 0 ? availableTimeColumns : availableColumns).map((col: string) => (
+                      <SelectItem key={col} value={col}>{col}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Usada para tendências e filtros por período
+                </p>
+              </div>
+
+              {/* ID Column */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Database className="h-4 w-4" />
+                  Coluna de ID (lead_id, etc.)
+                </Label>
+                <Select
+                  value={datasetMapping.id_column || 'none'}
+                  onValueChange={(v) => setDatasetMapping(prev => ({
+                    ...prev,
+                    id_column: v === 'none' ? null : v
+                  }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione a coluna de ID" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Nenhuma</SelectItem>
+                    {availableColumns.map((col: string) => (
+                      <SelectItem key={col} value={col}>{col}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Dimension Columns */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Filter className="h-4 w-4" />
+                  Dimensões (filtros)
+                </Label>
+                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 border rounded-lg bg-muted/30">
+                  {(availableDimensionColumns.length > 0 ? availableDimensionColumns : availableColumns).map((col: string) => (
+                    <label key={col} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                      <Checkbox
+                        checked={datasetMapping.dimension_columns.includes(col)}
+                        onCheckedChange={(checked) => {
+                          setDatasetMapping(prev => ({
+                            ...prev,
+                            dimension_columns: checked
+                              ? [...prev.dimension_columns, col]
+                              : prev.dimension_columns.filter(c => c !== col)
+                          }));
+                        }}
+                      />
+                      {col}
+                    </label>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Ex: unidade, vendedora, origem, modalidade
+                </p>
+              </div>
+
+              {/* Funnel Stages */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <BarChart3 className="h-4 w-4" />
+                  Etapas do Funil
+                </Label>
+                <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 border rounded-lg bg-muted/30">
+                  {(availableFunnelColumns.length > 0 ? availableFunnelColumns : availableColumns).map((col: string) => (
+                    <label key={col} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                      <Checkbox
+                        checked={datasetMapping.funnel_stages.includes(col)}
+                        onCheckedChange={(checked) => {
+                          setDatasetMapping(prev => ({
+                            ...prev,
+                            funnel_stages: checked
+                              ? [...prev.funnel_stages, col]
+                              : prev.funnel_stages.filter(c => c !== col)
+                          }));
+                        }}
+                      />
+                      {col}
+                    </label>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Marque na ordem: entrada → qualificado → exp → venda
+                </p>
+              </div>
+
+              {/* Truthy Rule */}
+              <div className="space-y-2">
+                <Label>Regra "truthy" para colunas de funil</Label>
+                <Select
+                  value={datasetMapping.truthy_rule}
+                  onValueChange={(v: 'default' | 'custom') => setDatasetMapping(prev => ({
+                    ...prev,
+                    truthy_rule: v
+                  }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Padrão (1, true, sim, x, ok)</SelectItem>
+                    <SelectItem value="custom">Personalizado</SelectItem>
+                  </SelectContent>
+                </Select>
+                {datasetMapping.truthy_rule === 'custom' && (
+                  <Input
+                    placeholder="Valores truthy separados por vírgula (ex: sim, 1, ativo)"
+                    onChange={(e) => setDatasetMapping(prev => ({
+                      ...prev,
+                      custom_truthy_values: e.target.value.split(',').map(v => v.trim()).filter(Boolean)
+                    }))}
+                  />
+                )}
+              </div>
+
+              {/* Current Warnings */}
+              {validation && validation.warnings.length > 0 && (
+                <Collapsible>
+                  <CollapsibleTrigger className="flex items-center gap-2 text-sm text-yellow-600 hover:underline">
+                    <AlertTriangle className="h-3 w-3" />
+                    {validation.warnings.length} avisos da geração anterior
+                    <ChevronDown className="h-3 w-3" />
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="mt-2 p-2 bg-yellow-500/5 rounded-lg border border-yellow-500/20">
+                    <ul className="text-xs text-yellow-600/80 list-disc list-inside space-y-1">
+                      {validation.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                    </ul>
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
             </div>
           )}
 
@@ -838,10 +1178,25 @@ export default function DashboardAutoBuilder({
               Cancelar
             </Button>
           )}
+
+          {step === 'mapping' && (
+            <>
+              <Button variant="outline" onClick={() => setStep('preview')}>
+                Pular Mapeamento
+              </Button>
+              <Button 
+                onClick={handleRegenerateWithMapping}
+                disabled={isGenerating}
+              >
+                <Sparkles className="h-4 w-4 mr-2" />
+                Regerar Dashboard
+              </Button>
+            </>
+          )}
           
           {step === 'preview' && (
             <>
-              <Button variant="outline" onClick={() => setStep('select')}>
+              <Button variant="outline" onClick={() => needsMapping ? setStep('mapping') : setStep('select')}>
                 Voltar
               </Button>
               <Button onClick={handleSave} disabled={!generatedSpec}>
