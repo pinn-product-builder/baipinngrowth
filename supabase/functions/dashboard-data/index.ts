@@ -5,6 +5,52 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// View mapping by context/section
+const VIEW_CONFIG = {
+  // Main executive dashboard
+  executive: {
+    kpis: 'vw_dashboard_kpis_30d_v3',
+    daily: 'vw_dashboard_daily_60d_v3',
+    funnel: 'vw_funnel_current_exec',
+  },
+  // Traffic/Ads section
+  trafego: {
+    kpis_7d: 'vw_trafego_kpis_7d',
+    kpis_30d: 'vw_trafego_kpis_30d',
+    daily: 'vw_trafego_daily_30d',
+    top_ads: 'vw_spend_top_ads_30d_v2',
+  },
+  // AI Agent section
+  agente: {
+    kpis_7d: 'vw_agente_kpis_7d',
+    kpis_30d: 'vw_agente_kpis_30d',
+  },
+  // Messages/Conversations
+  mensagens: {
+    heatmap: 'vw_kommo_msg_in_heatmap_30d_v3',
+  },
+  // Meetings
+  reunioes: {
+    upcoming: 'vw_meetings_upcoming_v3',
+  },
+  // Calls (VAPI)
+  ligacoes: {
+    kpis_7d: 'vw_calls_kpis_7d',
+    kpis_30d: 'vw_calls_kpis_30d',
+    daily: 'vw_calls_daily_30d',
+    recent: 'vw_calls_last_50',
+  },
+  // Admin/Mapping
+  admin: {
+    coverage: 'vw_funnel_mapping_coverage',
+    unmapped: 'vw_funnel_unmapped_candidates',
+  },
+  // Legacy compatibility - original view
+  legacy: {
+    main: 'vw_afonsina_custos_funil_dia',
+  },
+}
+
 // Encryption helpers
 async function getEncryptionKey(): Promise<CryptoKey> {
   const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
@@ -41,7 +87,7 @@ async function decrypt(ciphertext: string): Promise<string> {
 // In-memory rate limiting
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>()
 const RATE_LIMIT_WINDOW_MS = 60000
-const MAX_REQUESTS_PER_WINDOW = 30
+const MAX_REQUESTS_PER_WINDOW = 60
 
 function checkRateLimit(identifier: string): boolean {
   const now = Date.now()
@@ -63,8 +109,8 @@ function checkRateLimit(identifier: string): boolean {
 // Simple in-memory cache
 const cache = new Map<string, { data: any; expiresAt: number }>()
 
-function getCacheKey(dashboardId: string, start: string, end: string): string {
-  return `${dashboardId}:${start}:${end}`
+function getCacheKey(dashboardId: string, section: string, start: string, end: string): string {
+  return `${dashboardId}:${section}:${start}:${end}`
 }
 
 function getFromCache(key: string): any | null {
@@ -93,6 +139,71 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 1
   } catch (error) {
     clearTimeout(timeoutId)
     throw error
+  }
+}
+
+// Fetch data from a specific view
+async function fetchFromView(
+  remoteUrl: string,
+  remoteKey: string,
+  viewName: string,
+  orgId: string | null,
+  start: string | null,
+  end: string | null,
+  limit: string,
+  dateColumn: string = 'dia'
+): Promise<{ data: any[]; error: string | null }> {
+  try {
+    let restUrl = `${remoteUrl}/rest/v1/${viewName}?select=*`
+    
+    // Filter by org_id if provided
+    if (orgId) {
+      restUrl += `&org_id=eq.${orgId}`
+    }
+    
+    // Date filters - only apply if the view likely has the date column
+    const hasDateColumn = !viewName.includes('upcoming') && 
+                          !viewName.includes('last_50') && 
+                          !viewName.includes('coverage') &&
+                          !viewName.includes('unmapped') &&
+                          !viewName.includes('heatmap')
+    
+    if (hasDateColumn && start) {
+      restUrl += `&${dateColumn}=gte.${start}`
+    }
+    if (hasDateColumn && end) {
+      restUrl += `&${dateColumn}=lte.${end}`
+    }
+    
+    // Order by date if applicable
+    if (hasDateColumn) {
+      restUrl += `&order=${dateColumn}.asc`
+    }
+    
+    restUrl += `&limit=${limit}`
+
+    console.log(`Fetching view ${viewName}:`, restUrl)
+
+    const response = await fetchWithTimeout(restUrl, {
+      headers: {
+        'apikey': remoteKey,
+        'Authorization': `Bearer ${remoteKey}`,
+        'Content-Type': 'application/json'
+      }
+    }, 10000)
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error(`View ${viewName} error:`, response.status, errorText)
+      return { data: [], error: `${viewName}: ${response.status}` }
+    }
+
+    const data = await response.json()
+    console.log(`View ${viewName} returned ${data.length} rows`)
+    return { data, error: null }
+  } catch (error) {
+    console.error(`View ${viewName} fetch error:`, error)
+    return { data: [], error: String(error) }
   }
 }
 
@@ -132,7 +243,6 @@ Deno.serve(async (req) => {
     }
 
     const userId = user.id
-
     console.log(`Authenticated user: ${userId}`)
 
     // Rate limiting by user
@@ -143,11 +253,13 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Parse parameters from body (POST) or query string (GET)
+    // Parse parameters
     let dashboardId: string | null = null
     let start: string | null = null
     let end: string | null = null
     let limit: string = '1000'
+    let section: string = 'all' // New: which section to fetch
+    let orgId: string | null = null // New: org_id filter
 
     if (req.method === 'POST') {
       try {
@@ -156,6 +268,8 @@ Deno.serve(async (req) => {
         start = body.start
         end = body.end
         limit = body.limit || '1000'
+        section = body.section || 'all'
+        orgId = body.org_id || null
       } catch (e) {
         console.error('Failed to parse request body:', e)
         return new Response(JSON.stringify({ error: 'Corpo da requisição inválido' }), {
@@ -169,6 +283,8 @@ Deno.serve(async (req) => {
       start = url.searchParams.get('start')
       end = url.searchParams.get('end')
       limit = url.searchParams.get('limit') || '1000'
+      section = url.searchParams.get('section') || 'all'
+      orgId = url.searchParams.get('org_id')
     }
 
     if (!dashboardId) {
@@ -178,7 +294,7 @@ Deno.serve(async (req) => {
       })
     }
 
-    console.log(`Fetching dashboard ${dashboardId} for user ${userId}, period: ${start} to ${end}`)
+    console.log(`Fetching dashboard ${dashboardId}, section: ${section}, period: ${start} to ${end}, org_id: ${orgId}`)
 
     // Use service role client for admin operations
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
@@ -197,7 +313,7 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Check if user belongs to the dashboard's tenant
+    // Check user access
     const { data: profile } = await adminClient
       .from('profiles')
       .select('tenant_id')
@@ -227,13 +343,6 @@ Deno.serve(async (req) => {
       })
     }
 
-    if (!dashboard.data_source_id || !dashboard.view_name) {
-      return new Response(JSON.stringify({ error: 'Dashboard não configurado corretamente' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
-
     const dataSource = dashboard.tenant_data_sources
     if (!dataSource || !dataSource.is_active) {
       return new Response(JSON.stringify({ error: 'Data source não encontrado ou inativo' }), {
@@ -242,236 +351,203 @@ Deno.serve(async (req) => {
       })
     }
 
-    if (!dataSource.allowed_views.includes(dashboard.view_name)) {
-      return new Response(JSON.stringify({ error: 'View não permitida' }), {
-        status: 403,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
-
     // Check cache
-    const cacheKey = getCacheKey(dashboardId, start || '', end || '')
+    const cacheKey = getCacheKey(dashboardId, section, start || '', end || '')
     const cachedData = getFromCache(cacheKey)
     if (cachedData) {
       console.log('Returning cached data for', cacheKey)
-      return new Response(JSON.stringify({ data: cachedData, cached: true }), {
+      return new Response(JSON.stringify({ ...cachedData, cached: true }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    // Handle different data source types
-    const dataSourceType = dataSource.type || 'supabase'
-    
-    let data: any[]
+    // Get credentials
+    const remoteUrl = dataSource.project_url
+    let remoteKey: string | null = null
 
-    if (dataSourceType === 'proxy_webhook') {
-      // ============================================================
-      // PROXY/WEBHOOK MODE - Call the proxy's /query endpoint
-      // ============================================================
-      console.log('Using proxy_webhook mode for data source:', dataSource.name)
-      
-      const baseUrl = dataSource.base_url
-      if (!baseUrl) {
-        return new Response(JSON.stringify({ error: 'Base URL do proxy não configurada' }), {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      }
-
-      // Build query URL
-      const queryUrl = new URL(`${baseUrl}/query`)
-      queryUrl.searchParams.set('view', dashboard.view_name)
-      if (start) queryUrl.searchParams.set('start', start)
-      if (end) queryUrl.searchParams.set('end', end)
-      queryUrl.searchParams.set('limit', limit)
-
-      // Build headers
-      const proxyHeaders: Record<string, string> = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      }
-
-      if (dataSource.auth_mode === 'bearer_token' && dataSource.bearer_token) {
-        proxyHeaders['Authorization'] = `Bearer ${dataSource.bearer_token}`
-      }
-
-      console.log('Calling proxy:', queryUrl.toString())
-
-      let proxyResponse: Response
+    if (dataSource.anon_key_encrypted) {
       try {
-        proxyResponse = await fetchWithTimeout(queryUrl.toString(), {
-          method: 'GET',
-          headers: proxyHeaders
-        }, 15000)
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido'
-        console.error('Proxy fetch error:', errorMessage)
-        
-        if (error instanceof Error && error.name === 'AbortError') {
-          return new Response(JSON.stringify({ 
-            error: 'Tempo esgotado', 
-            details: 'O proxy não respondeu em tempo hábil',
-            error_type: 'timeout'
-          }), {
-            status: 504,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          })
-        }
-        
-        return new Response(JSON.stringify({ 
-          error: 'Falha ao conectar ao proxy', 
-          details: errorMessage,
-          error_type: 'network'
-        }), {
-          status: 502,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
+        remoteKey = await decrypt(dataSource.anon_key_encrypted)
+        console.log('Successfully decrypted anon_key')
+      } catch (e) {
+        console.error('Failed to decrypt anon_key:', e)
       }
+    }
 
-      if (!proxyResponse.ok) {
-        const errorText = await proxyResponse.text()
-        console.error('Proxy error:', proxyResponse.status, errorText)
-        return new Response(JSON.stringify({ 
-          error: `Proxy retornou erro ${proxyResponse.status}`, 
-          details: errorText.slice(0, 200),
-          error_type: 'proxy_error'
-        }), {
-          status: proxyResponse.status,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
+    if (!remoteKey && dataSource.service_role_key_encrypted) {
+      try {
+        remoteKey = await decrypt(dataSource.service_role_key_encrypted)
+        console.log('Successfully decrypted service_role_key')
+      } catch (e) {
+        console.error('Failed to decrypt service_role_key:', e)
       }
+    }
 
-      const proxyResult = await proxyResponse.json()
+    // Fallback to Afonsina env keys
+    if (!remoteKey) {
+      const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
+      const afonsinaServiceKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY')
+      const afonsinaAnonKey = Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
       
-      // Handle proxy response format: { ok: true, rows: [...] } or { ok: true, data: [...] }
-      if (proxyResult.ok === false) {
-        return new Response(JSON.stringify({ 
-          error: proxyResult.message || 'Erro do proxy', 
-          details: proxyResult.details,
-          error_type: 'proxy_error'
-        }), {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
+      if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
+        remoteKey = afonsinaAnonKey || afonsinaServiceKey || null
+        console.log('Using Afonsina fallback keys')
       }
+    }
 
-      // Extract rows from response
-      data = proxyResult.rows || proxyResult.data || []
-      console.log(`Proxy returned ${data.length} rows`)
-
-    } else {
-      // ============================================================
-      // SUPABASE DIRECT MODE - Use encrypted credentials
-      // ============================================================
-      console.log('Using supabase direct mode for data source:', dataSource.name)
-      
-      // Get credentials - try encrypted keys first
-      const remoteUrl = dataSource.project_url
-      let remoteKey: string | null = null
-
-      // Try anon key first (preferred)
-      if (dataSource.anon_key_encrypted) {
-        try {
-          remoteKey = await decrypt(dataSource.anon_key_encrypted)
-          console.log('Successfully decrypted anon_key')
-        } catch (e) {
-          console.error('Failed to decrypt anon_key:', e)
-        }
-      }
-
-      // Fallback to service role key
-      if (!remoteKey && dataSource.service_role_key_encrypted) {
-        try {
-          remoteKey = await decrypt(dataSource.service_role_key_encrypted)
-          console.log('Successfully decrypted service_role_key')
-        } catch (e) {
-          console.error('Failed to decrypt service_role_key:', e)
-        }
-      }
-
-      // Fallback to hardcoded Afonsina keys for compatibility
-      if (!remoteKey) {
-        const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
-        const afonsinaServiceKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY')
-        const afonsinaAnonKey = Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
-        
-        if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
-          remoteKey = afonsinaAnonKey || afonsinaServiceKey || null
-          console.log('Using Afonsina fallback keys')
-        }
-      }
-
-      if (!remoteKey) {
-        return new Response(JSON.stringify({ 
-          error: 'Credenciais do data source não configuradas',
-          error_type: 'config',
-          details: 'Configure as chaves anon_key ou service_role_key para este data source.'
-        }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      }
-
-      // Build REST API URL
-      let restUrl = `${remoteUrl}/rest/v1/${dashboard.view_name}?select=*`
-      
-      if (start) {
-        restUrl += `&dia=gte.${start}`
-      }
-      if (end) {
-        restUrl += `&dia=lte.${end}`
-      }
-      
-      restUrl += `&order=dia.asc`
-      restUrl += `&limit=${limit}`
-
-      console.log('Fetching from Supabase:', restUrl)
-
-      const response = await fetch(restUrl, {
-        headers: {
-          'apikey': remoteKey,
-          'Authorization': `Bearer ${remoteKey}`,
-          'Content-Type': 'application/json'
-        }
+    if (!remoteKey) {
+      return new Response(JSON.stringify({ 
+        error: 'Credenciais do data source não configuradas',
+        error_type: 'config'
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
+    }
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Remote Supabase error:', response.status, errorText)
-        
-        let errorType = 'supabase_error'
-        let errorMessage = 'Erro ao buscar dados do Supabase'
-        
-        if (response.status === 401) {
-          errorType = 'auth'
-          errorMessage = 'Credenciais inválidas para o data source externo'
-        } else if (response.status === 403) {
-          errorType = 'permission'
-          errorMessage = 'Sem permissão para acessar esta view'
-        } else if (response.status === 404) {
-          errorType = 'not_found'
-          errorMessage = `View "${dashboard.view_name}" não encontrada`
-        }
-        
-        return new Response(JSON.stringify({ 
-          error: errorMessage, 
-          details: errorText.slice(0, 200),
-          error_type: errorType
-        }), {
-          status: response.status,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
+    // Determine which views to fetch based on section
+    const allowedViews = dataSource.allowed_views || []
+    const result: Record<string, any> = {}
+    const errors: string[] = []
+
+    // Helper to check if view is allowed
+    const isAllowed = (view: string) => allowedViews.includes(view)
+
+    if (section === 'all' || section === 'executive') {
+      // Fetch executive views
+      const execViews = VIEW_CONFIG.executive
+      
+      if (isAllowed(execViews.kpis)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, execViews.kpis, orgId, null, null, '100')
+        result.kpis = data
+        if (error) errors.push(error)
       }
+      
+      if (isAllowed(execViews.daily)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, execViews.daily, orgId, start, end, limit)
+        result.daily = data
+        // Also set as main 'data' for backwards compatibility
+        result.data = data
+        if (error) errors.push(error)
+      }
+      
+      if (isAllowed(execViews.funnel)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, execViews.funnel, orgId, null, null, '50')
+        result.funnel = data
+        if (error) errors.push(error)
+      }
+    }
 
-      data = await response.json()
-      console.log(`Supabase returned ${data.length} rows`)
+    if (section === 'all' || section === 'trafego') {
+      const trafegoViews = VIEW_CONFIG.trafego
+      
+      if (isAllowed(trafegoViews.kpis_30d)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, trafegoViews.kpis_30d, orgId, null, null, '100')
+        result.trafego_kpis = data
+        if (error) errors.push(error)
+      }
+      
+      if (isAllowed(trafegoViews.daily)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, trafegoViews.daily, orgId, start, end, limit)
+        result.trafego_daily = data
+        if (error) errors.push(error)
+      }
+      
+      if (isAllowed(trafegoViews.top_ads)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, trafegoViews.top_ads, orgId, null, null, '20')
+        result.top_ads = data
+        if (error) errors.push(error)
+      }
+    }
+
+    if (section === 'all' || section === 'agente') {
+      const agenteViews = VIEW_CONFIG.agente
+      
+      if (isAllowed(agenteViews.kpis_30d)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, agenteViews.kpis_30d, orgId, null, null, '100')
+        result.agente_kpis = data
+        if (error) errors.push(error)
+      }
+    }
+
+    if (section === 'all' || section === 'mensagens') {
+      const msgViews = VIEW_CONFIG.mensagens
+      
+      if (isAllowed(msgViews.heatmap)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, msgViews.heatmap, orgId, null, null, '500')
+        result.heatmap = data
+        if (error) errors.push(error)
+      }
+    }
+
+    if (section === 'all' || section === 'reunioes') {
+      const reunioesViews = VIEW_CONFIG.reunioes
+      
+      if (isAllowed(reunioesViews.upcoming)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, reunioesViews.upcoming, orgId, null, null, '50')
+        result.reunioes = data
+        if (error) errors.push(error)
+      }
+    }
+
+    if (section === 'all' || section === 'ligacoes') {
+      const ligacoesViews = VIEW_CONFIG.ligacoes
+      
+      if (isAllowed(ligacoesViews.kpis_30d)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, ligacoesViews.kpis_30d, orgId, null, null, '100')
+        result.ligacoes_kpis = data
+        if (error) errors.push(error)
+      }
+      
+      if (isAllowed(ligacoesViews.daily)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, ligacoesViews.daily, orgId, start, end, limit)
+        result.ligacoes_daily = data
+        if (error) errors.push(error)
+      }
+      
+      if (isAllowed(ligacoesViews.recent)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, ligacoesViews.recent, orgId, null, null, '50')
+        result.ligacoes_recent = data
+        if (error) errors.push(error)
+      }
+    }
+
+    if (section === 'admin') {
+      const adminViews = VIEW_CONFIG.admin
+      
+      if (isAllowed(adminViews.coverage)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, adminViews.coverage, orgId, null, null, '500')
+        result.coverage = data
+        if (error) errors.push(error)
+      }
+      
+      if (isAllowed(adminViews.unmapped)) {
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, adminViews.unmapped, orgId, null, null, '500')
+        result.unmapped = data
+        if (error) errors.push(error)
+      }
+    }
+
+    // Legacy fallback: if no data yet and legacy view is allowed, fetch it
+    if (!result.data && !result.daily && dashboard.view_name) {
+      if (isAllowed(dashboard.view_name)) {
+        console.log('Using legacy view:', dashboard.view_name)
+        const { data, error } = await fetchFromView(remoteUrl, remoteKey, dashboard.view_name, orgId, start, end, limit)
+        result.data = data
+        if (error) errors.push(error)
+      }
     }
 
     // Cache the result
     const ttl = dashboard.cache_ttl_seconds || 300
-    setCache(cacheKey, data, ttl)
+    setCache(cacheKey, result, ttl)
 
-    return new Response(JSON.stringify({ data, cached: false }), {
+    // Log any errors but still return data
+    if (errors.length > 0) {
+      console.warn('Some views had errors:', errors)
+    }
+
+    return new Response(JSON.stringify({ ...result, cached: false, errors: errors.length > 0 ? errors : undefined }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
 
