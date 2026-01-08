@@ -89,7 +89,14 @@ interface DashboardPlan {
 // =====================================================
 
 function generateHeuristicPlan(semanticModel: any, userPrompt?: string): DashboardPlan {
-  const { columns, time_column, id_column, funnel, dimensions, metrics, dataset_name } = semanticModel
+  // Safely extract with defaults
+  const columns = semanticModel?.columns || []
+  const time_column = semanticModel?.time_column
+  const id_column = semanticModel?.id_column
+  const funnel = semanticModel?.funnel
+  const dimensions = semanticModel?.dimensions || []
+  const metrics = semanticModel?.metrics || []
+  const dataset_name = semanticModel?.dataset_name
   
   const kpis: KPIDefinition[] = []
   const charts: ChartDefinition[] = []
