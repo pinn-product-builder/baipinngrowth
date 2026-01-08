@@ -1,73 +1,9 @@
-// Dashboard Data Edge Function - v2 with direct view support
+// Dashboard Data Edge Function - v3 with explicit dataset binding
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
-
-// View configuration with date column info
-// Based on official data source documentation
-const VIEW_CONFIG: Record<string, { views: Record<string, { name: string; dateColumn?: string; hasDateFilter?: boolean; orderBy?: string }> }> = {
-  executive: {
-    views: {
-      // KPIs - 7d and 30d aggregates
-      kpis_7d: { name: 'vw_dashboard_kpis_7d_v3', hasDateFilter: false },
-      kpis_30d: { name: 'vw_dashboard_kpis_30d_v3', hasDateFilter: false },
-      // Time series - 60 days
-      daily: { name: 'vw_dashboard_daily_60d_v3', dateColumn: 'day', hasDateFilter: true, orderBy: 'day.desc' },
-      // Funnel
-      funnel: { name: 'vw_funnel_current_v3', hasDateFilter: false, orderBy: 'stage_rank.asc' },
-      // Upcoming meetings
-      meetings: { name: 'vw_meetings_upcoming_v3', hasDateFilter: false, orderBy: 'start_at.asc' },
-      // Calls KPIs
-      calls_7d: { name: 'vw_calls_kpis_7d', hasDateFilter: false },
-      calls_30d: { name: 'vw_calls_kpis_30d', hasDateFilter: false },
-      // AI insights
-      ai_insights: { name: 'ai_insights', hasDateFilter: false, orderBy: 'created_at.desc' },
-    }
-  },
-  trafego: {
-    views: {
-      kpis_30d: { name: 'vw_trafego_kpis_30d', hasDateFilter: false },
-      daily: { name: 'vw_trafego_daily_30d', dateColumn: 'dia', hasDateFilter: true },
-      top_ads: { name: 'vw_spend_top_ads_30d_v2', hasDateFilter: false },
-    }
-  },
-  agente: {
-    views: {
-      kpis_30d: { name: 'vw_agente_kpis_30d', hasDateFilter: false },
-    }
-  },
-  mensagens: {
-    views: {
-      heatmap: { name: 'vw_kommo_msg_in_heatmap_30d_v3', hasDateFilter: false },
-    }
-  },
-  reunioes: {
-    views: {
-      upcoming: { name: 'vw_meetings_upcoming_v3', hasDateFilter: false, orderBy: 'start_at.asc' },
-    }
-  },
-  ligacoes: {
-    views: {
-      kpis_7d: { name: 'vw_calls_kpis_7d', hasDateFilter: false },
-      kpis_30d: { name: 'vw_calls_kpis_30d', hasDateFilter: false },
-      daily: { name: 'vw_calls_daily_30d', dateColumn: 'dia', hasDateFilter: true },
-      recent: { name: 'vw_calls_last_50', hasDateFilter: false },
-    }
-  },
-  admin: {
-    views: {
-      coverage: { name: 'vw_funnel_mapping_coverage', hasDateFilter: false },
-      unmapped: { name: 'vw_funnel_unmapped_candidates', hasDateFilter: false },
-    }
-  },
-  legacy: {
-    views: {
-      main: { name: 'vw_afonsina_custos_funil_dia', dateColumn: 'dia', hasDateFilter: true },
-    }
-  },
 }
 
 // Encryption helpers
@@ -128,8 +64,8 @@ function checkRateLimit(identifier: string): boolean {
 // Simple in-memory cache
 const cache = new Map<string, { data: any; expiresAt: number }>()
 
-function getCacheKey(dashboardId: string, section: string, start: string, end: string): string {
-  return `${dashboardId}:${section}:${start}:${end}`
+function getCacheKey(dashboardId: string, start: string, end: string): string {
+  return `${dashboardId}:${start}:${end}`
 }
 
 function getFromCache(key: string): any | null {
@@ -161,90 +97,134 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 1
   }
 }
 
-// Fetch data from a specific view
-async function fetchFromView(
-  remoteUrl: string,
-  remoteKey: string,
-  viewName: string,
-  orgId: string | null,
+// Validate schema/relation names to prevent injection
+function isValidIdentifier(name: string): boolean {
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)
+}
+
+// Get decrypted key from data source
+async function getDataSourceKey(dataSource: any): Promise<string | null> {
+  let remoteKey: string | null = null
+
+  if (dataSource.anon_key_encrypted) {
+    try {
+      remoteKey = await decrypt(dataSource.anon_key_encrypted)
+    } catch (e) {
+      console.error('Failed to decrypt anon_key:', e)
+    }
+  }
+
+  if (!remoteKey && dataSource.service_role_key_encrypted) {
+    try {
+      remoteKey = await decrypt(dataSource.service_role_key_encrypted)
+    } catch (e) {
+      console.error('Failed to decrypt service_role_key:', e)
+    }
+  }
+
+  // Fallback to env keys for known projects
+  if (!remoteKey) {
+    const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
+    if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
+      remoteKey = Deno.env.get('AFONSINA_SUPABASE_ANON_KEY') || 
+                  Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY') || null
+    }
+  }
+
+  return remoteKey
+}
+
+// Fetch data from external view
+async function fetchFromExternalView(
+  projectUrl: string,
+  apiKey: string,
+  schemaName: string,
+  relationName: string,
+  timeColumn: string | null,
   start: string | null,
   end: string | null,
-  limit: string,
-  dateColumn: string | null = null,
-  hasDateFilter: boolean = false,
-  orderBy: string | null = null
-): Promise<{ data: any[]; error: string | null }> {
+  limit: number = 1000
+): Promise<{ data: any[]; error: string | null; debug: any }> {
+  // Validate identifiers
+  if (!isValidIdentifier(schemaName) || !isValidIdentifier(relationName)) {
+    return { 
+      data: [], 
+      error: 'INVALID_IDENTIFIER: schema ou relation contém caracteres inválidos',
+      debug: { schemaName, relationName }
+    }
+  }
+
+  // Build query URL - PostgREST uses relation name directly, schema is handled by search_path
+  let restUrl = `${projectUrl}/rest/v1/${relationName}?select=*`
+  
+  // Apply date filters if time column is specified
+  if (timeColumn && isValidIdentifier(timeColumn)) {
+    if (start) {
+      restUrl += `&${timeColumn}=gte.${start}`
+    }
+    if (end) {
+      restUrl += `&${timeColumn}=lte.${end}`
+    }
+    restUrl += `&order=${timeColumn}.asc`
+  }
+  
+  restUrl += `&limit=${limit}`
+
+  const debug = {
+    url: restUrl.replace(apiKey, '***'),
+    schema: schemaName,
+    relation: relationName,
+    time_column: timeColumn,
+    period: { start, end }
+  }
+
+  console.log(`Fetching: ${schemaName}.${relationName} from ${projectUrl}`)
+
   try {
-    let restUrl = `${remoteUrl}/rest/v1/${viewName}?select=*`
-    
-    // Filter by org_id if provided
-    if (orgId) {
-      restUrl += `&org_id=eq.${orgId}`
-    }
-    
-    // For ai_insights, filter by scope='executivo'
-    if (viewName === 'ai_insights') {
-      restUrl += `&scope=eq.executivo`
-    }
-    
-    // Date filters - only apply if view has date filtering
-    if (hasDateFilter && dateColumn) {
-      if (start) {
-        restUrl += `&${dateColumn}=gte.${start}`
-      }
-      if (end) {
-        restUrl += `&${dateColumn}=lte.${end}`
-      }
-    }
-    
-    // Apply order - use custom orderBy or fallback to dateColumn
-    if (orderBy) {
-      restUrl += `&order=${orderBy}`
-    } else if (hasDateFilter && dateColumn) {
-      restUrl += `&order=${dateColumn}.asc`
-    }
-    
-    restUrl += `&limit=${limit}`
-
-    console.log(`Fetching view ${viewName}:`, restUrl)
-
     const response = await fetchWithTimeout(restUrl, {
       headers: {
-        'apikey': remoteKey,
-        'Authorization': `Bearer ${remoteKey}`,
+        'apikey': apiKey,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       }
-    }, 10000)
+    }, 15000)
 
     if (!response.ok) {
       const errorText = await response.text()
-      console.error(`View ${viewName} error:`, response.status, errorText)
+      console.error(`Fetch error ${response.status}:`, errorText)
       
       // Parse PostgREST error for better messaging
-      let errorMessage = `${viewName}: ${response.status}`
+      let errorMessage = `Erro ${response.status} ao consultar ${schemaName}.${relationName}`
       try {
         const errorJson = JSON.parse(errorText)
         if (errorJson.code === 'PGRST205') {
-          errorMessage = `View/tabela '${viewName}' não existe no banco externo`
+          errorMessage = `VIEW_NOT_FOUND: A view/tabela '${schemaName}.${relationName}' não existe no banco de dados externo`
           if (errorJson.hint) {
-            errorMessage += `. ${errorJson.hint}`
+            errorMessage += `. Sugestão: ${errorJson.hint}`
           }
+        } else if (errorJson.code === 'PGRST204') {
+          errorMessage = `COLUMN_NOT_FOUND: Coluna '${timeColumn}' não existe em ${schemaName}.${relationName}`
         } else if (errorJson.message) {
-          errorMessage = errorJson.message
+          errorMessage = `POSTGREST_ERROR: ${errorJson.message}`
         }
       } catch (e) {
         // Keep original error message
       }
       
-      return { data: [], error: errorMessage }
+      return { data: [], error: errorMessage, debug }
     }
 
     const data = await response.json()
-    console.log(`View ${viewName} returned ${data.length} rows`)
-    return { data, error: null }
+    console.log(`Fetched ${data.length} rows from ${schemaName}.${relationName}`)
+    
+    return { data, error: null, debug }
   } catch (error) {
-    console.error(`View ${viewName} fetch error:`, error)
-    return { data: [], error: String(error) }
+    console.error('Fetch exception:', error)
+    return { 
+      data: [], 
+      error: `FETCH_EXCEPTION: ${String(error)}`,
+      debug 
+    }
   }
 }
 
@@ -253,11 +233,16 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders })
   }
 
+  const traceId = crypto.randomUUID().slice(0, 8)
+  
   try {
     const authHeader = req.headers.get('authorization')
     if (!authHeader?.startsWith('Bearer ')) {
-      console.log('No authorization header provided')
-      return new Response(JSON.stringify({ error: 'Não autorizado', error_type: 'auth' }), {
+      return new Response(JSON.stringify({ 
+        ok: false,
+        error: { code: 'UNAUTHORIZED', message: 'Token de autorização ausente' },
+        trace_id: traceId
+      }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
@@ -267,232 +252,75 @@ Deno.serve(async (req) => {
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
-    // Create client with the user's JWT for validation
+    // Validate user
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
     })
 
-    // Validate user with getUser
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     
     if (userError || !user) {
-      console.log('JWT validation failed:', userError?.message)
-      return new Response(JSON.stringify({ error: 'Token inválido ou expirado', error_type: 'auth' }), {
+      return new Response(JSON.stringify({ 
+        ok: false,
+        error: { code: 'AUTH_FAILED', message: 'Token inválido ou expirado' },
+        trace_id: traceId
+      }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
     const userId = user.id
-    console.log(`Authenticated user: ${userId}`)
 
-    // Rate limiting by user
+    // Rate limiting
     if (!checkRateLimit(userId)) {
-      return new Response(JSON.stringify({ error: 'Muitas requisições. Tente novamente em 1 minuto.' }), {
+      return new Response(JSON.stringify({ 
+        ok: false,
+        error: { code: 'RATE_LIMIT', message: 'Muitas requisições. Aguarde 1 minuto.' },
+        trace_id: traceId
+      }), {
         status: 429,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    // Parse parameters
+    // Parse request
     let dashboardId: string | null = null
     let start: string | null = null
     let end: string | null = null
-    let limit: string = '1000'
-    let section: string = 'legacy' // Default to legacy for backwards compatibility
-    let orgId: string | null = null
-    let directView: string | null = null // For direct view access without dashboard
-    let dateColumn: string | null = null // For direct view date filtering
+    let limit: number = 1000
 
     if (req.method === 'POST') {
-      try {
-        const body = await req.json()
-        dashboardId = body.dashboard_id
-        start = body.start
-        end = body.end
-        limit = body.limit || '1000'
-        section = body.section || 'legacy'
-        orgId = body.orgId || body.org_id || null
-        directView = body.view || null
-        dateColumn = body.date_column || null
-      } catch (e) {
-        console.error('Failed to parse request body:', e)
-        return new Response(JSON.stringify({ error: 'Corpo da requisição inválido' }), {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      }
+      const body = await req.json()
+      dashboardId = body.dashboard_id
+      start = body.start
+      end = body.end
+      limit = parseInt(body.limit) || 1000
     } else {
       const url = new URL(req.url)
       dashboardId = url.searchParams.get('dashboard_id')
       start = url.searchParams.get('start')
       end = url.searchParams.get('end')
-      limit = url.searchParams.get('limit') || '1000'
-      section = url.searchParams.get('section') || 'legacy'
-      orgId = url.searchParams.get('org_id')
-      directView = url.searchParams.get('view')
-      dateColumn = url.searchParams.get('date_column')
+      limit = parseInt(url.searchParams.get('limit') || '1000')
     }
 
-    // Support direct view access (without dashboard_id) - uses user's tenant context
-    if (!dashboardId && directView) {
-      console.log(`Direct view access: ${directView}, period: ${start} to ${end}, org_id: ${orgId}`)
-      
-      const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-      const adminClient = createClient(supabaseUrl, supabaseServiceKey)
-      
-      // Get user's tenant and data source
-      const { data: profile } = await adminClient
-        .from('profiles')
-        .select('tenant_id')
-        .eq('id', userId)
-        .maybeSingle()
-      
-      if (!profile?.tenant_id) {
-        return new Response(JSON.stringify({ error: 'Usuário sem tenant associado' }), {
-          status: 403,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      }
-      
-      // Find data source that has this view in allowed_views
-      let dataSource = null
-      
-      // First, try to find a data source that explicitly allows this view
-      const { data: matchingDataSource } = await adminClient
-        .from('tenant_data_sources')
-        .select('*')
-        .eq('is_active', true)
-        .contains('allowed_views', [directView])
-        .limit(1)
-        .maybeSingle()
-      
-      if (matchingDataSource) {
-        dataSource = matchingDataSource
-        console.log(`Using data source with matching view: ${matchingDataSource.name}`)
-      } else {
-        // Fallback: get the tenant's data source
-        const { data: tenantDataSource } = await adminClient
-          .from('tenant_data_sources')
-          .select('*')
-          .eq('tenant_id', profile.tenant_id)
-          .eq('is_active', true)
-          .maybeSingle()
-        
-        if (tenantDataSource) {
-          dataSource = tenantDataSource
-          console.log(`Using tenant data source: ${tenantDataSource.name}`)
-        } else {
-          // Get any active data source
-          const { data: anyDataSource } = await adminClient
-            .from('tenant_data_sources')
-            .select('*')
-            .eq('is_active', true)
-            .limit(1)
-            .maybeSingle()
-          
-          dataSource = anyDataSource
-          if (anyDataSource) {
-            console.log(`Using fallback data source: ${anyDataSource.name}`)
-          }
-        }
-      }
-      
-      if (!dataSource) {
-        console.error('No active data source found')
-        return new Response(JSON.stringify({ error: 'Nenhum data source ativo encontrado' }), {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      }
-      
-      // Get credentials
-      const remoteUrl = dataSource.project_url
-      let remoteKey: string | null = null
-
-      if (dataSource.anon_key_encrypted) {
-        try {
-          remoteKey = await decrypt(dataSource.anon_key_encrypted)
-          console.log('Successfully decrypted anon_key for direct view')
-        } catch (e) {
-          console.error('Failed to decrypt anon_key:', e)
-        }
-      }
-
-      if (!remoteKey && dataSource.service_role_key_encrypted) {
-        try {
-          remoteKey = await decrypt(dataSource.service_role_key_encrypted)
-          console.log('Successfully decrypted service_role_key for direct view')
-        } catch (e) {
-          console.error('Failed to decrypt service_role_key:', e)
-        }
-      }
-
-      // Fallback to Afonsina env keys
-      if (!remoteKey) {
-        const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
-        const afonsinaServiceKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY')
-        const afonsinaAnonKey = Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
-        
-        if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
-          remoteKey = afonsinaAnonKey || afonsinaServiceKey || null
-          console.log('Using Afonsina fallback keys for direct view')
-        }
-      }
-
-      if (!remoteKey) {
-        return new Response(JSON.stringify({ 
-          error: 'Credenciais do data source não configuradas',
-          error_type: 'config'
-        }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      }
-      
-      // Fetch the view directly - only filter by date if date_column was provided
-      const result = await fetchFromView(
-        remoteUrl,
-        remoteKey,
-        directView,
-        null, // Don't filter by org_id - view is already tenant-scoped
-        dateColumn ? start : null,  // Only filter by date if column is specified
-        dateColumn ? end : null,
-        limit,
-        dateColumn,
-        !!dateColumn
-      )
-      
-      if (result.error) {
-        return new Response(JSON.stringify({ error: result.error }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      }
-      
+    if (!dashboardId) {
       return new Response(JSON.stringify({ 
-        data: result.data,
-        view: directView,
-        tenant_id: profile.tenant_id,
-        rows_returned: result.data.length
+        ok: false,
+        error: { code: 'MISSING_PARAM', message: 'dashboard_id é obrigatório' },
+        trace_id: traceId
       }), {
+        status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    if (!dashboardId) {
-      return new Response(JSON.stringify({ error: 'dashboard_id ou view é obrigatório' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      }
-    )
-    }
+    console.log(`[${traceId}] Dashboard ${dashboardId}, period: ${start} to ${end}`)
 
-    console.log(`Fetching dashboard ${dashboardId}, section: ${section}, period: ${start} to ${end}, org_id: ${orgId}`)
-
-    // Use service role client for admin operations
+    // Use service role for admin queries
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
 
+    // 1. Fetch dashboard with its data source
     const { data: dashboard, error: dashboardError } = await adminClient
       .from('dashboards')
       .select('*, tenant_data_sources(*)')
@@ -500,38 +328,57 @@ Deno.serve(async (req) => {
       .maybeSingle()
 
     if (dashboardError || !dashboard) {
-      console.error('Dashboard error:', dashboardError)
-      return new Response(JSON.stringify({ error: 'Dashboard não encontrado' }), {
+      return new Response(JSON.stringify({ 
+        ok: false,
+        error: { code: 'DASHBOARD_NOT_FOUND', message: 'Dashboard não encontrado' },
+        trace_id: traceId
+      }), {
         status: 404,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    // Check user access
+    // 2. Verify user has access to this dashboard's tenant
     const { data: profile } = await adminClient
       .from('profiles')
       .select('tenant_id')
       .eq('id', userId)
       .maybeSingle()
 
-    if (!profile || profile.tenant_id !== dashboard.tenant_id) {
-      const { data: role } = await adminClient
-        .from('user_roles')
-        .select('role')
-        .eq('user_id', userId)
-        .eq('role', 'admin')
-        .maybeSingle()
+    const isAdmin = await adminClient
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', userId)
+      .eq('role', 'admin')
+      .maybeSingle()
 
-      if (!role) {
-        return new Response(JSON.stringify({ error: 'Acesso negado' }), {
-          status: 403,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      }
+    if (!isAdmin?.data && profile?.tenant_id !== dashboard.tenant_id) {
+      return new Response(JSON.stringify({ 
+        ok: false,
+        error: { code: 'ACCESS_DENIED', message: 'Sem permissão para acessar este dashboard' },
+        trace_id: traceId
+      }), {
+        status: 403,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
     }
 
-    if (dashboard.source_kind !== 'supabase_view') {
-      return new Response(JSON.stringify({ error: 'Este dashboard não é do tipo supabase_view' }), {
+    // 3. Validate data source binding
+    if (!dashboard.data_source_id) {
+      return new Response(JSON.stringify({ 
+        ok: false,
+        error: { 
+          code: 'NO_DATASOURCE', 
+          message: 'Dashboard não possui data source vinculado',
+          fix: 'Configure o data_source_id no dashboard'
+        },
+        binding: {
+          dashboard_id: dashboardId,
+          dashboard_name: dashboard.name,
+          data_source_id: null
+        },
+        trace_id: traceId
+      }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
@@ -539,238 +386,198 @@ Deno.serve(async (req) => {
 
     const dataSource = dashboard.tenant_data_sources
     if (!dataSource || !dataSource.is_active) {
-      return new Response(JSON.stringify({ error: 'Data source não encontrado ou inativo' }), {
+      return new Response(JSON.stringify({ 
+        ok: false,
+        error: { 
+          code: 'DATASOURCE_INACTIVE', 
+          message: 'Data source não encontrado ou inativo' 
+        },
+        binding: {
+          dashboard_id: dashboardId,
+          data_source_id: dashboard.data_source_id
+        },
+        trace_id: traceId
+      }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    // Check cache
-    const cacheKey = getCacheKey(dashboardId, section, start || '', end || '')
-    const cachedData = getFromCache(cacheKey)
-    if (cachedData) {
-      console.log('Returning cached data for', cacheKey)
-      return new Response(JSON.stringify({ ...cachedData, cached: true }), {
+    // 4. Get view_name from dashboard - this is the relation to query
+    const viewName = dashboard.view_name
+    if (!viewName) {
+      return new Response(JSON.stringify({ 
+        ok: false,
+        error: { 
+          code: 'NO_VIEW_NAME', 
+          message: 'Dashboard não possui view_name configurado',
+          fix: 'Configure o view_name no dashboard'
+        },
+        binding: {
+          dashboard_id: dashboardId,
+          dashboard_name: dashboard.name,
+          data_source_id: dashboard.data_source_id,
+          data_source_name: dataSource.name,
+          view_name: null
+        },
+        trace_id: traceId
+      }), {
+        status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    // Get credentials
-    const remoteUrl = dataSource.project_url
-    let remoteKey: string | null = null
-
-    if (dataSource.anon_key_encrypted) {
-      try {
-        remoteKey = await decrypt(dataSource.anon_key_encrypted)
-        console.log('Successfully decrypted anon_key')
-      } catch (e) {
-        console.error('Failed to decrypt anon_key:', e)
-      }
+    // 5. Validate view is in allowed_views
+    const allowedViews = dataSource.allowed_views || []
+    if (!allowedViews.includes(viewName)) {
+      return new Response(JSON.stringify({ 
+        ok: false,
+        error: { 
+          code: 'VIEW_NOT_ALLOWED', 
+          message: `A view '${viewName}' não está na lista de views permitidas do data source '${dataSource.name}'`,
+          fix: `Adicione '${viewName}' em allowed_views do data source ou corrija o view_name do dashboard`
+        },
+        binding: {
+          dashboard_id: dashboardId,
+          dashboard_name: dashboard.name,
+          view_name: viewName,
+          data_source_id: dataSource.id,
+          data_source_name: dataSource.name,
+          allowed_views: allowedViews
+        },
+        trace_id: traceId
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
     }
 
-    if (!remoteKey && dataSource.service_role_key_encrypted) {
-      try {
-        remoteKey = await decrypt(dataSource.service_role_key_encrypted)
-        console.log('Successfully decrypted service_role_key')
-      } catch (e) {
-        console.error('Failed to decrypt service_role_key:', e)
-      }
-    }
-
-    // Fallback to Afonsina env keys
-    if (!remoteKey) {
-      const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
-      const afonsinaServiceKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY')
-      const afonsinaAnonKey = Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
-      
-      if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
-        remoteKey = afonsinaAnonKey || afonsinaServiceKey || null
-        console.log('Using Afonsina fallback keys')
-      }
-    }
-
+    // 6. Get data source credentials
+    const remoteKey = await getDataSourceKey(dataSource)
     if (!remoteKey) {
       return new Response(JSON.stringify({ 
-        error: 'Credenciais do data source não configuradas',
-        error_type: 'config'
+        ok: false,
+        error: { 
+          code: 'NO_CREDENTIALS', 
+          message: 'Credenciais do data source não configuradas' 
+        },
+        binding: {
+          data_source_id: dataSource.id,
+          data_source_name: dataSource.name
+        },
+        trace_id: traceId
       }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    // Helper to check if view is allowed
-    const allowedViews = dataSource.allowed_views || []
-    const isAllowed = (view: string) => allowedViews.includes(view)
-
-    // For backwards compatibility: if section is 'legacy' or not specified, 
-    // use the dashboard's view_name directly
-    if (section === 'legacy' || !section) {
-      const viewName = dashboard.view_name
-      if (!viewName) {
-        return new Response(JSON.stringify({ error: 'Dashboard não tem view_name configurado' }), {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      }
-
-      if (!isAllowed(viewName)) {
-        return new Response(JSON.stringify({ error: 'View não permitida' }), {
-          status: 403,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
-      }
-
-      // Extract time column from dashboard_spec
-      let timeColumn = 'dia' // default fallback
-      const spec = dashboard.dashboard_spec as Record<string, any> | null
-      if (spec?.time?.column) {
-        timeColumn = spec.time.column
-      } else if (spec?.columns) {
-        // Find column with semantic_type 'date' or type containing 'date'
-        const dateCol = (spec.columns as any[]).find((c: any) => 
-          c.semantic_type === 'date' || 
-          c.type?.includes('date') ||
-          c.role_hint === 'time' ||
-          c.name?.toLowerCase().includes('created') ||
-          c.name?.toLowerCase().includes('date') ||
-          c.name?.toLowerCase().includes('dia')
-        )
-        if (dateCol) {
-          timeColumn = dateCol.name
-        }
-      }
-
-      console.log('Using legacy mode with view:', viewName, 'time_column:', timeColumn, 'datasource:', dataSource.name, 'project_url:', remoteUrl)
-      
-      const { data, error } = await fetchFromView(
-        remoteUrl, 
-        remoteKey, 
-        viewName, 
-        orgId, 
-        start, 
-        end, 
-        limit,
-        timeColumn,
-        true
+    // 7. Extract time column from dashboard_spec or use null
+    let timeColumn: string | null = null
+    const spec = dashboard.dashboard_spec as Record<string, any> | null
+    if (spec?.time?.column) {
+      timeColumn = spec.time.column
+    } else if (spec?.columns) {
+      const dateCol = (spec.columns as any[]).find((c: any) => 
+        c.semantic_type === 'date' || 
+        c.role_hint === 'time' ||
+        c.name?.toLowerCase().includes('created') ||
+        c.name?.toLowerCase().includes('date') ||
+        c.name?.toLowerCase().includes('dia')
       )
-
-      if (error) {
-        console.error('Legacy view error:', error)
-        return new Response(JSON.stringify({ 
-          error: `Falha ao buscar dados: ${error}`,
-          error_type: 'fetch_error',
-          debug: {
-            view: viewName,
-            time_column: timeColumn,
-            datasource: dataSource.name,
-            project_url: remoteUrl,
-            start,
-            end
-          }
-        }), {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        })
+      if (dateCol) {
+        timeColumn = dateCol.name
       }
+    }
 
-      // Cache the result
-      const ttl = dashboard.cache_ttl_seconds || 300
-      const resultData = { 
-        data, 
-        rows_returned: data.length,
-        debug: {
-          view: viewName,
-          time_column: timeColumn,
-          datasource_name: dataSource.name,
-          project_ref: dataSource.project_ref,
-          period: { start, end }
-        }
-      }
-      setCache(cacheKey, resultData, ttl)
-
-      return new Response(JSON.stringify({ ...resultData, cached: false }), {
+    // 8. Check cache
+    const cacheKey = getCacheKey(dashboardId, start || '', end || '')
+    const cachedData = getFromCache(cacheKey)
+    if (cachedData) {
+      console.log(`[${traceId}] Returning cached data`)
+      return new Response(JSON.stringify({ 
+        ok: true,
+        ...cachedData, 
+        cached: true,
+        trace_id: traceId
+      }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    // Handle section-based fetching for new views
-    const result: Record<string, any> = {}
-    const errors: string[] = []
+    // 9. Fetch data from external database - NO FALLBACKS, exact binding only
+    console.log(`[${traceId}] Querying ${dataSource.name} (${dataSource.project_ref}): public.${viewName}`)
+    
+    const result = await fetchFromExternalView(
+      dataSource.project_url,
+      remoteKey,
+      'public', // Schema is always public for PostgREST
+      viewName,
+      timeColumn,
+      start,
+      end,
+      limit
+    )
 
-    // Fetch views based on section
-    const sectionConfig = VIEW_CONFIG[section]
-    if (sectionConfig) {
-      for (const [key, viewConfig] of Object.entries(sectionConfig.views)) {
-        if (isAllowed(viewConfig.name)) {
-          const { data, error } = await fetchFromView(
-            remoteUrl,
-            remoteKey,
-            viewConfig.name,
-            orgId,
-            start,
-            end,
-            limit,
-            viewConfig.dateColumn || null,
-            viewConfig.hasDateFilter || false,
-            viewConfig.orderBy || null
-          )
-          result[key] = data
-          if (error) errors.push(error)
-        }
-      }
+    if (result.error) {
+      return new Response(JSON.stringify({ 
+        ok: false,
+        error: { 
+          code: 'FETCH_ERROR', 
+          message: result.error 
+        },
+        binding: {
+          dashboard_id: dashboardId,
+          dashboard_name: dashboard.name,
+          view_name: viewName,
+          time_column: timeColumn,
+          data_source_id: dataSource.id,
+          data_source_name: dataSource.name,
+          project_ref: dataSource.project_ref
+        },
+        debug: result.debug,
+        trace_id: traceId
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
     }
 
-    // If section is 'all', fetch from multiple sections
-    if (section === 'all') {
-      for (const [sectionName, sectionConf] of Object.entries(VIEW_CONFIG)) {
-        if (sectionName === 'legacy') continue // Skip legacy in 'all' mode
-        
-        for (const [key, viewConfig] of Object.entries(sectionConf.views)) {
-          if (isAllowed(viewConfig.name)) {
-            const resultKey = sectionName === 'executive' ? key : `${sectionName}_${key}`
-            const { data, error } = await fetchFromView(
-              remoteUrl,
-              remoteKey,
-              viewConfig.name,
-              orgId,
-              start,
-              end,
-              limit,
-              viewConfig.dateColumn || null,
-              viewConfig.hasDateFilter || false,
-              viewConfig.orderBy || null
-            )
-            result[resultKey] = data
-            // For backwards compatibility, set 'data' from daily view
-            if (key === 'daily' && sectionName === 'executive') {
-              result.data = data
-            }
-            if (error) errors.push(error)
-          }
-        }
-      }
-    }
-
-    // Cache the result
+    // 10. Cache and return
     const ttl = dashboard.cache_ttl_seconds || 300
-    setCache(cacheKey, result, ttl)
-
-    // Log any errors but still return data
-    if (errors.length > 0) {
-      console.warn('Some views had errors:', errors)
+    const responseData = {
+      data: result.data,
+      rows_returned: result.data.length,
+      binding: {
+        dashboard_id: dashboardId,
+        view_name: viewName,
+        time_column: timeColumn,
+        data_source_name: dataSource.name,
+        project_ref: dataSource.project_ref,
+        period: { start, end }
+      }
     }
+    setCache(cacheKey, responseData, ttl)
 
-    return new Response(JSON.stringify({ ...result, cached: false, errors: errors.length > 0 ? errors : undefined }), {
+    return new Response(JSON.stringify({ 
+      ok: true,
+      ...responseData, 
+      cached: false,
+      trace_id: traceId
+    }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
 
   } catch (error) {
-    console.error('Error in dashboard-data:', error)
+    console.error(`[${traceId}] Internal error:`, error)
     return new Response(JSON.stringify({ 
-      error: 'Erro interno', 
-      details: String(error),
-      error_type: 'internal'
+      ok: false,
+      error: { 
+        code: 'INTERNAL_ERROR', 
+        message: 'Erro interno no servidor',
+        details: String(error)
+      },
+      trace_id: traceId
     }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }

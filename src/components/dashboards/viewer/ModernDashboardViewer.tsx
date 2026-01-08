@@ -180,7 +180,15 @@ export default function ModernDashboardViewer({
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
-  const [error, setError] = useState<{ message: string; type?: string; details?: string; debug?: any } | null>(null);
+  const [error, setError] = useState<{ 
+    message: string; 
+    code?: string;
+    type?: string; 
+    details?: string; 
+    debug?: any;
+    binding?: any;
+    trace_id?: string;
+  } | null>(null);
   const [copied, setCopied] = useState(false);
   const [comparisonEnabled, setComparisonEnabled] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange>(getInitialDateRange);
@@ -390,7 +398,27 @@ export default function ModernDashboardViewer({
         };
       }
 
-      if (result?.error) {
+      // Handle new API response format
+      if (!result?.ok && result?.error) {
+        const errObj = result.error;
+        if (errObj.code === 'UNAUTHORIZED' || errObj.code === 'AUTH_FAILED' || errObj.code === 'ACCESS_DENIED') {
+          setSessionExpired(true);
+          return;
+        }
+        
+        throw {
+          message: errObj.message || 'Erro ao carregar dados',
+          code: errObj.code,
+          type: errObj.code,
+          details: errObj.details || errObj.fix,
+          binding: result.binding,
+          debug: result.debug,
+          trace_id: result.trace_id,
+        };
+      }
+      
+      // Legacy error format support
+      if (result?.error && typeof result.error === 'string') {
         if (result.error.includes('autenticado') || result.error.includes('autorizado')) {
           setSessionExpired(true);
           return;
@@ -400,6 +428,9 @@ export default function ModernDashboardViewer({
           message: result.error,
           type: result.error_type || 'generic',
           details: result.details,
+          binding: result.binding,
+          debug: result.debug,
+          trace_id: result.trace_id,
         };
       }
 
@@ -434,8 +465,12 @@ export default function ModernDashboardViewer({
       console.error('Erro ao buscar dados:', err);
       setError({
         message: err.message || 'Erro ao carregar dados',
+        code: err.code,
         type: err.type,
         details: err.details,
+        binding: err.binding,
+        debug: err.debug,
+        trace_id: err.trace_id,
       });
     } finally {
       setIsLoading(false);
@@ -598,30 +633,104 @@ export default function ModernDashboardViewer({
     );
   }
 
-  // Error state
+  // Error state with binding info
   if (error) {
+    const errorTitle = error.code === 'VIEW_NOT_FOUND' ? 'View não encontrada' :
+                       error.code === 'NO_DATASOURCE' ? 'Data Source não configurado' :
+                       error.code === 'NO_VIEW_NAME' ? 'View não configurada' :
+                       error.code === 'VIEW_NOT_ALLOWED' ? 'View não permitida' :
+                       error.code === 'FETCH_ERROR' ? 'Erro ao buscar dados' :
+                       error.type === 'timeout' ? 'Tempo esgotado' : 
+                       error.type === 'network' ? 'Erro de rede' :
+                       'Falha ao obter dados';
+    
     return (
       <Card>
-        <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+        <CardContent className="flex flex-col items-center justify-center py-12 text-center">
           <div className="rounded-full bg-destructive/10 p-4 mb-4">
             <RefreshCw className="h-8 w-8 text-destructive" />
           </div>
-          <h3 className="text-lg font-medium mb-1">
-            {error.type === 'timeout' ? 'Tempo esgotado' : 
-             error.type === 'network' ? 'Erro de rede' :
-             error.type === 'proxy_error' ? 'Erro do proxy' :
-             'Falha ao obter dados'}
-          </h3>
+          <h3 className="text-lg font-medium mb-1">{errorTitle}</h3>
           <p className="text-muted-foreground text-sm max-w-md mb-2">{error.message}</p>
           {error.details && (
             <p className="text-xs text-muted-foreground bg-muted px-3 py-1 rounded mb-4 max-w-md">
               {error.details}
             </p>
           )}
-          <Button onClick={() => fetchData(comparisonEnabled)} variant="outline">
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Tentar novamente
-          </Button>
+          
+          {/* Binding info for admins/managers */}
+          {isAdminOrManager && error.binding && (
+            <div className="w-full max-w-lg mb-4 text-left">
+              <details className="bg-muted/50 rounded-lg p-3">
+                <summary className="text-sm font-medium cursor-pointer flex items-center gap-2">
+                  <Bug className="h-4 w-4" />
+                  Detalhes do binding (admin)
+                </summary>
+                <div className="mt-3 space-y-2 text-xs font-mono">
+                  {error.binding.dashboard_id && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">dashboard_id:</span>
+                      <span>{error.binding.dashboard_id}</span>
+                    </div>
+                  )}
+                  {error.binding.dashboard_name && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">dashboard_name:</span>
+                      <span>{error.binding.dashboard_name}</span>
+                    </div>
+                  )}
+                  {error.binding.view_name && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">view_name:</span>
+                      <span className="text-destructive">{error.binding.view_name}</span>
+                    </div>
+                  )}
+                  {error.binding.data_source_id && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">data_source_id:</span>
+                      <span>{error.binding.data_source_id}</span>
+                    </div>
+                  )}
+                  {error.binding.data_source_name && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">data_source_name:</span>
+                      <span>{error.binding.data_source_name}</span>
+                    </div>
+                  )}
+                  {error.binding.project_ref && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">project_ref:</span>
+                      <span>{error.binding.project_ref}</span>
+                    </div>
+                  )}
+                  {error.binding.allowed_views && (
+                    <div className="flex flex-col gap-1">
+                      <span className="text-muted-foreground">allowed_views:</span>
+                      <span className="text-green-600">{error.binding.allowed_views.join(', ')}</span>
+                    </div>
+                  )}
+                  {error.trace_id && (
+                    <div className="flex justify-between pt-2 border-t">
+                      <span className="text-muted-foreground">trace_id:</span>
+                      <span>{error.trace_id}</span>
+                    </div>
+                  )}
+                </div>
+              </details>
+            </div>
+          )}
+          
+          <div className="flex gap-2">
+            <Button onClick={() => fetchData(comparisonEnabled)} variant="outline">
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Tentar novamente
+            </Button>
+            {isAdminOrManager && (
+              <Button variant="ghost" onClick={() => navigate('/admin/dashboards')}>
+                Configurar Dashboard
+              </Button>
+            )}
+          </div>
         </CardContent>
       </Card>
     );
