@@ -219,7 +219,24 @@ async function fetchFromView(
     if (!response.ok) {
       const errorText = await response.text()
       console.error(`View ${viewName} error:`, response.status, errorText)
-      return { data: [], error: `${viewName}: ${response.status}` }
+      
+      // Parse PostgREST error for better messaging
+      let errorMessage = `${viewName}: ${response.status}`
+      try {
+        const errorJson = JSON.parse(errorText)
+        if (errorJson.code === 'PGRST205') {
+          errorMessage = `View/tabela '${viewName}' não existe no banco externo`
+          if (errorJson.hint) {
+            errorMessage += `. ${errorJson.hint}`
+          }
+        } else if (errorJson.message) {
+          errorMessage = errorJson.message
+        }
+      } catch (e) {
+        // Keep original error message
+      }
+      
+      return { data: [], error: errorMessage }
     }
 
     const data = await response.json()
