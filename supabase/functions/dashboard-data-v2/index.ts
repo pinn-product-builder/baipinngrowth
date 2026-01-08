@@ -474,9 +474,9 @@ Deno.serve(async (req) => {
     let dataDateRange = { min: null as string | null, max: null as string | null }
     if (plan.time_column && rawRows.length > 0) {
       const dates = rawRows
-        .map(r => parseDate(r[plan.time_column!]))
-        .filter((d): d is Date => d !== null)
-        .sort((a, b) => a.getTime() - b.getTime())
+        .map((r: Record<string, unknown>) => parseDate(r[plan.time_column!]))
+        .filter((d: Date | null): d is Date => d !== null)
+        .sort((a: Date, b: Date) => a.getTime() - b.getTime())
       
       if (dates.length > 0) {
         dataDateRange.min = formatDateKey(dates[0])

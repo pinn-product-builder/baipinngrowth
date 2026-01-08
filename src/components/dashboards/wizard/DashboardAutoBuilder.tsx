@@ -108,6 +108,68 @@ Regras:
 
 Saída obrigatória: um JSON válido no schema DashboardSpec v1 contendo time, kpis, charts, tabs, table.`;
 
+// Convert DashboardPlan to DashboardSpec format
+function convertPlanToSpec(plan: any, semanticModel: any): any {
+  const spec: any = {
+    version: 1,
+    time: plan.time_column ? { column: plan.time_column } : null,
+    kpis: [],
+    charts: [],
+    funnel: null,
+    tabs: plan.tabs || ['Executivo', 'Tendências', 'Detalhes'],
+    table: { columns: [] },
+    labels: plan.labels || {},
+    formatting: plan.formatting || {}
+  };
+
+  // Convert KPI tiles
+  if (plan.tiles) {
+    plan.tiles.forEach((tile: any) => {
+      if (tile.type === 'kpi') {
+        spec.kpis.push({
+          key: tile.metric,
+          label: tile.label || tile.metric,
+          format: tile.format || 'number',
+          aggregation: tile.aggregation || 'count'
+        });
+      } else if (tile.type === 'funnel') {
+        spec.funnel = {
+          stages: tile.stages || [],
+          id_column: semanticModel.id_column || 'lead_id'
+        };
+      } else if (tile.type === 'line' || tile.type === 'bar') {
+        spec.charts.push({
+          type: tile.type,
+          metric: tile.metric,
+          groupBy: tile.groupBy || plan.time_column,
+          label: tile.label || tile.metric
+        });
+      } else if (tile.type === 'ranking') {
+        spec.charts.push({
+          type: 'bar',
+          metric: tile.metric,
+          groupBy: tile.dimension,
+          label: tile.label || `Top ${tile.dimension}`,
+          limit: tile.limit || 10
+        });
+      }
+    });
+  }
+
+  // Build table columns from semantic model
+  if (semanticModel?.columns) {
+    spec.table.columns = semanticModel.columns
+      .filter((c: any) => !c.is_hidden)
+      .map((c: any) => ({
+        key: c.name,
+        label: c.display_label || c.name,
+        format: c.format || 'text'
+      }));
+  }
+
+  return spec;
+}
+
 export default function DashboardAutoBuilder({
   open,
   onOpenChange,
@@ -238,11 +300,11 @@ export default function DashboardAutoBuilder({
 
     const dataset = datasets.find(d => d.id === selectedDatasetId);
     
-    // Initialize progress steps
+    // Initialize progress steps - new semantic pipeline
     setProgressSteps([
       { id: 'columns', label: 'Lendo colunas...', status: 'pending' },
-      { id: 'sample', label: 'Amostrando dados...', status: 'pending' },
-      { id: 'generate', label: 'Gerando spec...', status: 'pending' },
+      { id: 'semantic', label: 'Construindo modelo semântico...', status: 'pending' },
+      { id: 'plan', label: 'Gerando plano de dashboard...', status: 'pending' },
       { id: 'validate', label: 'Validando...', status: 'pending' },
     ]);
 
@@ -265,93 +327,106 @@ export default function DashboardAutoBuilder({
       }
       updateProgress('columns', 'done');
 
-      // Step 2: Get dataset profile
-      updateProgress('sample', 'running');
+      // Step 2: Build Semantic Model (new pipeline)
+      updateProgress('semantic', 'running');
       
-      const { data: profileResult, error: profileError } = await supabase.functions.invoke(
-        'dataset-profile',
-        { body: { dataset_id: selectedDatasetId, sample_limit: 200 } }
+      const { data: semanticResult, error: semanticError } = await supabase.functions.invoke(
+        'build-semantic-model',
+        { body: { dataset_id: selectedDatasetId } }
       );
 
-      if (profileError) {
-        console.error('Profile error:', profileError);
-        // Continue without profile - fallback will handle it
+      if (semanticError) {
+        console.error('Semantic model error:', semanticError);
+        throw new Error('Erro ao construir modelo semântico');
       }
       
-      // Store profile for mapping step
-      setDatasetProfile(profileResult);
-      
-      // Pre-populate mapping from profile
-      if (profileResult?.detected_candidates) {
-        const candidates = profileResult.detected_candidates;
-        setDatasetMapping(prev => ({
-          ...prev,
-          time_column: candidates.time_columns?.[0]?.name || null,
-          funnel_stages: candidates.funnel_stages?.map((f: any) => f.name) || [],
-          dimension_columns: candidates.dimension_columns || [],
-          id_column: profileResult.columns?.find((c: any) => 
-            c.name?.toLowerCase().includes('lead_id') || 
-            c.name?.toLowerCase().includes('id')
-          )?.name || null
-        }));
+      if (!semanticResult?.ok) {
+        throw new Error(semanticResult?.error || 'Erro no modelo semântico');
       }
       
-      updateProgress('sample', 'done');
-
-      // Step 3: Generate spec with LLM
-      updateProgress('generate', 'running');
+      const semanticModel = semanticResult.semantic_model;
+      setDatasetProfile(semanticResult); // Store for mapping step
       
-      // Combine prompts
-      const fullPrompt = specificRequirements.trim() 
-        ? `${dashboardPrompt}\n\nRequisitos específicos do usuário: ${specificRequirements}`
-        : dashboardPrompt;
+      // Pre-populate mapping from semantic model
+      setDatasetMapping(prev => ({
+        ...prev,
+        time_column: semanticModel.time_column || null,
+        funnel_stages: semanticModel.columns
+          .filter((c: any) => c.semantic_role === 'stage_flag')
+          .map((c: any) => c.name),
+        dimension_columns: semanticModel.columns
+          .filter((c: any) => c.semantic_role === 'dimension')
+          .map((c: any) => c.name),
+        id_column: semanticModel.id_column || null
+      }));
+      
+      updateProgress('semantic', 'done');
 
-      const { data: result, error } = await supabase.functions.invoke(
-        'generate-dashboard-spec',
+      // Step 3: Generate Dashboard Plan (new pipeline)
+      updateProgress('plan', 'running');
+      
+      // Combine prompts for custom requirements
+      const userIntent = specificRequirements.trim() || 'Dashboard executivo com visão de funil e tendências';
+
+      const { data: planResult, error: planError } = await supabase.functions.invoke(
+        'generate-dashboard-plan',
         { 
           body: { 
-            dataset_id: selectedDatasetId, 
-            use_ai: true,
-            user_prompt: fullPrompt,
-            dataset_profile: profileResult || null,
-            dataset_mapping: datasetMapping
+            dataset_id: selectedDatasetId,
+            semantic_model: semanticModel,
+            user_intent: userIntent,
+            use_llm: true
           } 
         }
       );
 
-      if (error) throw error;
+      if (planError) throw planError;
       
-      if (!result?.ok) {
-        throw new Error(result?.error?.message || 'Erro ao gerar spec');
+      if (!planResult?.ok) {
+        throw new Error(planResult?.error || 'Erro ao gerar plano de dashboard');
       }
-      updateProgress('generate', 'done');
+      
+      // Convert dashboard plan to spec format
+      const dashboardPlan = planResult.dashboard_plan;
+      const generatedSpec = convertPlanToSpec(dashboardPlan, semanticModel);
+      
+      updateProgress('plan', 'done');
 
       // Step 4: Validation
       updateProgress('validate', 'running');
       
-      setGeneratedSpec(result.spec);
-      setSpecSource(result.source || 'fallback');
-      setValidation(result.validation || { valid: true, errors: [], warnings: [] });
+      setGeneratedSpec(generatedSpec);
+      setSpecSource(planResult.source || 'heuristic');
+      setValidation({ 
+        valid: true, 
+        errors: [], 
+        warnings: dashboardPlan.warnings || [] 
+      });
       
-      // Build diagnostics from debug info
-      const debug = result.debug || {};
+      // Build diagnostics from semantic model
       const diagInfo: DiagnosticInfo = {
-        columns_detected: debug.columns_detected || [],
-        time_column: debug.time_column || null,
-        time_parseable_rate: debug.time_parseable_rate,
-        funnel_candidates: debug.funnel_candidates || [],
-        warnings: result.validation?.warnings || [],
-        errors: result.validation?.errors || [],
-        assumptions: debug.assumptions || []
+        columns_detected: semanticModel.columns.map((c: any) => ({
+          name: c.name,
+          semantic: c.semantic_role,
+          label: c.display_label || c.name
+        })),
+        time_column: semanticModel.time_column,
+        time_parseable_rate: semanticModel.stats?.time_parse_rate,
+        funnel_candidates: semanticModel.columns
+          .filter((c: any) => c.semantic_role === 'stage_flag')
+          .map((c: any) => c.name),
+        warnings: dashboardPlan.warnings || [],
+        errors: [],
+        assumptions: dashboardPlan.assumptions || []
       };
       setDiagnostics(diagInfo);
 
       updateProgress('validate', 'done');
       
       // Check if mapping step is needed
-      const warningsCount = result.validation?.warnings?.length || 0;
-      const noTimeColumn = !debug.time_column;
-      const funnelStepsRemoved = (result.validation?.warnings || []).some((w: string) => 
+      const warningsCount = dashboardPlan.warnings?.length || 0;
+      const noTimeColumn = !semanticModel.time_column;
+      const funnelStepsRemoved = (dashboardPlan.warnings || []).some((w: string) => 
         w.includes('Etapa de funil removida') || w.includes('Funil removido')
       );
       
@@ -367,8 +442,8 @@ export default function DashboardAutoBuilder({
       } else {
         setStep('preview');
         toast({
-          title: 'Spec gerado!',
-          description: result.source === 'ai' 
+          title: 'Plano gerado!',
+          description: planResult.source === 'llm' 
             ? 'Dashboard gerado com IA' 
             : 'Dashboard gerado automaticamente'
         });

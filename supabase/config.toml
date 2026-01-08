@@ -68,3 +68,15 @@ verify_jwt = false
 
 [functions.dataset-profile]
 verify_jwt = false
+
+[functions.build-semantic-model]
+verify_jwt = false
+
+[functions.generate-dashboard-plan]
+verify_jwt = false
+
+[functions.dashboard-data-v2]
+verify_jwt = false
+
+[functions.dataset-preview]
+verify_jwt = false
