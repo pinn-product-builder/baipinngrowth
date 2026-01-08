@@ -12,8 +12,13 @@ function jsonResponse(data: Record<string, any>, status = 200) {
   })
 }
 
-function errorResponse(code: string, message: string, details?: string) {
-  return jsonResponse({ ok: false, error: { code, message, details } }, 400)
+function errorResponse(code: string, message: string, details?: string, traceId?: string) {
+  return jsonResponse({ 
+    ok: false, 
+    error: { code, message, details },
+    trace_id: traceId,
+    meta: { trace_id: traceId }
+  }, code === 'UNAUTHORIZED' || code === 'AUTH_FAILED' ? 401 : code === 'ACCESS_DENIED' ? 403 : code === 'NOT_FOUND' ? 404 : 400)
 }
 
 function successResponse(data: Record<string, any>) {
@@ -298,7 +303,7 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get('authorization')
     if (!authHeader) {
-      return jsonResponse({ ok: false, error: { code: 'UNAUTHORIZED', message: 'Token de autorização não fornecido' }, trace_id: traceId }, 401)
+      return errorResponse('UNAUTHORIZED', 'Token de autorização não fornecido', undefined, traceId)
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
@@ -312,7 +317,7 @@ Deno.serve(async (req) => {
     // Authenticate
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError || !user) {
-      return jsonResponse({ ok: false, error: { code: 'AUTH_FAILED', message: 'Usuário não autenticado' }, trace_id: traceId }, 401)
+      return errorResponse('AUTH_FAILED', 'Usuário não autenticado', undefined, traceId)
     }
 
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
@@ -324,7 +329,8 @@ Deno.serve(async (req) => {
     console.log(`[${traceId}] dashboard-data-v2: dashboard_id=${dashboard_id}, start=${start}, end=${end}`)
 
     if (!dashboard_id) {
-      return jsonResponse({ ok: false, error: { code: 'MISSING_PARAM', message: 'dashboard_id é obrigatório' }, trace_id: traceId }, 400)
+      console.warn(`[${traceId}] Missing dashboard_id parameter`)
+      return errorResponse('MISSING_PARAM', 'dashboard_id é obrigatório', undefined, traceId)
     }
 
     // Fetch dashboard with its spec and datasource
@@ -345,7 +351,7 @@ Deno.serve(async (req) => {
 
     if (dashError || !dashboard) {
       console.error(`[${traceId}] Dashboard not found:`, dashError)
-      return jsonResponse({ ok: false, error: { code: 'NOT_FOUND', message: 'Dashboard não encontrado' }, trace_id: traceId }, 404)
+      return errorResponse('NOT_FOUND', 'Dashboard não encontrado', dashError?.message, traceId)
     }
 
     // Check tenant access
@@ -364,7 +370,8 @@ Deno.serve(async (req) => {
         .eq('role', 'admin')
       
       if (!roleData || roleData.length === 0) {
-        return jsonResponse({ ok: false, error: { code: 'ACCESS_DENIED', message: 'Acesso negado a este dashboard' }, trace_id: traceId }, 403)
+        console.warn(`[${traceId}] Access denied for user ${user.id} to dashboard ${dashboard_id}`)
+        return errorResponse('ACCESS_DENIED', 'Acesso negado a este dashboard', undefined, traceId)
       }
     }
 
@@ -373,11 +380,13 @@ Deno.serve(async (req) => {
     const objectName = dashboard.view_name
 
     if (!dataSource || !objectName) {
-      return jsonResponse({ 
-        ok: false, 
-        error: { code: 'NO_BINDING', message: 'Dashboard não está vinculado a um view_name/datasource válido' },
-        trace_id: traceId 
-      }, 400)
+      console.error(`[${traceId}] Missing binding: dataSource=${!!dataSource}, objectName=${objectName}`)
+      return errorResponse(
+        'NO_BINDING', 
+        'Dashboard não está vinculado a um view_name/datasource válido',
+        `data_source_id=${dashboard.data_source_id}, view_name=${dashboard.view_name}`,
+        traceId
+      )
     }
 
     // Decrypt API key
@@ -410,7 +419,8 @@ Deno.serve(async (req) => {
     }
 
     if (!apiKey) {
-      return jsonResponse({ ok: false, error: { code: 'NO_CREDENTIALS', message: 'Credenciais do datasource não configuradas' }, trace_id: traceId }, 400)
+      console.error(`[${traceId}] No API key available for datasource`)
+      return errorResponse('NO_CREDENTIALS', 'Credenciais do datasource não configuradas', undefined, traceId)
     }
 
     // Fetch raw data from external datasource
@@ -439,11 +449,21 @@ Deno.serve(async (req) => {
 
     if (!response.ok) {
       const errorText = await response.text()
-      console.error(`[${traceId}] Fetch error:`, response.status, errorText)
+      console.error(`[${traceId}] Fetch error: status=${response.status}, body=${errorText}`)
       return jsonResponse({ 
         ok: false, 
-        error: { code: 'FETCH_ERROR', message: `Erro ao consultar dados: ${response.status}`, details: errorText },
-        trace_id: traceId 
+        error: { 
+          code: 'FETCH_ERROR', 
+          message: `Erro ao consultar dados: ${response.status}`, 
+          details: errorText 
+        },
+        trace_id: traceId,
+        meta: {
+          trace_id: traceId,
+          dashboard_id,
+          dataset_ref: `public.${objectName}`,
+          data_source_id: dataSource.id
+        }
       }, 500)
     }
 
@@ -519,20 +539,28 @@ Deno.serve(async (req) => {
       }
     }
 
-    return successResponse({
+    return jsonResponse({
+      ok: true,
+      trace_id: traceId,
+      
       // Aggregated data (preferred for rendering)
       aggregations,
       
       // Raw data for table view
       rows: rawRows,
       
+      // Warnings (e.g., data quality issues)
+      warnings: [],
+      
       // Metadata
       meta: {
+        dashboard_id,
+        dataset_ref: `public.${objectName}`,
+        range: { start, end },
         rows_fetched: rawRows.length,
         rows_total: totalCount,
         time_column: plan.time_column,
         date_range: dataDateRange,
-        period_requested: { start, end },
         has_spec: Object.keys(spec).length > 0,
         trace_id: traceId
       }
