@@ -598,7 +598,28 @@ Deno.serve(async (req) => {
         })
       }
 
-      console.log('Using legacy mode with view:', viewName)
+      // Extract time column from dashboard_spec
+      let timeColumn = 'dia' // default fallback
+      const spec = dashboard.dashboard_spec as Record<string, any> | null
+      if (spec?.time?.column) {
+        timeColumn = spec.time.column
+      } else if (spec?.columns) {
+        // Find column with semantic_type 'date' or type containing 'date'
+        const dateCol = (spec.columns as any[]).find((c: any) => 
+          c.semantic_type === 'date' || 
+          c.type?.includes('date') ||
+          c.role_hint === 'time' ||
+          c.name?.toLowerCase().includes('created') ||
+          c.name?.toLowerCase().includes('date') ||
+          c.name?.toLowerCase().includes('dia')
+        )
+        if (dateCol) {
+          timeColumn = dateCol.name
+        }
+      }
+
+      console.log('Using legacy mode with view:', viewName, 'time_column:', timeColumn, 'datasource:', dataSource.name, 'project_url:', remoteUrl)
+      
       const { data, error } = await fetchFromView(
         remoteUrl, 
         remoteKey, 
@@ -607,20 +628,45 @@ Deno.serve(async (req) => {
         start, 
         end, 
         limit,
-        'dia',
+        timeColumn,
         true
       )
 
       if (error) {
         console.error('Legacy view error:', error)
+        return new Response(JSON.stringify({ 
+          error: `Falha ao buscar dados: ${error}`,
+          error_type: 'fetch_error',
+          debug: {
+            view: viewName,
+            time_column: timeColumn,
+            datasource: dataSource.name,
+            project_url: remoteUrl,
+            start,
+            end
+          }
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
       }
 
       // Cache the result
       const ttl = dashboard.cache_ttl_seconds || 300
-      const result = { data }
-      setCache(cacheKey, result, ttl)
+      const resultData = { 
+        data, 
+        rows_returned: data.length,
+        debug: {
+          view: viewName,
+          time_column: timeColumn,
+          datasource_name: dataSource.name,
+          project_ref: dataSource.project_ref,
+          period: { start, end }
+        }
+      }
+      setCache(cacheKey, resultData, ttl)
 
-      return new Response(JSON.stringify({ data, cached: false }), {
+      return new Response(JSON.stringify({ ...resultData, cached: false }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
