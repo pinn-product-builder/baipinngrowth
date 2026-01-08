@@ -23,15 +23,15 @@ function successResponse(data: Record<string, any>) {
 }
 
 // =====================================================
-// DASHBOARD PLAN TYPES
+// DASHBOARD PLAN TYPES & JSON SCHEMA
 // =====================================================
 
 interface LayoutTile {
   id: string
   type: 'kpi_row' | 'funnel' | 'chart' | 'ranking' | 'table'
   title?: string
-  columns?: string[]     // For kpi_row: which KPIs to show
-  config?: Record<string, any>  // Type-specific config
+  columns?: string[]
+  config?: Record<string, any>
 }
 
 interface TabLayout {
@@ -45,7 +45,7 @@ interface KPIDefinition {
   aggregation: 'sum' | 'count' | 'count_distinct' | 'avg' | 'truthy_count'
   format: 'currency' | 'percent' | 'integer' | 'float'
   goal_direction: 'higher_better' | 'lower_better'
-  truthy_expression?: string  // For stage flags
+  truthy_expression?: string
 }
 
 interface ChartDefinition {
@@ -65,6 +65,21 @@ interface RankingDefinition {
   limit: number
 }
 
+interface DiagnosticsInfo {
+  time_column?: string
+  time_parse_hints?: string[]
+  dimensions_chosen?: string[]
+  funnel_stages_chosen?: string[]
+  assumptions?: string[]
+  warnings?: string[]
+}
+
+interface QueryPlan {
+  lead_count_expr: string
+  stage_aggregations: Record<string, string>
+  time_grouping_expr?: string
+}
+
 interface DashboardPlan {
   version: number
   title: string
@@ -82,6 +97,110 @@ interface DashboardPlan {
   formatting: Record<string, string>
   confidence: number
   assumptions: string[]
+  diagnostics?: DiagnosticsInfo
+  queryPlan?: QueryPlan
+}
+
+// JSON Schema for validation
+const DASHBOARD_PLAN_SCHEMA = {
+  type: 'object',
+  required: ['version', 'title', 'tabs', 'kpis'],
+  properties: {
+    version: { type: 'number', const: 1 },
+    title: { type: 'string', minLength: 1 },
+    tabs: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        required: ['name', 'tiles'],
+        properties: {
+          name: { type: 'string' },
+          tiles: { type: 'array' }
+        }
+      }
+    },
+    kpis: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['column', 'label', 'aggregation', 'format'],
+        properties: {
+          column: { type: 'string' },
+          label: { type: 'string' },
+          aggregation: { type: 'string', enum: ['sum', 'count', 'count_distinct', 'avg', 'truthy_count'] },
+          format: { type: 'string', enum: ['currency', 'percent', 'integer', 'float'] }
+        }
+      }
+    },
+    charts: { type: 'array' },
+    rankings: { type: 'array' },
+    funnel: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        stages: {
+          type: 'array',
+          minItems: 2,
+          items: {
+            type: 'object',
+            required: ['column', 'label'],
+            properties: {
+              column: { type: 'string' },
+              label: { type: 'string' },
+              expression: { type: 'string' }
+            }
+          }
+        }
+      }
+    },
+    time_column: { type: ['string', 'null'] },
+    id_column: { type: ['string', 'null'] },
+    labels: { type: 'object' },
+    formatting: { type: 'object' },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    assumptions: { type: 'array', items: { type: 'string' } },
+    diagnostics: { type: 'object' },
+    queryPlan: { type: 'object' }
+  }
+}
+
+// Simple schema validation (without external deps)
+function validatePlan(plan: any): { valid: boolean; errors: string[] } {
+  const errors: string[] = []
+  
+  if (!plan || typeof plan !== 'object') {
+    errors.push('Plan must be a valid object')
+    return { valid: false, errors }
+  }
+  
+  if (plan.version !== 1) {
+    errors.push(`Invalid version: expected 1, got ${plan.version}`)
+  }
+  
+  if (!plan.title || typeof plan.title !== 'string') {
+    errors.push('Missing or invalid title')
+  }
+  
+  if (!Array.isArray(plan.tabs) || plan.tabs.length === 0) {
+    errors.push('tabs must be a non-empty array')
+  }
+  
+  if (!Array.isArray(plan.kpis)) {
+    errors.push('kpis must be an array')
+  }
+  
+  // Validate that spec is not completely empty
+  const hasKpis = Array.isArray(plan.kpis) && plan.kpis.length > 0
+  const hasCharts = Array.isArray(plan.charts) && plan.charts.length > 0
+  const hasFunnel = plan.funnel?.stages?.length >= 2
+  const hasRankings = Array.isArray(plan.rankings) && plan.rankings.length > 0
+  
+  if (!hasKpis && !hasCharts && !hasFunnel && !hasRankings) {
+    errors.push('Spec is empty: must have at least one KPI, chart, funnel or ranking')
+  }
+  
+  return { valid: errors.length === 0, errors }
 }
 
 // =====================================================
@@ -316,12 +435,63 @@ function generateHeuristicPlan(semanticModel: any, userPrompt?: string): Dashboa
 }
 
 // =====================================================
-// LLM-BASED PLAN GENERATION (optional enhancement)
+// LLM-BASED PLAN GENERATION (robust prompt)
 // =====================================================
+
+const ROBUST_SYSTEM_PROMPT = `Você é o BAI Dashboard Architect, especialista em BI para CRM + tráfego pago e em modelagem de funil.
+Você gera DashboardSpec v1 (JSON) para um SaaS de dashboards, usando APENAS as colunas fornecidas no semantic_model.
+Seu objetivo é criar um dashboard adaptativo: escolher os melhores KPIs, gráficos e quebras (dimensões) de acordo com os dados.
+
+REGRAS DURAS (NÃO QUEBRAR):
+1. Nunca referencie colunas inexistentes. Faça match case-insensitive.
+2. Se não houver coluna de tempo válida, ainda gere dashboard útil com KPIs agregados + Funil total + Detalhes. NUNCA spec vazio.
+3. Para colunas de funil em text (entrada, qualificado, venda, etc.), trate como boolean truthy:
+   TRUE se valor ∈ {1,true,sim,s,ok,x,yes,y,on}
+   FALSE se valor ∈ {0,false,nao,não,n,no,null,''}
+   KPIs de funil devem usar aggregation: "truthy_count" (NÃO count simples).
+4. KPIs devem ser poucos (máx 8) e focados em decisão.
+5. Gráficos devem ser poucos (máx 4): priorize tendências e visão do funil.
+6. Diferencie dimensões (vendedora, origem, unidade) de métricas (valor_venda, custo).
+
+CLASSIFICAÇÃO DE COLUNAS:
+- time: created_at, data, dia, inserted_at, updated_at (mesmo se text, se parse_rate alto)
+- id: lead_id, ids com alta cardinalidade
+- dimension: campos categóricos (unidade, vendedora, origem, modalidade)
+- stage_flag: etapas do funil (entrada, lead_ativo, qualificado, exp_*, venda, perdida)
+- metric: valores numéricos reais (custo, receita, valor_venda)
+
+ESTRUTURA ESPERADA POR ABA:
+- Decisões: 3-6 bullets com mudanças, gargalos, alertas
+- Executivo: 4-8 KPIs principais + 1 gráfico resumo
+- Funil: 5-7 etapas + taxas de conversão entre etapas
+- Tendências: 1-2 gráficos de linha se tempo existir
+- Detalhes: tabela completa
+
+SAÍDA OBRIGATÓRIA (JSON válido):
+{
+  "version": 1,
+  "title": "string",
+  "tabs": [{ "name": "string", "tiles": [...] }],
+  "kpis": [{ "column": "string", "label": "string", "aggregation": "truthy_count|sum|count|avg", "format": "integer|currency|percent", "goal_direction": "higher_better|lower_better" }],
+  "charts": [{ "id": "string", "type": "line|bar", "title": "string", "x_column": "string", "series": [...] }],
+  "rankings": [{ "id": "string", "dimension_column": "string", "metric_column": "string", "aggregation": "count|sum", "limit": 10 }],
+  "funnel": { "title": "string", "stages": [{ "column": "string", "label": "string", "expression": "truthy" }] },
+  "time_column": "string|null",
+  "id_column": "string|null",
+  "labels": {},
+  "formatting": {},
+  "confidence": 0.0-1.0,
+  "assumptions": ["string"],
+  "diagnostics": { "time_column": "string", "dimensions_chosen": [], "funnel_stages_chosen": [], "assumptions": [], "warnings": [] },
+  "queryPlan": { "lead_count_expr": "count_distinct(lead_id)", "stage_aggregations": {}, "time_grouping_expr": "date(created_at)" }
+}
+
+NÃO inclua explicações, apenas JSON válido.`
 
 async function generateLLMPlan(
   semanticModel: any, 
-  userPrompt: string
+  userPrompt: string,
+  crmMode: boolean = false
 ): Promise<DashboardPlan | null> {
   const apiKey = Deno.env.get('LOVABLE_API_KEY')
   if (!apiKey) {
@@ -330,35 +500,38 @@ async function generateLLMPlan(
   }
 
   try {
-    // Build context for LLM
-    const columnSummary = semanticModel.columns.map((c: any) => 
-      `- ${c.name} (${c.semantic_role}): ${c.display_label}`
+    const columns = semanticModel?.columns || []
+    const columnSummary = columns.map((c: any) => 
+      `- ${c.name} (${c.semantic_role}, ${c.format || 'text'}): ${c.display_label}${c.stats?.distinct_count ? ` [${c.stats.distinct_count} unique]` : ''}`
     ).join('\n')
 
-    const prompt = `Você é um especialista em dashboards de negócios. Dado o modelo semântico abaixo, gere um plano de dashboard otimizado.
+    const funnelInfo = semanticModel.funnel?.detected 
+      ? `Etapas: ${semanticModel.funnel.stages?.map((s: any) => `${s.label} (${s.column})`).join(' → ')}`
+      : 'Funil não detectado automaticamente'
 
-MODELO SEMÂNTICO:
-Dataset: ${semanticModel.dataset_name}
+    const crmHints = crmMode ? `
+MODO CRM ATIVO:
+- Priorizar truthy_count para etapas (não count simples)
+- Priorizar count_distinct(lead_id) para total de leads
+- Priorizar dimensões: unidade, vendedora, origem, modalidade
+- Tratar colunas text com nomes de etapa como stage_flag` : ''
+
+    const userSection = userPrompt ? `\nREQUISITOS DO USUÁRIO:\n${userPrompt}` : ''
+
+    const prompt = `MODELO SEMÂNTICO DO DATASET:
+Dataset: ${semanticModel.dataset_name || 'unknown'}
 Coluna de tempo: ${semanticModel.time_column || 'NENHUMA'}
 Coluna de ID: ${semanticModel.id_column || 'NENHUMA'}
-Funil detectado: ${semanticModel.funnel?.detected ? 'Sim' : 'Não'}
-Etapas do funil: ${semanticModel.funnel?.stages?.map((s: any) => s.label).join(' → ') || 'N/A'}
-Dimensões: ${semanticModel.dimensions.join(', ') || 'Nenhuma'}
-Métricas: ${semanticModel.metrics.join(', ') || 'Nenhuma'}
+Funil: ${funnelInfo}
+Dimensões detectadas: ${(semanticModel.dimensions || []).join(', ') || 'Nenhuma'}
+Métricas detectadas: ${(semanticModel.metrics || []).join(', ') || 'Nenhuma'}
+Confiança geral: ${Math.round((semanticModel.confidence || 0) * 100)}%
 
-COLUNAS:
-${columnSummary}
+COLUNAS DISPONÍVEIS:
+${columnSummary || 'Nenhuma coluna encontrada'}
+${crmHints}${userSection}
 
-OBJETIVO DO USUÁRIO:
-${userPrompt || 'Criar um dashboard executivo com KPIs, funil e tendências'}
-
-Responda APENAS com um JSON válido no formato DashboardPlan. Priorize:
-1. KPIs mais relevantes primeiro
-2. Funil se detectado
-3. Gráficos de tendência se houver coluna de tempo
-4. Rankings por dimensão
-
-NÃO inclua explicações, apenas o JSON.`
+Gere o DashboardPlan v1 JSON completo seguindo as regras do sistema.`
 
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
@@ -369,16 +542,17 @@ NÃO inclua explicações, apenas o JSON.`
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash',
         messages: [
-          { role: 'system', content: 'Você é um gerador de planos de dashboard. Responda apenas com JSON válido.' },
+          { role: 'system', content: ROBUST_SYSTEM_PROMPT },
           { role: 'user', content: prompt }
         ],
-        temperature: 0.3,
-        max_tokens: 4000
+        temperature: 0.2,
+        max_tokens: 6000
       })
     })
 
     if (!response.ok) {
-      console.error('LLM request failed:', response.status)
+      const errorText = await response.text()
+      console.error('LLM request failed:', response.status, errorText)
       return null
     }
 
@@ -390,16 +564,31 @@ NÃO inclua explicações, apenas o JSON.`
       return null
     }
 
-    // Extract JSON from response
-    const jsonMatch = content.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      console.error('No JSON found in LLM response')
-      return null
+    // Extract JSON from response (handle markdown code blocks)
+    let jsonStr = content
+    const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/)
+    if (codeBlockMatch) {
+      jsonStr = codeBlockMatch[1]
+    } else {
+      const jsonMatch = content.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        jsonStr = jsonMatch[0]
+      }
     }
 
-    const plan = JSON.parse(jsonMatch[0]) as DashboardPlan
+    const plan = JSON.parse(jsonStr) as DashboardPlan
+    
+    // Validate the plan
+    const validation = validatePlan(plan)
+    if (!validation.valid) {
+      console.error('LLM plan validation failed:', validation.errors)
+      return null
+    }
+    
     plan.assumptions = plan.assumptions || []
     plan.assumptions.push('Plano gerado via LLM')
+    
+    console.log(`LLM generated plan: ${plan.kpis?.length || 0} KPIs, ${plan.funnel?.stages?.length || 0} funnel stages`)
     
     return plan
   } catch (error) {
@@ -452,7 +641,7 @@ serve(async (req) => {
 
     // Parse request
     const body = await req.json()
-    const { semantic_model, user_prompt, use_llm = false } = body
+    const { semantic_model, user_prompt, use_llm = false, crm_mode = false } = body
 
     if (!semantic_model) {
       return errorResponse('VALIDATION_ERROR', 'semantic_model é obrigatório')
@@ -460,19 +649,35 @@ serve(async (req) => {
 
     // Generate plan
     let plan: DashboardPlan
+    let source: 'llm' | 'heuristic' = 'heuristic'
 
     if (use_llm) {
-      const llmPlan = await generateLLMPlan(semantic_model, user_prompt)
-      plan = llmPlan || generateHeuristicPlan(semantic_model, user_prompt)
+      const llmPlan = await generateLLMPlan(semantic_model, user_prompt, crm_mode)
+      if (llmPlan) {
+        plan = llmPlan
+        source = 'llm'
+      } else {
+        plan = generateHeuristicPlan(semantic_model, user_prompt)
+      }
     } else {
       plan = generateHeuristicPlan(semantic_model, user_prompt)
     }
 
-    console.log(`Generated dashboard plan: ${plan.tabs.length} tabs, ${plan.kpis.length} KPIs, confidence ${Math.round(plan.confidence * 100)}%`)
+    // Final validation to ensure we never return empty spec
+    const validation = validatePlan(plan)
+    if (!validation.valid) {
+      console.warn('Plan validation warnings:', validation.errors)
+      // Add warnings but don't fail - the heuristic should always produce something
+      plan.assumptions = plan.assumptions || []
+      plan.assumptions.push(...validation.errors.map(e => `AVISO: ${e}`))
+    }
+
+    console.log(`Generated dashboard plan: ${plan.tabs?.length || 0} tabs, ${plan.kpis?.length || 0} KPIs, source: ${source}, confidence ${Math.round((plan.confidence || 0) * 100)}%`)
 
     return successResponse({
       dashboard_plan: plan,
-      source: plan.assumptions.includes('Plano gerado via LLM') ? 'llm' : 'heuristic'
+      source,
+      validation: { valid: validation.valid, errors: validation.errors }
     })
 
   } catch (error: any) {
