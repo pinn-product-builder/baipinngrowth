@@ -444,18 +444,23 @@ Deno.serve(async (req) => {
         })
       }
       
-      // Fetch the view directly - Note: vw_afonsina views don't have org_id column
-      // so we don't filter by org_id for now (data is already tenant-scoped in the view)
+      // Fetch the view directly without date filtering first to discover columns
+      // Then filter if date column is provided in request
+      const url = new URL(req.url)
+      const dateColumn = req.method === 'POST' 
+        ? (await req.clone().json()).date_column 
+        : url.searchParams.get('date_column')
+      
       const result = await fetchFromView(
         remoteUrl,
         remoteKey,
         directView,
         null, // Don't filter by org_id - view is already tenant-scoped
-        start,
-        end,
+        dateColumn ? start : null,  // Only filter by date if column is specified
+        dateColumn ? end : null,
         limit,
-        'dia', // default date column
-        true   // has date filter
+        dateColumn || null,
+        !!dateColumn
       )
       
       if (result.error) {
@@ -468,7 +473,8 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ 
         data: result.data,
         view: directView,
-        tenant_id: profile.tenant_id
+        tenant_id: profile.tenant_id,
+        rows_returned: result.data.length
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
