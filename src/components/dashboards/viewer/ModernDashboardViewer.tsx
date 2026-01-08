@@ -212,6 +212,26 @@ export default function ModernDashboardViewer({
   } | null>(null);
   const [renderingMode, setRenderingMode] = useState<'spec' | 'template' | 'compatibility'>('template');
   
+  // Data quality info from V2
+  const [dataQuality, setDataQuality] = useState<{
+    time_parse_rate: number;
+    truthy_rates: Record<string, number>;
+    degraded_mode: boolean;
+    total_rows_aggregated: number;
+  } | null>(null);
+  const [dataWarnings, setDataWarnings] = useState<{
+    code: string;
+    severity: string;
+    message: string;
+  }[]>([]);
+  const [pagination, setPagination] = useState<{
+    page: number;
+    pageSize: number;
+    total_rows: number;
+    total_pages: number;
+    has_more: boolean;
+  } | null>(null);
+  
   // Parse dashboard spec
   const dashboardSpec = useMemo<DashboardSpec | null>(() => {
     if (!rawDashboardSpec || Object.keys(rawDashboardSpec).length === 0) {
@@ -414,7 +434,7 @@ export default function ModernDashboardViewer({
           } else if (v2Result?.ok) {
             // Use V2 computed data
             const meta = v2Result.meta || {};
-            console.log(`[Viewer] V2 success: ${meta.rows_fetched || 0} rows, trace_id=${meta.trace_id}`);
+            console.log(`[Viewer] V2 success: ${meta.rows_fetched || 0} rows aggregated, trace_id=${meta.trace_id}`);
             
             setV2Aggregations({
               kpis: v2Result.aggregations?.kpis || {},
@@ -426,6 +446,26 @@ export default function ModernDashboardViewer({
             setAvailableDateRange(meta.date_range || null);
             setRenderingMode('spec');
             setLastUpdated(new Date());
+            
+            // NEW: Set data quality info
+            if (v2Result.data_quality) {
+              setDataQuality(v2Result.data_quality);
+            }
+            if (v2Result.warnings && Array.isArray(v2Result.warnings)) {
+              setDataWarnings(v2Result.warnings);
+            } else {
+              setDataWarnings([]);
+            }
+            if (v2Result.pagination) {
+              setPagination(v2Result.pagination);
+            }
+            
+            // Log aggregation completeness
+            if (meta.aggregation_complete) {
+              console.log(`[Viewer] Aggregation complete: ${meta.rows_fetched} rows`);
+            } else {
+              console.warn(`[Viewer] Aggregation limited: ${meta.rows_fetched}/${meta.rows_total} rows`);
+            }
             
             return;
           } else if (v2Result && !v2Result.ok && v2Result.error) {
