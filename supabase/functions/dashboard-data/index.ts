@@ -355,30 +355,33 @@ Deno.serve(async (req) => {
         })
       }
       
-      // Get the active data source for this tenant
+      // Find data source that has this view in allowed_views
       let dataSource = null
-      const { data: tenantDataSource, error: dsError } = await adminClient
+      
+      // First, try to find a data source that explicitly allows this view
+      const { data: matchingDataSource } = await adminClient
         .from('tenant_data_sources')
         .select('*')
-        .eq('tenant_id', profile.tenant_id)
         .eq('is_active', true)
+        .contains('allowed_views', [directView])
+        .limit(1)
         .maybeSingle()
       
-      if (tenantDataSource) {
-        dataSource = tenantDataSource
-        console.log(`Using tenant data source: ${tenantDataSource.name}`)
+      if (matchingDataSource) {
+        dataSource = matchingDataSource
+        console.log(`Using data source with matching view: ${matchingDataSource.name}`)
       } else {
-        // Fallback: get the Afonsina data source (or any active one) as default
-        const { data: defaultDataSource } = await adminClient
+        // Fallback: get the tenant's data source
+        const { data: tenantDataSource } = await adminClient
           .from('tenant_data_sources')
           .select('*')
+          .eq('tenant_id', profile.tenant_id)
           .eq('is_active', true)
-          .eq('name', 'Afonsina')
           .maybeSingle()
         
-        if (defaultDataSource) {
-          dataSource = defaultDataSource
-          console.log(`Using default Afonsina data source`)
+        if (tenantDataSource) {
+          dataSource = tenantDataSource
+          console.log(`Using tenant data source: ${tenantDataSource.name}`)
         } else {
           // Get any active data source
           const { data: anyDataSource } = await adminClient
