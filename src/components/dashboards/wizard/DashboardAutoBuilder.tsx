@@ -1281,6 +1281,19 @@ export default function DashboardAutoBuilder({
                           </ul>
                         </div>
                       )}
+
+                      {/* Assumptions */}
+                      {diagnostics.assumptions?.length > 0 && (
+                        <div>
+                          <p className="font-medium mb-1 text-blue-600 dark:text-blue-400 flex items-center gap-1">
+                            <Sparkles className="h-3 w-3" />
+                            Premissas do LLM:
+                          </p>
+                          <ul className="list-disc list-inside text-blue-600 dark:text-blue-400">
+                            {diagnostics.assumptions.map((a, i) => <li key={i}>{a}</li>)}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                   </CollapsibleContent>
                 </Collapsible>
