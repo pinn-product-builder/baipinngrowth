@@ -254,7 +254,7 @@ interface AggregationResult {
   kpis: Record<string, number>
   series: Record<string, Record<string, number>[]>  // { date: ..., value: ... }[]
   rankings: Record<string, { dimension: string; value: number }[]>
-  funnel: { stage: string; label: string; value: number }[]
+  funnel: { stage: string; label: string; value: number; count: number; rate?: number }[]
 }
 
 function computeAggregations(
@@ -323,15 +323,21 @@ function computeAggregations(
     result.kpis[column] = value
   }
 
-  // 2. Compute funnel
+  // 2. Compute funnel - use 'count' field for frontend compatibility
   if (plan.funnel?.stages) {
-    for (const stage of plan.funnel.stages) {
-      const value = filteredRows.filter(row => isTruthy(row[stage.column])).length
+    let prevCount = 0
+    for (let i = 0; i < plan.funnel.stages.length; i++) {
+      const stage = plan.funnel.stages[i]
+      const count = filteredRows.filter(row => isTruthy(row[stage.column])).length
+      const rate = i > 0 && prevCount > 0 ? count / prevCount : 1
       result.funnel.push({
         stage: stage.column,
         label: stage.label,
-        value
+        value: count,    // Numeric count
+        count: count,    // Alias for frontend
+        rate: i > 0 ? rate : undefined  // Conversion rate from previous stage
       })
+      prevCount = count
     }
   }
 

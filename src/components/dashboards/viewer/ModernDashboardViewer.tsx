@@ -203,12 +203,13 @@ export default function ModernDashboardViewer({
   const [compatibilityMode, setCompatibilityMode] = useState(false);
   const [availableDateRange, setAvailableDateRange] = useState<{ min: string; max: string } | null>(null);
   
-  // V2 computed data from dashboard-data-v2
+  // V2 computed data from dashboard-data-v2 (FULL aggregation, not limited)
   const [v2Aggregations, setV2Aggregations] = useState<{
     kpis: Record<string, number>;
-    funnel: { stage: string; count: number; rate?: number }[];
+    funnel: { stage: string; count: number; value: number; rate?: number; label?: string }[];
     series: { date: string; [key: string]: any }[];
     rankings: Record<string, { value: string; count: number }[]>;
+    meta?: { rows_aggregated: number; aggregation_complete: boolean };
   } | null>(null);
   const [renderingMode, setRenderingMode] = useState<'spec' | 'template' | 'compatibility'>('template');
   
@@ -441,6 +442,10 @@ export default function ModernDashboardViewer({
               funnel: v2Result.aggregations?.funnel || [],
               series: v2Result.aggregations?.series || [],
               rankings: v2Result.aggregations?.rankings || {},
+              meta: {
+                rows_aggregated: meta.rows_fetched || 0,
+                aggregation_complete: meta.aggregation_complete ?? true,
+              },
             });
             setRawData(v2Result.rows || []);
             setAvailableDateRange(meta.date_range || null);
@@ -962,6 +967,11 @@ export default function ModernDashboardViewer({
                 Spec-first
               </Badge>
             )}
+            {v2Aggregations?.meta?.rows_aggregated && (
+              <Badge variant="outline" className="text-xs">
+                {v2Aggregations.meta.aggregation_complete ? '✓' : '⚠'} {v2Aggregations.meta.rows_aggregated.toLocaleString()} linhas
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {lastUpdated && (
@@ -1074,9 +1084,10 @@ export default function ModernDashboardViewer({
           {/* Tab: Funil */}
           <TabsContent value="funil" className="mt-6 space-y-6">
             <ExecutiveFunnel
-              data={aggregatedData}
+              data={v2Aggregations?.kpis || aggregatedData}
               previousData={comparisonEnabled ? previousAggregated : undefined}
               comparisonEnabled={comparisonEnabled}
+              funnelStages={v2Aggregations?.funnel}
               className="min-h-[400px]"
             />
             

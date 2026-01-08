@@ -416,37 +416,65 @@ export function getGoalDirection(key: string): 'higher_better' | 'lower_better' 
 }
 
 // Format a value based on column config
+// CRITICAL: Guard against formatting numbers as dates (causes 31/12/1969 bug)
 export function formatColumnValue(value: any, key: string): string {
   if (value === null || value === undefined) return '—';
   
   const format = getColumnFormat(key);
   
+  // GUARD: If format is 'date' but value is a plain number (likely a count), treat as integer
+  // This prevents the 31/12/1969 bug where counts are formatted as dates
+  if (format === 'date' && typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < 100000) {
+    // Small integers are almost certainly counts, not timestamps
+    return value.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+  }
+  
   switch (format) {
     case 'currency':
+      if (typeof value !== 'number' || !isFinite(value)) return '—';
       return new Intl.NumberFormat('pt-BR', { 
         style: 'currency', 
         currency: 'BRL',
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
-      }).format(value || 0);
+      }).format(value);
     
     case 'percent':
+      if (typeof value !== 'number' || !isFinite(value)) return '—';
       // Handle both 0-1 and 0-100 formats
-      const pct = typeof value === 'number' && value <= 1 ? value * 100 : value;
-      return `${(pct || 0).toFixed(1)}%`;
+      const pct = value <= 1 ? value * 100 : value;
+      return `${pct.toFixed(1)}%`;
     
     case 'integer':
-      return (value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+      if (typeof value !== 'number' || !isFinite(value)) return '—';
+      return value.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
     
     case 'date':
+      // Only format as date if it's actually a date-like value
       if (value instanceof Date) {
-        return value.toLocaleDateString('pt-BR');
+        const d = value;
+        if (isNaN(d.getTime())) return '—';
+        return d.toLocaleDateString('pt-BR');
       }
-      try {
-        return new Date(value).toLocaleDateString('pt-BR');
-      } catch {
-        return String(value);
+      if (typeof value === 'string' && value.match(/^\d{4}-\d{2}-\d{2}/)) {
+        try {
+          const d = new Date(value);
+          if (isNaN(d.getTime())) return String(value);
+          return d.toLocaleDateString('pt-BR');
+        } catch {
+          return String(value);
+        }
       }
+      // If it's a large number, it might be a timestamp
+      if (typeof value === 'number' && value > 946684800000) { // After year 2000 in ms
+        try {
+          const d = new Date(value);
+          if (!isNaN(d.getTime())) return d.toLocaleDateString('pt-BR');
+        } catch {
+          // Fall through
+        }
+      }
+      return String(value);
     
     default:
       return String(value);
