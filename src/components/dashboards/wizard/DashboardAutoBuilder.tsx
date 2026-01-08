@@ -74,6 +74,15 @@ interface DiagnosticInfo {
   assumptions: string[];
 }
 
+interface TestQueryResult {
+  rows_returned: number;
+  sample_rows: Record<string, any>[];
+  min_date: string | null;
+  max_date: string | null;
+  time_column: string | null;
+  error?: string;
+}
+
 interface DatasetMapping {
   time_column: string | null;
   id_column: string | null;
@@ -133,6 +142,8 @@ export default function DashboardAutoBuilder({
     truthy_rule: 'default'
   });
   const [needsMapping, setNeedsMapping] = useState(false);
+  const [testQueryResult, setTestQueryResult] = useState<TestQueryResult | null>(null);
+  const [isTestingQuery, setIsTestingQuery] = useState(false);
   const { toast } = useToast();
 
   // Load datasets on open
@@ -162,6 +173,8 @@ export default function DashboardAutoBuilder({
       truthy_rule: 'default'
     });
     setNeedsMapping(false);
+    setTestQueryResult(null);
+    setIsTestingQuery(false);
   };
 
   const loadDatasets = async () => {
@@ -378,6 +391,115 @@ export default function DashboardAutoBuilder({
     }
   };
 
+  // Test query to verify data access and get min/max dates
+  const handleTestQuery = async () => {
+    if (!selectedDatasetId || !generatedSpec) return;
+    
+    setIsTestingQuery(true);
+    try {
+      const dataset = datasets.find(d => d.id === selectedDatasetId);
+      if (!dataset) throw new Error('Dataset não encontrado');
+      
+      // Get datasource info
+      const { data: datasetData } = await supabase
+        .from('datasets')
+        .select('tenant_id, datasource_id, object_name')
+        .eq('id', selectedDatasetId)
+        .single();
+      
+      if (!datasetData) throw new Error('Dataset não encontrado');
+      
+      // Determine time column from spec or diagnostics
+      const timeColumn = generatedSpec.time?.column || diagnostics?.time_column || 'created_at';
+      
+      // Call dashboard-data edge function with a wide date range to test connectivity
+      const { data: result, error } = await supabase.functions.invoke('dashboard-data', {
+        body: {
+          // We need a temporary dashboard context, use directView approach
+          view: datasetData.object_name,
+          start: '2020-01-01',
+          end: '2030-12-31',
+          limit: '100'
+        }
+      });
+      
+      if (error) {
+        setTestQueryResult({
+          rows_returned: 0,
+          sample_rows: [],
+          min_date: null,
+          max_date: null,
+          time_column: timeColumn,
+          error: error.message || 'Erro ao executar query'
+        });
+        return;
+      }
+      
+      const rows = result?.data || [];
+      
+      // Calculate min/max dates
+      let minDate: string | null = null;
+      let maxDate: string | null = null;
+      
+      if (rows.length > 0 && timeColumn) {
+        const dates = rows
+          .map((r: any) => r[timeColumn])
+          .filter((d: any) => d != null)
+          .map((d: any) => {
+            if (d instanceof Date) return d.toISOString().split('T')[0];
+            const str = String(d);
+            // Try to parse various formats
+            if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split('T')[0];
+            if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) {
+              const [day, month, year] = str.split('/');
+              return `${year}-${month}-${day}`;
+            }
+            return str;
+          })
+          .filter((d: string) => /^\d{4}-\d{2}-\d{2}/.test(d))
+          .sort();
+        
+        if (dates.length > 0) {
+          minDate = dates[0];
+          maxDate = dates[dates.length - 1];
+        }
+      }
+      
+      setTestQueryResult({
+        rows_returned: rows.length,
+        sample_rows: rows.slice(0, 5),
+        min_date: minDate,
+        max_date: maxDate,
+        time_column: timeColumn
+      });
+      
+      toast({
+        title: rows.length > 0 ? 'Query executada!' : 'Query vazia',
+        description: rows.length > 0 
+          ? `${rows.length} linhas encontradas${minDate ? ` (${minDate} a ${maxDate})` : ''}`
+          : 'Dataset retornou 0 linhas. O dashboard abrirá vazio.',
+        variant: rows.length > 0 ? 'default' : 'destructive'
+      });
+      
+    } catch (err: any) {
+      setTestQueryResult({
+        rows_returned: 0,
+        sample_rows: [],
+        min_date: null,
+        max_date: null,
+        time_column: null,
+        error: err.message
+      });
+      toast({
+        title: 'Erro no Test Query',
+        description: err.message,
+        variant: 'destructive'
+      });
+    } finally {
+      setIsTestingQuery(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!selectedDatasetId || !generatedSpec || !dashboardName.trim()) return;
 
@@ -391,11 +513,32 @@ export default function DashboardAutoBuilder({
       // Get tenant_id from dataset
       const { data: datasetData } = await supabase
         .from('datasets')
-        .select('tenant_id, datasource_id, object_name')
+        .select('tenant_id, datasource_id, object_name, schema_name')
         .eq('id', selectedDatasetId)
         .single();
 
       if (!datasetData) throw new Error('Dataset não encontrado');
+
+      // Enrich spec with time column and test query info
+      const enrichedSpec = {
+        ...generatedSpec,
+        time: {
+          ...generatedSpec.time,
+          column: generatedSpec.time?.column || diagnostics?.time_column || datasetMapping.time_column,
+        },
+        _meta: {
+          dataset_id: selectedDatasetId,
+          dataset_name: dataset.name,
+          datasource_id: datasetData.datasource_id,
+          schema_name: datasetData.schema_name,
+          object_name: datasetData.object_name,
+          min_date: testQueryResult?.min_date,
+          max_date: testQueryResult?.max_date,
+          rows_tested: testQueryResult?.rows_returned,
+          created_at: new Date().toISOString(),
+          spec_source: specSource
+        }
+      };
 
       // Create dashboard
       const { data: dashboard, error: createError } = await supabase
@@ -408,9 +551,16 @@ export default function DashboardAutoBuilder({
           display_type: 'json',
           data_source_id: datasetData.datasource_id,
           view_name: datasetData.object_name,
-          dashboard_spec: generatedSpec,
+          dashboard_spec: enrichedSpec,
           template_kind: 'custom',
-          is_active: true
+          is_active: true,
+          detected_columns: diagnostics?.columns_detected?.map(c => c.name) || null,
+          default_filters: testQueryResult?.min_date ? {
+            initial_date_range: {
+              start: testQueryResult.min_date,
+              end: testQueryResult.max_date
+            }
+          } : null
         })
         .select()
         .single();
@@ -423,8 +573,8 @@ export default function DashboardAutoBuilder({
         .insert({
           dashboard_id: dashboard.id,
           version: 1,
-          dashboard_spec: generatedSpec,
-          notes: `Auto-gerado via ${specSource === 'ai' ? 'IA' : 'heurística'}`
+          dashboard_spec: enrichedSpec,
+          notes: `Auto-gerado via ${specSource === 'ai' ? 'IA' : 'heurística'}${testQueryResult?.rows_returned ? ` (${testQueryResult.rows_returned} rows testadas)` : ''}`
         });
 
       toast({
@@ -1042,6 +1192,114 @@ export default function DashboardAutoBuilder({
                   </CollapsibleContent>
                 </Collapsible>
               )}
+
+              {/* Test Query Section */}
+              <div className="p-4 rounded-lg border bg-muted/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium flex items-center gap-2">
+                      <Database className="h-4 w-4" />
+                      Testar Conexão com Dataset
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Executa uma query real para verificar conectividade e período de dados
+                    </p>
+                  </div>
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={handleTestQuery}
+                    disabled={isTestingQuery}
+                  >
+                    {isTestingQuery ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Testando...
+                      </>
+                    ) : (
+                      <>
+                        <Database className="h-4 w-4 mr-2" />
+                        Test Query
+                      </>
+                    )}
+                  </Button>
+                </div>
+                
+                {/* Test Query Results */}
+                {testQueryResult && (
+                  <div className={`p-3 rounded-lg border ${testQueryResult.error ? 'bg-destructive/10 border-destructive/30' : testQueryResult.rows_returned > 0 ? 'bg-green-500/10 border-green-500/30' : 'bg-yellow-500/10 border-yellow-500/30'}`}>
+                    {testQueryResult.error ? (
+                      <div className="text-sm text-destructive flex items-center gap-2">
+                        <XCircle className="h-4 w-4" />
+                        Erro: {testQueryResult.error}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-4 text-sm">
+                          <span className={testQueryResult.rows_returned > 0 ? 'text-green-600' : 'text-yellow-600'}>
+                            <CheckCircle2 className="h-4 w-4 inline mr-1" />
+                            {testQueryResult.rows_returned} linhas retornadas
+                          </span>
+                          {testQueryResult.time_column && (
+                            <span className="text-muted-foreground">
+                              <Clock className="h-3 w-3 inline mr-1" />
+                              Coluna: {testQueryResult.time_column}
+                            </span>
+                          )}
+                        </div>
+                        
+                        {(testQueryResult.min_date || testQueryResult.max_date) && (
+                          <div className="text-xs text-muted-foreground flex items-center gap-2">
+                            <span>Período disponível:</span>
+                            <Badge variant="outline">{testQueryResult.min_date} → {testQueryResult.max_date}</Badge>
+                          </div>
+                        )}
+                        
+                        {testQueryResult.rows_returned === 0 && (
+                          <div className="text-xs text-yellow-600">
+                            ⚠️ Dataset sem linhas. O dashboard abrirá vazio até existir dados.
+                          </div>
+                        )}
+                        
+                        {/* Sample rows preview */}
+                        {testQueryResult.sample_rows.length > 0 && (
+                          <Collapsible>
+                            <CollapsibleTrigger className="text-xs text-primary hover:underline flex items-center gap-1">
+                              <Table className="h-3 w-3" />
+                              Ver amostra ({testQueryResult.sample_rows.length} linhas)
+                              <ChevronDown className="h-3 w-3" />
+                            </CollapsibleTrigger>
+                            <CollapsibleContent className="mt-2">
+                              <div className="max-h-32 overflow-auto rounded border bg-background">
+                                <table className="w-full text-xs">
+                                  <thead className="bg-muted/50 sticky top-0">
+                                    <tr>
+                                      {Object.keys(testQueryResult.sample_rows[0]).slice(0, 6).map(key => (
+                                        <th key={key} className="px-2 py-1 text-left font-medium">{key}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {testQueryResult.sample_rows.map((row, i) => (
+                                      <tr key={i} className="border-t">
+                                        {Object.values(row).slice(0, 6).map((val: any, j) => (
+                                          <td key={j} className="px-2 py-1 truncate max-w-24">
+                                            {val == null ? '—' : String(val).slice(0, 30)}
+                                          </td>
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </CollapsibleContent>
+                          </Collapsible>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
               
               {/* Validation messages */}
               {validation && (

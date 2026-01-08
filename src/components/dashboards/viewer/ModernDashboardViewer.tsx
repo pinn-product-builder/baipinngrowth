@@ -7,7 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, BarChart3, LogIn, Bug, Clock, Table } from 'lucide-react';
+import { RefreshCw, BarChart3, LogIn, Bug, Clock, Table, Calendar } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 
 import DashboardFilterBar, { DateRange } from './DashboardFilterBar';
@@ -35,6 +35,12 @@ interface ModernDashboardViewerProps {
   templateKind?: string;
   detectedColumns?: string[];
   dashboardName?: string;
+  defaultFilters?: {
+    initial_date_range?: {
+      start: string;
+      end: string;
+    };
+  } | null;
 }
 
 interface AggregatedData {
@@ -136,11 +142,35 @@ export default function ModernDashboardViewer({
   templateKind = 'costs_funnel_daily',
   detectedColumns = [],
   dashboardName = 'Dashboard',
+  defaultFilters = null,
 }: ModernDashboardViewerProps) {
   const { toast } = useToast();
   const navigate = useNavigate();
   const { user, userRole } = useAuth();
   const [searchParams] = useSearchParams();
+  
+  // Calculate smart initial date range based on defaultFilters
+  const getInitialDateRange = useCallback((): DateRange => {
+    if (defaultFilters?.initial_date_range?.start && defaultFilters?.initial_date_range?.end) {
+      try {
+        const start = parseISO(defaultFilters.initial_date_range.start);
+        const end = parseISO(defaultFilters.initial_date_range.end);
+        // Use the last 30 days within the available range
+        const maxEnd = new Date() < end ? new Date() : end;
+        const smartStart = subDays(maxEnd, 30);
+        return {
+          start: smartStart < start ? start : smartStart,
+          end: maxEnd
+        };
+      } catch {
+        // Fallback to default
+      }
+    }
+    return {
+      start: subDays(new Date(), 30),
+      end: new Date(),
+    };
+  }, [defaultFilters]);
   
   // State
   const [rawData, setRawData] = useState<any[]>([]);
@@ -150,13 +180,10 @@ export default function ModernDashboardViewer({
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
-  const [error, setError] = useState<{ message: string; type?: string; details?: string } | null>(null);
+  const [error, setError] = useState<{ message: string; type?: string; details?: string; debug?: any } | null>(null);
   const [copied, setCopied] = useState(false);
   const [comparisonEnabled, setComparisonEnabled] = useState(false);
-  const [dateRange, setDateRange] = useState<DateRange>({
-    start: subDays(new Date(), 30),
-    end: new Date(),
-  });
+  const [dateRange, setDateRange] = useState<DateRange>(getInitialDateRange);
   const [previousRange, setPreviousRange] = useState<DateRange | undefined>();
   const [activeTab, setActiveTab] = useState<TabType>('decisoes');
   const [selectedRow, setSelectedRow] = useState<any>(null);
@@ -165,6 +192,7 @@ export default function ModernDashboardViewer({
   const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [compatibilityMode, setCompatibilityMode] = useState(false);
+  const [availableDateRange, setAvailableDateRange] = useState<{ min: string; max: string } | null>(null);
   
   // Parse dashboard spec
   const dashboardSpec = useMemo<DashboardSpec | null>(() => {
@@ -599,8 +627,22 @@ export default function ModernDashboardViewer({
     );
   }
 
-  // Empty state
+  // Empty state with actionable buttons
   if (data.length === 0) {
+    const handleAdjustToAvailable = () => {
+      if (availableDateRange) {
+        setDateRange({
+          start: parseISO(availableDateRange.min),
+          end: parseISO(availableDateRange.max)
+        });
+      } else if (defaultFilters?.initial_date_range) {
+        setDateRange({
+          start: parseISO(defaultFilters.initial_date_range.start),
+          end: parseISO(defaultFilters.initial_date_range.end)
+        });
+      }
+    };
+
     return (
       <div className="space-y-6">
         <DashboardFilterBar
@@ -615,15 +657,44 @@ export default function ModernDashboardViewer({
         />
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="rounded-full bg-muted p-4 mb-4">
-              <BarChart3 className="h-8 w-8 text-muted-foreground" />
+            <div className="rounded-full bg-warning/10 p-4 mb-4">
+              <BarChart3 className="h-8 w-8 text-warning" />
             </div>
             <h3 className="text-lg font-medium mb-1">Sem dados no período</h3>
-            <p className="text-muted-foreground text-sm max-w-sm">
-              Não encontramos dados para o período selecionado. Tente expandir o intervalo.
+            <p className="text-muted-foreground text-sm max-w-sm mb-4">
+              Não encontramos dados para o período selecionado ({format(dateRange.start, 'dd/MM/yyyy')} - {format(dateRange.end, 'dd/MM/yyyy')}).
             </p>
+            <div className="flex gap-2 flex-wrap justify-center">
+              {(availableDateRange || defaultFilters?.initial_date_range) && (
+                <Button variant="default" size="sm" onClick={handleAdjustToAvailable}>
+                  Ajustar para período disponível
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={() => setDateRange({
+                start: subDays(new Date(), 90),
+                end: new Date()
+              })}>
+                Últimos 90 dias
+              </Button>
+              {isAdminOrManager && (
+                <Button variant="ghost" size="sm" onClick={() => setDiagnosticsOpen(true)}>
+                  <Bug className="h-4 w-4 mr-1" />
+                  Diagnóstico
+                </Button>
+              )}
+            </div>
           </CardContent>
         </Card>
+        {isAdminOrManager && (
+          <DiagnosticsDrawer
+            open={diagnosticsOpen}
+            onOpenChange={setDiagnosticsOpen}
+            normalizedDataset={normalizedData}
+            dashboardSpec={dashboardSpec}
+            rawDataSample={rawData[0]}
+            templateConfig={templateConfig}
+          />
+        )}
       </div>
     );
   }
