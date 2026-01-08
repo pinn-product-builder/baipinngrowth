@@ -24,7 +24,9 @@ import { formatColumnValue, getColumnLabel, FUNNEL_STAGES, FUNNEL_STAGES_V3, RAT
 interface FunnelStageData {
   stage: string;
   count: number;
+  value?: number;  // Alias for count
   rate?: number;
+  label?: string;
 }
 
 interface ExecutiveFunnelProps {
@@ -92,12 +94,13 @@ export default function ExecutiveFunnel({
     );
   }, [data, precomputedStages]);
   
-  // Use precomputed data values if available
+  // Use precomputed data values if available (prefer 'count', fallback to 'value')
   const stageData = useMemo(() => {
     if (precomputedStages && precomputedStages.length > 0) {
       const dataMap: Record<string, number> = {};
       precomputedStages.forEach(s => {
-        dataMap[s.stage] = s.count;
+        // Use 'count' if available, otherwise 'value'
+        dataMap[s.stage] = s.count ?? (s as any).value ?? 0;
       });
       return dataMap;
     }
