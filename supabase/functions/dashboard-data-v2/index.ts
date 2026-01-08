@@ -56,10 +56,18 @@ async function decrypt(ciphertext: string): Promise<string> {
 }
 
 // =====================================================
-// TRUTHY VALUE HANDLING
+// TRUTHY VALUE HANDLING (Canonical - Single Source of Truth)
 // =====================================================
 
-const TRUTHY_VALUES = new Set(['1', 'true', 'sim', 's', 'yes', 'y', 'ok', 'x', 'on'])
+const TRUTHY_VALUES = new Set([
+  '1', 'true', 'sim', 's', 'yes', 'y', 'ok', 'x', 'on',
+  'ativo', 'realizado', 'agendado', 'ganho', 'concluido', 'fechado'
+])
+
+const FALSY_VALUES = new Set([
+  '0', 'false', 'nao', 'não', 'n', 'no', 'off',
+  'inativo', 'pendente', 'cancelado', 'perdido', ''
+])
 
 function isTruthy(value: any): boolean {
   if (value === null || value === undefined || value === '') return false
@@ -69,32 +77,173 @@ function isTruthy(value: any): boolean {
   return TRUTHY_VALUES.has(v)
 }
 
+function isBooleanLike(value: any): boolean {
+  if (value === null || value === undefined) return false
+  if (typeof value === 'boolean') return true
+  if (typeof value === 'number') return value === 0 || value === 1
+  const v = String(value).toLowerCase().trim()
+  return TRUTHY_VALUES.has(v) || FALSY_VALUES.has(v)
+}
+
+// =====================================================
+// DATE PARSING (Canonical - Single Source of Truth)
+// =====================================================
+
 function parseDate(value: any): Date | null {
-  if (!value) return null
-  if (value instanceof Date) return isNaN(value.getTime()) ? null : value
+  if (value === null || value === undefined || value === '') return null
   
-  // Try ISO format first
-  if (typeof value === 'string') {
-    // YYYY-MM-DD
-    const isoMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})/)
-    if (isoMatch) {
-      const d = new Date(value)
-      return isNaN(d.getTime()) ? null : d
-    }
-    
-    // DD/MM/YYYY
-    const brMatch = value.match(/^(\d{2})\/(\d{2})\/(\d{4})/)
-    if (brMatch) {
-      const d = new Date(`${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`)
-      return isNaN(d.getTime()) ? null : d
-    }
+  if (value instanceof Date) {
+    return isNaN(value.getTime()) ? null : value
   }
   
-  return null
+  // Unix timestamp
+  if (typeof value === 'number') {
+    const date = new Date(value > 1e11 ? value : value * 1000)
+    return isNaN(date.getTime()) ? null : date
+  }
+  
+  if (typeof value !== 'string') return null
+  
+  const str = value.trim()
+  
+  // ISO format: YYYY-MM-DD
+  const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (isoMatch) {
+    const d = new Date(str)
+    return isNaN(d.getTime()) ? null : d
+  }
+  
+  // Brazilian format: DD/MM/YYYY
+  const brSlashMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+  if (brSlashMatch) {
+    const [, day, month, year] = brSlashMatch
+    const d = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
+    return isNaN(d.getTime()) ? null : d
+  }
+  
+  // Brazilian format: DD-MM-YYYY
+  const brDashMatch = str.match(/^(\d{1,2})-(\d{1,2})-(\d{4})/)
+  if (brDashMatch) {
+    const [, day, month, year] = brDashMatch
+    const d = new Date(parseInt(year), parseInt(month) - 1, parseInt(day))
+    return isNaN(d.getTime()) ? null : d
+  }
+  
+  // Fallback
+  const fallback = new Date(str)
+  return isNaN(fallback.getTime()) ? null : fallback
 }
 
 function formatDateKey(date: Date): string {
-  return date.toISOString().split('T')[0]
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+// =====================================================
+// DATA QUALITY ANALYSIS
+// =====================================================
+
+interface DataQualityWarning {
+  code: string
+  severity: 'info' | 'warning' | 'error'
+  message: string
+  column?: string
+  value?: number
+}
+
+interface DataQualityReport {
+  time_parse_rate: number
+  truthy_rates: Record<string, number>
+  null_rates: Record<string, number>
+  warnings: DataQualityWarning[]
+  degraded_mode: boolean
+}
+
+function analyzeDataQuality(
+  rows: Record<string, any>[],
+  timeColumn: string | null,
+  stageColumns: string[]
+): DataQualityReport {
+  const report: DataQualityReport = {
+    time_parse_rate: 1,
+    truthy_rates: {},
+    null_rates: {},
+    warnings: [],
+    degraded_mode: false
+  }
+  
+  if (rows.length === 0) {
+    report.warnings.push({
+      code: 'NO_DATA',
+      severity: 'warning',
+      message: 'Nenhuma linha de dados encontrada'
+    })
+    return report
+  }
+  
+  // Check time column parse rate
+  if (timeColumn) {
+    const parsed = rows.filter(r => parseDate(r[timeColumn]) !== null).length
+    report.time_parse_rate = parsed / rows.length
+    
+    if (report.time_parse_rate < 0.7) {
+      report.warnings.push({
+        code: 'LOW_TIME_PARSE_RATE',
+        severity: 'warning',
+        message: `Coluna de tempo "${timeColumn}" tem ${Math.round(report.time_parse_rate * 100)}% de parse válido`,
+        column: timeColumn,
+        value: report.time_parse_rate
+      })
+      report.degraded_mode = true
+    }
+  }
+  
+  // Check truthy rates for stage columns
+  for (const col of stageColumns) {
+    const nonNull = rows.filter(r => r[col] !== null && r[col] !== undefined)
+    const truthy = nonNull.filter(r => isTruthy(r[col]))
+    const rate = nonNull.length > 0 ? truthy.length / nonNull.length : 0
+    report.truthy_rates[col] = rate
+    
+    // Null rate
+    const nullCount = rows.length - nonNull.length
+    report.null_rates[col] = nullCount / rows.length
+  }
+  
+  return report
+}
+
+// =====================================================
+// ADAPTIVE TIME GRAIN
+// =====================================================
+
+type TimeGrain = 'day' | 'week' | 'month'
+
+function determineTimeGrain(days: number, maxPoints: number = 400): TimeGrain {
+  if (days <= maxPoints) return 'day'
+  if (days / 7 <= maxPoints) return 'week'
+  return 'month'
+}
+
+function getTimeGroupKey(date: Date, grain: TimeGrain): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  
+  switch (grain) {
+    case 'day':
+      return `${year}-${month}-${day}`
+    case 'week': {
+      const d = new Date(date)
+      const dayOfWeek = d.getDay() || 7
+      d.setDate(d.getDate() - dayOfWeek + 1)
+      return formatDateKey(d)
+    }
+    case 'month':
+      return `${year}-${month}-01`
+  }
 }
 
 // =====================================================
@@ -324,9 +473,21 @@ Deno.serve(async (req) => {
 
     // Parse request body
     const body = await req.json()
-    const { dashboard_id, start, end, limit = 5000 } = body
+    const { 
+      dashboard_id, 
+      start, 
+      end, 
+      // NEW: Support pagination for details table
+      page = 1,
+      pageSize = 100,
+      // NEW: Allow unlimited aggregation (remove hard 1000 limit)
+      // Default is high enough for aggregation but can be overridden
+      aggregation_limit = 50000,
+      // For details table only
+      details_limit = 500
+    } = body
 
-    console.log(`[${traceId}] dashboard-data-v2: dashboard_id=${dashboard_id}, start=${start}, end=${end}`)
+    console.log(`[${traceId}] dashboard-data-v2: dashboard_id=${dashboard_id}, start=${start}, end=${end}, aggregation_limit=${aggregation_limit}`)
 
     if (!dashboard_id) {
       console.warn(`[${traceId}] Missing dashboard_id parameter`)
@@ -423,22 +584,28 @@ Deno.serve(async (req) => {
       return errorResponse('NO_CREDENTIALS', 'Credenciais do datasource não configuradas', undefined, traceId)
     }
 
-    // Fetch raw data from external datasource
-    const timeColumn = dashboard.dashboard_spec?.time?.column
+    // Get spec and time column
+    const spec = dashboard.dashboard_spec || {}
+    const timeColumn = spec.time?.column
     
-    let fetchUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*`
+    // =====================================================
+    // STEP 1: FETCH ALL DATA FOR AGGREGATION (NO HARD LIMIT)
+    // =====================================================
+    
+    let aggregationUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*`
     
     // Add date filters if we have a time column and date range
     if (timeColumn && start && end) {
-      fetchUrl += `&${timeColumn}=gte.${start}&${timeColumn}=lte.${end}`
-      fetchUrl += `&order=${timeColumn}.asc`
+      aggregationUrl += `&${timeColumn}=gte.${start}&${timeColumn}=lte.${end}`
+      aggregationUrl += `&order=${timeColumn}.asc`
     }
     
-    fetchUrl += `&limit=${limit}`
+    // Use high limit for aggregation - this ensures KPIs and charts are accurate
+    aggregationUrl += `&limit=${aggregation_limit}`
 
-    console.log(`[${traceId}] Fetching: ${objectName} with time_column=${timeColumn}`)
+    console.log(`[${traceId}] Fetching for aggregation: ${objectName}, time_column=${timeColumn}, limit=${aggregation_limit}`)
 
-    const response = await fetch(fetchUrl, {
+    const aggregationResponse = await fetch(aggregationUrl, {
       headers: {
         'apikey': apiKey,
         'Authorization': `Bearer ${apiKey}`,
@@ -447,14 +614,14 @@ Deno.serve(async (req) => {
       }
     })
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error(`[${traceId}] Fetch error: status=${response.status}, body=${errorText}`)
+    if (!aggregationResponse.ok) {
+      const errorText = await aggregationResponse.text()
+      console.error(`[${traceId}] Fetch error: status=${aggregationResponse.status}, body=${errorText}`)
       return jsonResponse({ 
         ok: false, 
         error: { 
           code: 'FETCH_ERROR', 
-          message: `Erro ao consultar dados: ${response.status}`, 
+          message: `Erro ao consultar dados: ${aggregationResponse.status}`, 
           details: errorText 
         },
         trace_id: traceId,
@@ -467,18 +634,22 @@ Deno.serve(async (req) => {
       }, 500)
     }
 
-    const rawRows = await response.json()
-    const totalCount = parseInt(response.headers.get('content-range')?.split('/')[1] || String(rawRows.length))
+    const allRows = await aggregationResponse.json()
+    const totalCount = parseInt(aggregationResponse.headers.get('content-range')?.split('/')[1] || String(allRows.length))
+    
+    // Detect if we hit the limit (data may be incomplete)
+    const dataLimited = allRows.length >= aggregation_limit
+    
+    console.log(`[${traceId}] Fetched ${allRows.length} rows for aggregation (total: ${totalCount}, limited: ${dataLimited})`)
 
-    console.log(`[${traceId}] Fetched ${rawRows.length} rows (total: ${totalCount})`)
-
-    // Get dashboard plan from spec or generate minimal plan
-    const spec = dashboard.dashboard_spec || {}
+    // =====================================================
+    // STEP 2: BUILD AGGREGATION PLAN
+    // =====================================================
     
     // Map KPIs - spec uses 'key' but aggregation code expects 'column'
     const mappedKpis = (spec.kpis || []).map((kpi: any) => ({
-      column: kpi.key || kpi.column,  // Support both formats
-      aggregation: kpi.aggregation || 'count',
+      column: kpi.key || kpi.column,
+      aggregation: kpi.aggregation || 'truthy_count', // Default to truthy_count for CRM
       label: kpi.label
     }))
     
@@ -486,15 +657,16 @@ Deno.serve(async (req) => {
     const funnelStages = spec.funnel?.stages || spec.funnel?.steps || []
     const mappedFunnel = funnelStages.length > 0 ? {
       stages: funnelStages.map((s: any) => ({
-        column: s.column || s.key,  // Support both formats
-        label: s.label,
-        truthy_count_expression: `truthy_count(${s.column || s.key})`
+        column: s.column || s.key,
+        label: s.label
       }))
     } : null
     
-    // Map charts - ensure series array uses correct column field
+    // Extract stage columns for quality analysis
+    const stageColumns = mappedFunnel?.stages?.map((s: any) => s.column) || []
+    
+    // Map charts
     const mappedCharts = (spec.charts || []).map((chart: any) => {
-      // If chart has metric/groupBy format (old format), convert to series format
       if (chart.metric && !chart.series) {
         return {
           ...chart,
@@ -513,23 +685,47 @@ Deno.serve(async (req) => {
     })
     
     const plan = {
-      time_column: timeColumn || spec.time?.column,
+      time_column: timeColumn,
       kpis: mappedKpis,
       charts: mappedCharts,
       rankings: [],
       funnel: mappedFunnel
     }
     
-    console.log(`[${traceId}] Plan: ${mappedKpis.length} KPIs, ${mappedFunnel?.stages?.length || 0} funnel stages, ${mappedCharts.length} charts`)
+    console.log(`[${traceId}] Plan: ${mappedKpis.length} KPIs, ${stageColumns.length} funnel stages, ${mappedCharts.length} charts`)
 
-    // Compute aggregations
-    const aggregations = computeAggregations(rawRows, plan, start || '2000-01-01', end || '2099-12-31')
+    // =====================================================
+    // STEP 3: DATA QUALITY ANALYSIS
+    // =====================================================
+    
+    const dataQuality = analyzeDataQuality(allRows, timeColumn, stageColumns)
+    
+    // Build warnings array from quality report
+    const warnings: DataQualityWarning[] = [...dataQuality.warnings]
+    
+    if (dataLimited) {
+      warnings.push({
+        code: 'DATA_LIMITED',
+        severity: 'warning',
+        message: `Dados limitados a ${aggregation_limit} linhas para performance. Total real: ${totalCount}`,
+        value: aggregation_limit
+      })
+    }
 
-    // Find date range from data
+    // =====================================================
+    // STEP 4: COMPUTE AGGREGATIONS (COMPLETE DATA)
+    // =====================================================
+    
+    const aggregations = computeAggregations(allRows, plan, start || '2000-01-01', end || '2099-12-31')
+
+    // =====================================================
+    // STEP 5: FIND DATE RANGE FROM DATA
+    // =====================================================
+    
     let dataDateRange = { min: null as string | null, max: null as string | null }
-    if (plan.time_column && rawRows.length > 0) {
-      const dates = rawRows
-        .map((r: Record<string, unknown>) => parseDate(r[plan.time_column!]))
+    if (timeColumn && allRows.length > 0) {
+      const dates = allRows
+        .map((r: Record<string, unknown>) => parseDate(r[timeColumn]))
         .filter((d: Date | null): d is Date => d !== null)
         .sort((a: Date, b: Date) => a.getTime() - b.getTime())
       
@@ -539,34 +735,67 @@ Deno.serve(async (req) => {
       }
     }
 
+    // =====================================================
+    // STEP 6: PREPARE PAGINATED ROWS FOR DETAILS TABLE
+    // =====================================================
+    
+    const startIndex = (page - 1) * pageSize
+    const endIndex = Math.min(startIndex + pageSize, allRows.length)
+    const paginatedRows = allRows.slice(startIndex, endIndex)
+    
+    const pagination = {
+      page,
+      pageSize,
+      total_rows: allRows.length,
+      total_pages: Math.ceil(allRows.length / pageSize),
+      has_more: endIndex < allRows.length
+    }
+
+    // =====================================================
+    // STEP 7: RETURN COMPLETE RESPONSE
+    // =====================================================
+
     return jsonResponse({
       ok: true,
       trace_id: traceId,
       
-      // Aggregated data (preferred for rendering)
+      // Aggregated data (COMPLETE - for KPIs, charts, funnel)
       aggregations,
       
-      // Raw data for table view
-      rows: rawRows,
+      // Paginated rows (for details table)
+      rows: paginatedRows,
+      pagination,
       
-      // Warnings (e.g., data quality issues)
-      warnings: [],
+      // Data quality information
+      data_quality: {
+        time_parse_rate: dataQuality.time_parse_rate,
+        truthy_rates: dataQuality.truthy_rates,
+        degraded_mode: dataQuality.degraded_mode,
+        total_rows_aggregated: allRows.length
+      },
+      
+      // Warnings
+      warnings,
       
       // Metadata
       meta: {
         dashboard_id,
         dataset_ref: `public.${objectName}`,
         range: { start, end },
-        rows_fetched: rawRows.length,
+        rows_fetched: allRows.length,
         rows_total: totalCount,
-        time_column: plan.time_column,
+        rows_displayed: paginatedRows.length,
+        data_limited: dataLimited,
+        time_column: timeColumn,
         date_range: dataDateRange,
         has_spec: Object.keys(spec).length > 0,
-        trace_id: traceId
+        trace_id: traceId,
+        aggregation_complete: !dataLimited || allRows.length >= totalCount
       }
     })
 
   } catch (error: any) {
+    const traceId = crypto.randomUUID().slice(0, 8)
     console.error(`[${traceId}] Error in dashboard-data-v2:`, error)
     return jsonResponse({ 
       ok: false, 
