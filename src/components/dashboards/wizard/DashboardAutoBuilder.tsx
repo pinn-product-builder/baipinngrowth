@@ -415,8 +415,9 @@ export default function DashboardAutoBuilder({
       // Call dashboard-data edge function with a wide date range to test connectivity
       const { data: result, error } = await supabase.functions.invoke('dashboard-data', {
         body: {
-          // We need a temporary dashboard context, use directView approach
+          // Direct mode: pass view + datasource_id explicitly
           view: datasetData.object_name,
+          datasource_id: datasetData.datasource_id,
           start: '2020-01-01',
           end: '2030-12-31',
           limit: '100'
