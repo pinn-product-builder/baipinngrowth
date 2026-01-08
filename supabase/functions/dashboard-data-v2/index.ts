@@ -454,19 +454,53 @@ Deno.serve(async (req) => {
 
     // Get dashboard plan from spec or generate minimal plan
     const spec = dashboard.dashboard_spec || {}
+    
+    // Map KPIs - spec uses 'key' but aggregation code expects 'column'
+    const mappedKpis = (spec.kpis || []).map((kpi: any) => ({
+      column: kpi.key || kpi.column,  // Support both formats
+      aggregation: kpi.aggregation || 'count',
+      label: kpi.label
+    }))
+    
+    // Map funnel - spec may use 'stages' or 'steps'
+    const funnelStages = spec.funnel?.stages || spec.funnel?.steps || []
+    const mappedFunnel = funnelStages.length > 0 ? {
+      stages: funnelStages.map((s: any) => ({
+        column: s.column || s.key,  // Support both formats
+        label: s.label,
+        truthy_count_expression: `truthy_count(${s.column || s.key})`
+      }))
+    } : null
+    
+    // Map charts - ensure series array uses correct column field
+    const mappedCharts = (spec.charts || []).map((chart: any) => {
+      // If chart has metric/groupBy format (old format), convert to series format
+      if (chart.metric && !chart.series) {
+        return {
+          ...chart,
+          id: chart.id || chart.label || chart.metric,
+          series: [{ column: chart.metric, label: chart.label }]
+        }
+      }
+      return {
+        ...chart,
+        id: chart.id || chart.label,
+        series: Array.isArray(chart.series) ? chart.series.map((s: any) => ({
+          column: s.column || s.key,
+          label: s.label
+        })) : []
+      }
+    })
+    
     const plan = {
       time_column: timeColumn || spec.time?.column,
-      kpis: spec.kpis || [],
-      charts: spec.charts || [],
+      kpis: mappedKpis,
+      charts: mappedCharts,
       rankings: [],
-      funnel: spec.funnel ? {
-        stages: spec.funnel.steps?.map((s: any) => ({
-          column: s.column,
-          label: s.label,
-          truthy_count_expression: `truthy_count(${s.column})`
-        })) || []
-      } : null
+      funnel: mappedFunnel
     }
+    
+    console.log(`[${traceId}] Plan: ${mappedKpis.length} KPIs, ${mappedFunnel?.stages?.length || 0} funnel stages, ${mappedCharts.length} charts`)
 
     // Compute aggregations
     const aggregations = computeAggregations(rawRows, plan, start || '2000-01-01', end || '2099-12-31')
