@@ -199,13 +199,17 @@ function computeAggregations(
     
     // Compute series for each chart
     for (const chart of plan.charts || []) {
+      // Skip charts without valid series array
+      const seriesArray = Array.isArray(chart.series) ? chart.series : []
+      if (seriesArray.length === 0) continue
+      
       const chartSeries: Record<string, number>[] = []
       
       for (const dateKey of sortedDates) {
         const dateRows = byDate.get(dateKey)!
         const point: Record<string, number> = { date: new Date(dateKey).getTime() }
         
-        for (const s of chart.series) {
+        for (const s of seriesArray) {
           // Sum or truthy_count depending on column type
           const kpiDef = plan.kpis.find((k: any) => k.column === s.column)
           
