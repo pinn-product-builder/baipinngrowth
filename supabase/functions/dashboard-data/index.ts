@@ -302,6 +302,7 @@ Deno.serve(async (req) => {
     let section: string = 'legacy' // Default to legacy for backwards compatibility
     let orgId: string | null = null
     let directView: string | null = null // For direct view access without dashboard
+    let dateColumn: string | null = null // For direct view date filtering
 
     if (req.method === 'POST') {
       try {
@@ -313,6 +314,7 @@ Deno.serve(async (req) => {
         section = body.section || 'legacy'
         orgId = body.orgId || body.org_id || null
         directView = body.view || null
+        dateColumn = body.date_column || null
       } catch (e) {
         console.error('Failed to parse request body:', e)
         return new Response(JSON.stringify({ error: 'Corpo da requisição inválido' }), {
@@ -329,6 +331,7 @@ Deno.serve(async (req) => {
       section = url.searchParams.get('section') || 'legacy'
       orgId = url.searchParams.get('org_id')
       directView = url.searchParams.get('view')
+      dateColumn = url.searchParams.get('date_column')
     }
 
     // Support direct view access (without dashboard_id) - uses user's tenant context
@@ -444,13 +447,7 @@ Deno.serve(async (req) => {
         })
       }
       
-      // Fetch the view directly without date filtering first to discover columns
-      // Then filter if date column is provided in request
-      const url = new URL(req.url)
-      const dateColumn = req.method === 'POST' 
-        ? (await req.clone().json()).date_column 
-        : url.searchParams.get('date_column')
-      
+      // Fetch the view directly - only filter by date if date_column was provided
       const result = await fetchFromView(
         remoteUrl,
         remoteKey,
@@ -459,7 +456,7 @@ Deno.serve(async (req) => {
         dateColumn ? start : null,  // Only filter by date if column is specified
         dateColumn ? end : null,
         limit,
-        dateColumn || null,
+        dateColumn,
         !!dateColumn
       )
       
