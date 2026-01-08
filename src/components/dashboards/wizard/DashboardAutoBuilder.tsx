@@ -412,15 +412,12 @@ export default function DashboardAutoBuilder({
       // Determine time column from spec or diagnostics
       const timeColumn = generatedSpec.time?.column || diagnostics?.time_column || 'created_at';
       
-      // Call dashboard-data edge function with a wide date range to test connectivity
-      const { data: result, error } = await supabase.functions.invoke('dashboard-data', {
+      // Call dataset-preview edge function (not dashboard-data, since no dashboard exists yet)
+      const { data: result, error } = await supabase.functions.invoke('dataset-preview', {
         body: {
-          // Direct mode: pass view + datasource_id explicitly
           view: datasetData.object_name,
           datasource_id: datasetData.datasource_id,
-          start: '2020-01-01',
-          end: '2030-12-31',
-          limit: '100'
+          limit: 100
         }
       });
       
