@@ -21,11 +21,18 @@ import {
 import { cn } from '@/lib/utils';
 import { formatColumnValue, getColumnLabel, FUNNEL_STAGES, FUNNEL_STAGES_V3, RATE_METRICS, RATE_METRICS_V3 } from './labelMap';
 
+interface FunnelStageData {
+  stage: string;
+  count: number;
+  rate?: number;
+}
+
 interface ExecutiveFunnelProps {
   data: Record<string, number>;
   previousData?: Record<string, number>;
   comparisonEnabled?: boolean;
   className?: string;
+  funnelStages?: FunnelStageData[];
 }
 
 const STAGE_ICONS: Record<string, React.ElementType> = {
@@ -64,9 +71,15 @@ export default function ExecutiveFunnel({
   previousData,
   comparisonEnabled = false,
   className,
+  funnelStages: precomputedStages,
 }: ExecutiveFunnelProps) {
-  // Get funnel stages that exist in data - check v3 first, then legacy
+  // Get funnel stages - prefer precomputed from v2, otherwise derive from data
   const stages = useMemo(() => {
+    // If precomputed stages from dashboard-data-v2, use them
+    if (precomputedStages && precomputedStages.length > 0) {
+      return precomputedStages.map(s => s.stage);
+    }
+    
     // Check if we have v3 data
     const hasV3Data = FUNNEL_STAGES_V3.some(stage => 
       data[stage] !== undefined && isFinite(data[stage])
@@ -77,21 +90,48 @@ export default function ExecutiveFunnel({
     return stageList.filter(stage => 
       data[stage] !== undefined && isFinite(data[stage])
     );
-  }, [data]);
+  }, [data, precomputedStages]);
+  
+  // Use precomputed data values if available
+  const stageData = useMemo(() => {
+    if (precomputedStages && precomputedStages.length > 0) {
+      const dataMap: Record<string, number> = {};
+      precomputedStages.forEach(s => {
+        dataMap[s.stage] = s.count;
+      });
+      return dataMap;
+    }
+    return data;
+  }, [data, precomputedStages]);
   
   const maxValue = useMemo(() => {
-    return Math.max(...stages.map(s => data[s] || 0), 1);
-  }, [stages, data]);
+    return Math.max(...stages.map(s => stageData[s] || 0), 1);
+  }, [stages, stageData]);
   
-  // Calculate rates between stages
+  // Calculate rates between stages - use precomputed rates if available
   const stageRates = useMemo(() => {
+    // If we have precomputed rates from v2
+    if (precomputedStages && precomputedStages.length > 0) {
+      const rates: Record<string, number> = {};
+      for (let i = 1; i < precomputedStages.length; i++) {
+        const prev = precomputedStages[i - 1];
+        const curr = precomputedStages[i];
+        if (curr.rate !== undefined) {
+          rates[`${prev.stage}_to_${curr.stage}`] = curr.rate;
+        } else if (prev.count > 0) {
+          rates[`${prev.stage}_to_${curr.stage}`] = curr.count / prev.count;
+        }
+      }
+      return rates;
+    }
+    
     const rates: Record<string, number> = {};
     
     for (let i = 1; i < stages.length; i++) {
       const prev = stages[i - 1];
       const curr = stages[i];
-      const prevVal = data[prev] || 0;
-      const currVal = data[curr] || 0;
+      const prevVal = stageData[prev] || 0;
+      const currVal = stageData[curr] || 0;
       
       if (prevVal > 0) {
         rates[`${prev}_to_${curr}`] = currVal / prevVal;
@@ -99,7 +139,7 @@ export default function ExecutiveFunnel({
     }
     
     return rates;
-  }, [stages, data]);
+  }, [stages, stageData, precomputedStages]);
   
   // Detect bottleneck (stage with highest drop rate)
   const bottleneck = useMemo((): BottleneckInfo | null => {
@@ -129,7 +169,7 @@ export default function ExecutiveFunnel({
   // Calculate variation for a stage
   const getVariation = (stage: string) => {
     if (!comparisonEnabled || !previousData?.[stage]) return null;
-    const current = data[stage] || 0;
+    const current = stageData[stage] || 0;
     const previous = previousData[stage] || 0;
     if (previous === 0) return null;
     return ((current - previous) / previous) * 100;
@@ -141,19 +181,19 @@ export default function ExecutiveFunnel({
     
     // Check if we have v3 rates
     const hasV3Rates = RATE_METRICS_V3.some(key => 
-      data[key] !== undefined && isFinite(data[key])
+      stageData[key] !== undefined && isFinite(stageData[key])
     );
     
     const metricList = hasV3Rates ? [...RATE_METRICS_V3] : [...RATE_METRICS];
     
     metricList.forEach(key => {
-      if (data[key] !== undefined && isFinite(data[key])) {
-        result.push({ key, value: data[key] });
+      if (stageData[key] !== undefined && isFinite(stageData[key])) {
+        result.push({ key, value: stageData[key] });
       }
     });
     
     return result;
-  }, [data]);
+  }, [stageData]);
   
   if (stages.length < 2) return null;
   
@@ -197,7 +237,7 @@ export default function ExecutiveFunnel({
           {/* Funnel visualization */}
           <div className="lg:col-span-2 space-y-3">
             {stages.map((stage, index) => {
-              const value = data[stage] || 0;
+              const value = stageData[stage] || 0;
               const widthPercent = (value / maxValue) * 100;
               const Icon = STAGE_ICONS[stage] || Users;
               const colors = STAGE_COLORS[index % STAGE_COLORS.length];

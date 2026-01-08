@@ -202,6 +202,15 @@ export default function ModernDashboardViewer({
   const [compatibilityMode, setCompatibilityMode] = useState(false);
   const [availableDateRange, setAvailableDateRange] = useState<{ min: string; max: string } | null>(null);
   
+  // V2 computed data from dashboard-data-v2
+  const [v2Aggregations, setV2Aggregations] = useState<{
+    kpis: Record<string, number>;
+    funnel: { stage: string; count: number; rate?: number }[];
+    series: { date: string; [key: string]: any }[];
+    rankings: Record<string, { value: string; count: number }[]>;
+  } | null>(null);
+  const [renderingMode, setRenderingMode] = useState<'spec' | 'template' | 'compatibility'>('template');
+  
   // Parse dashboard spec
   const dashboardSpec = useMemo<DashboardSpec | null>(() => {
     if (!rawDashboardSpec || Object.keys(rawDashboardSpec).length === 0) {
@@ -349,7 +358,7 @@ export default function ModernDashboardViewer({
     return sums;
   }, [previousData]);
 
-  // Fetch data using supabase.functions.invoke
+  // Fetch data - prioritize dashboard-data-v2 when spec exists
   const fetchData = useCallback(async (fetchPrev = false) => {
     setIsRefreshing(true);
     setError(null);
@@ -369,10 +378,51 @@ export default function ModernDashboardViewer({
       const startStr = format(dateRange.start, 'yyyy-MM-dd');
       const endStr = format(dateRange.end, 'yyyy-MM-dd');
       
+      // Determine rendering mode based on spec
+      const hasValidSpec = dashboardSpec && Object.keys(dashboardSpec).length > 0;
+      
+      if (hasValidSpec) {
+        // Try dashboard-data-v2 first for spec-first rendering
+        try {
+          const { data: v2Result, error: v2Error } = await supabase.functions.invoke('dashboard-data-v2', {
+            body: {
+              dashboard_id: dashboardId,
+              start: startStr,
+              end: endStr,
+            },
+          });
+
+          if (!v2Error && v2Result?.ok) {
+            // Use V2 computed data
+            setV2Aggregations({
+              kpis: v2Result.aggregations?.kpis || {},
+              funnel: v2Result.aggregations?.funnel || [],
+              series: v2Result.aggregations?.series || [],
+              rankings: v2Result.aggregations?.rankings || {},
+            });
+            setRawData(v2Result.raw_sample || []);
+            setAvailableDateRange(v2Result.data_date_range || null);
+            setRenderingMode('spec');
+            setLastUpdated(new Date());
+            
+            console.log('[Viewer] Using spec-first rendering with dashboard-data-v2');
+            return;
+          }
+          
+          // V2 failed, fallback to legacy
+          console.warn('[Viewer] dashboard-data-v2 failed, falling back to legacy:', v2Error);
+        } catch (v2Err) {
+          console.warn('[Viewer] dashboard-data-v2 exception, falling back to legacy:', v2Err);
+        }
+      }
+      
+      // Fallback to legacy dashboard-data
+      setRenderingMode(hasValidSpec ? 'spec' : 'template');
+      
       const { data: result, error: fnError } = await supabase.functions.invoke('dashboard-data', {
         body: {
           dashboard_id: dashboardId,
-          section: 'legacy', // Use legacy section to fetch dashboard's specific view
+          section: 'legacy',
           start: startStr,
           end: endStr,
         },
@@ -437,6 +487,7 @@ export default function ModernDashboardViewer({
       // Handle response - prefer 'daily' for time series, fallback to 'data'
       const dailyData = result?.daily || result?.data || [];
       setRawData(dailyData);
+      setV2Aggregations(null); // Clear v2 aggregations when using legacy
       setLastUpdated(new Date());
 
       // Fetch previous period if comparison enabled
@@ -476,7 +527,7 @@ export default function ModernDashboardViewer({
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [dashboardId, dateRange, previousRange, toast]);
+  }, [dashboardId, dashboardSpec, dateRange, previousRange, toast]);
 
   // Initial fetch
   useEffect(() => {
@@ -821,6 +872,11 @@ export default function ModernDashboardViewer({
                 Spec v{dashboardSpec.version}
               </Badge>
             )}
+            {renderingMode === 'spec' && v2Aggregations && (
+              <Badge variant="outline" className="text-xs text-green-600 border-green-600/50">
+                Spec-first
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {lastUpdated && (
@@ -897,20 +953,21 @@ export default function ModernDashboardViewer({
               </div>
             )}
 
-            {/* KPIs - single row */}
+            {/* KPIs - use v2Aggregations if available */}
             <ExecutiveKPIRow
-              data={aggregatedData}
+              data={v2Aggregations?.kpis || aggregatedData}
               previousData={comparisonEnabled ? previousAggregated : undefined}
-              dailyData={data}
+              dailyData={v2Aggregations?.series || data}
               goals={templateConfig.goals}
               comparisonEnabled={comparisonEnabled}
             />
 
-            {/* Funnel compact */}
+            {/* Funnel - use v2Aggregations if available */}
             <ExecutiveFunnel
-              data={aggregatedData}
+              data={v2Aggregations?.kpis || aggregatedData}
               previousData={comparisonEnabled ? previousAggregated : undefined}
               comparisonEnabled={comparisonEnabled}
+              funnelStages={v2Aggregations?.funnel}
             />
 
             {/* Trend charts (2 main ones) */}
