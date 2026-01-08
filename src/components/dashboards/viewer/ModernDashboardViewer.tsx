@@ -28,6 +28,7 @@ import ExecutiveFunnel from './ExecutiveFunnel';
 import ExecutiveTrendCharts from './ExecutiveTrendCharts';
 import DiagnosticsPanel from './DiagnosticsPanel';
 import DecisionCenter from './DecisionCenterV2';
+import DebugPanel from './DebugPanel';
 
 interface ModernDashboardViewerProps {
   dashboardId: string;
@@ -360,6 +361,19 @@ export default function ModernDashboardViewer({
 
   // Fetch data - prioritize dashboard-data-v2 when spec exists
   const fetchData = useCallback(async (fetchPrev = false) => {
+    // Validate dashboard_id before calling
+    if (!dashboardId) {
+      console.warn('[Viewer] Missing dashboard_id - cannot fetch data');
+      setError({
+        message: 'Dashboard inválido',
+        code: 'INVALID_DASHBOARD',
+        type: 'validation',
+        details: 'O ID do dashboard não está definido.',
+      });
+      setIsLoading(false);
+      return;
+    }
+
     setIsRefreshing(true);
     setError(null);
     setSessionExpired(false);
@@ -384,6 +398,8 @@ export default function ModernDashboardViewer({
       if (hasValidSpec) {
         // Try dashboard-data-v2 first for spec-first rendering
         try {
+          console.log(`[Viewer] Calling dashboard-data-v2 for ${dashboardId}`);
+          
           const { data: v2Result, error: v2Error } = await supabase.functions.invoke('dashboard-data-v2', {
             body: {
               dashboard_id: dashboardId,
@@ -392,26 +408,45 @@ export default function ModernDashboardViewer({
             },
           });
 
-          if (!v2Error && v2Result?.ok) {
+          if (v2Error) {
+            console.warn('[Viewer] dashboard-data-v2 invocation error:', v2Error);
+            // Will fallback to legacy
+          } else if (v2Result?.ok) {
             // Use V2 computed data
+            const meta = v2Result.meta || {};
+            console.log(`[Viewer] V2 success: ${meta.rows_fetched || 0} rows, trace_id=${meta.trace_id}`);
+            
             setV2Aggregations({
               kpis: v2Result.aggregations?.kpis || {},
               funnel: v2Result.aggregations?.funnel || [],
               series: v2Result.aggregations?.series || [],
               rankings: v2Result.aggregations?.rankings || {},
             });
-            setRawData(v2Result.raw_sample || []);
-            setAvailableDateRange(v2Result.data_date_range || null);
+            setRawData(v2Result.rows || []);
+            setAvailableDateRange(meta.date_range || null);
             setRenderingMode('spec');
             setLastUpdated(new Date());
             
-            console.log('[Viewer] Using spec-first rendering with dashboard-data-v2');
             return;
+          } else if (v2Result && !v2Result.ok && v2Result.error) {
+            // V2 returned structured error
+            console.error('[Viewer] dashboard-data-v2 error response:', v2Result.error);
+            throw {
+              message: v2Result.error.message || 'Erro ao carregar dados',
+              code: v2Result.error.code,
+              type: v2Result.error.code,
+              details: v2Result.error.details,
+              trace_id: v2Result.trace_id || v2Result.meta?.trace_id,
+            };
           }
           
-          // V2 failed, fallback to legacy
-          console.warn('[Viewer] dashboard-data-v2 failed, falling back to legacy:', v2Error);
-        } catch (v2Err) {
+          // V2 returned unexpected format, fallback to legacy
+          console.warn('[Viewer] dashboard-data-v2 unexpected response, falling back to legacy');
+        } catch (v2Err: any) {
+          // If it's a structured error from our throw above, re-throw it
+          if (v2Err.code) {
+            throw v2Err;
+          }
           console.warn('[Viewer] dashboard-data-v2 exception, falling back to legacy:', v2Err);
         }
       }
@@ -861,6 +896,16 @@ export default function ModernDashboardViewer({
 
   return (
     <div className="space-y-6">
+      {/* Debug Panel - Admin only */}
+      {isAdminOrManager && (
+        <DebugPanel
+          dashboardId={dashboardId}
+          dashboardName={dashboardName}
+          dateRange={dateRange}
+          isAdminOrManager={isAdminOrManager}
+        />
+      )}
+
       {/* Sticky Header Bar */}
       <div className="sticky top-0 z-20 bg-background/95 backdrop-blur-sm pb-4 -mx-1 px-1 pt-1">
         {/* Top info bar */}
