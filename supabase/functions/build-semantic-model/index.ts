@@ -56,12 +56,14 @@ async function decrypt(ciphertext: string): Promise<string> {
 
 type SemanticRole = 
   | 'time'           // Primary time axis (date/datetime)
-  | 'id'             // Unique identifier (for count_distinct)
+  | 'id'             // Unique identifier (for count_distinct) - NEVER show in UI
+  | 'code'           // Internal code/token - NEVER show in UI
   | 'stage_flag'     // Boolean-like indicating funnel stage (entrada, qualificado, venda)
   | 'metric'         // Numeric value to aggregate (custo, receita)
   | 'dimension'      // Categorical for grouping (vendedora, unidade, origem)
   | 'rate'           // Pre-calculated percentage
   | 'text'           // Generic text
+  | 'ignore'         // Column to be ignored completely
   | 'unknown'
 
 interface ColumnStats {
@@ -81,11 +83,15 @@ interface SemanticColumn {
   db_type: string
   semantic_role: SemanticRole
   display_label: string
-  aggregator: 'sum' | 'count' | 'count_distinct' | 'avg' | 'none'
+  aggregator: 'sum' | 'count' | 'count_distinct' | 'avg' | 'none' | 'truthy_count'
   format: 'currency' | 'percent' | 'integer' | 'float' | 'date' | 'text'
   stats: ColumnStats
   confidence: number          // 0-1 how confident in the classification
   notes: string[]             // Explanation of why classified this way
+  usable_as_filter: boolean   // Can be used as a filter
+  usable_in_kpi: boolean      // Can be used in KPIs
+  usable_in_chart: boolean    // Can be used in charts
+  ignore_in_ui: boolean       // Should be hidden from visualization
 }
 
 interface FunnelStage {
@@ -164,28 +170,51 @@ function parseNumeric(value: any): number | null {
 
 // Stage name patterns (ordered by typical funnel position)
 const STAGE_PATTERNS: { pattern: RegExp; order: number; label: string }[] = [
-  { pattern: /^(entrada|entrou|lead_entrada)$/i, order: 1, label: 'Entrada' },
-  { pattern: /^(lead_ativo|ativo)$/i, order: 2, label: 'Lead Ativo' },
-  { pattern: /^(qualificado|qualificacao|lead_qualificado)$/i, order: 3, label: 'Qualificado' },
-  { pattern: /^(exp_agendada|agendado|agendamento)$/i, order: 4, label: 'Exp. Agendada' },
-  { pattern: /^(exp_realizada|realizada|compareceu)$/i, order: 5, label: 'Exp. Realizada' },
-  { pattern: /^(venda|fechou|ganho|vendido|convertido)$/i, order: 6, label: 'Venda' },
-  { pattern: /^(perdida|perdido|perdeu)$/i, order: 99, label: 'Perdido' },
-  { pattern: /^(aluno_ativo|cliente_ativo)$/i, order: 100, label: 'Ativo' },
+  { pattern: /^(st_)?entrada$/i, order: 1, label: 'Entrada' },
+  { pattern: /^(st_)?entrou$/i, order: 1, label: 'Entrada' },
+  { pattern: /^(st_)?lead_entrada$/i, order: 1, label: 'Entrada' },
+  { pattern: /^(st_)?lead_ativo$/i, order: 2, label: 'Lead Ativo' },
+  { pattern: /^(st_)?ativo$/i, order: 2, label: 'Lead Ativo' },
+  { pattern: /^(st_)?qualificado$/i, order: 3, label: 'Qualificado' },
+  { pattern: /^(st_)?qualificacao$/i, order: 3, label: 'Qualificado' },
+  { pattern: /^(st_)?lead_qualificado$/i, order: 3, label: 'Qualificado' },
+  { pattern: /^(st_)?exp_agendada$/i, order: 4, label: 'Exp. Agendada' },
+  { pattern: /^(st_)?agendado$/i, order: 4, label: 'Exp. Agendada' },
+  { pattern: /^(st_)?agendamento$/i, order: 4, label: 'Exp. Agendada' },
+  { pattern: /^(st_)?exp_realizada$/i, order: 5, label: 'Exp. Realizada' },
+  { pattern: /^(st_)?realizada$/i, order: 5, label: 'Exp. Realizada' },
+  { pattern: /^(st_)?compareceu$/i, order: 5, label: 'Exp. Realizada' },
+  { pattern: /^(st_)?venda$/i, order: 6, label: 'Venda' },
+  { pattern: /^(st_)?fechou$/i, order: 6, label: 'Venda' },
+  { pattern: /^(st_)?ganho$/i, order: 6, label: 'Venda' },
+  { pattern: /^(st_)?vendido$/i, order: 6, label: 'Venda' },
+  { pattern: /^(st_)?convertido$/i, order: 6, label: 'Venda' },
+  { pattern: /^(st_)?perdida$/i, order: 99, label: 'Perdido' },
+  { pattern: /^(st_)?perdido$/i, order: 99, label: 'Perdido' },
+  { pattern: /^(st_)?perdeu$/i, order: 99, label: 'Perdido' },
+  { pattern: /^(st_)?aluno_ativo$/i, order: 100, label: 'Aluno Ativo' },
+  { pattern: /^(st_)?cliente_ativo$/i, order: 100, label: 'Cliente Ativo' },
 ]
 
 const TIME_PATTERNS = [
   'created_at', 'updated_at', 'inserted_at', 'data', 'dia', 'day', 'date', 
-  'timestamp', 'created', 'updated', 'dt_', 'data_'
+  'timestamp', 'created', 'updated', 'dt_', 'data_', 'created_at_ts'
 ]
 
-const ID_PATTERNS = ['lead_id', 'id', 'uuid', '_id', 'codigo', 'code']
+// ID patterns - columns that should be IGNORED in visualization
+const ID_PATTERNS = ['lead_id', 'id', 'uuid', '_id', 'codigo', 'code', 'idd', 'token', 'hash', 'key', 'ref']
+
+// Columns to ALWAYS ignore in UI (codes, internal IDs, etc.)
+const IGNORE_PATTERNS = [
+  'token', 'hash', 'secret', 'password', 'api_key', 
+  'internal_id', 'external_id', 'legacy_id', 'old_id'
+]
 
 const CURRENCY_PATTERNS = ['custo', 'valor', 'preco', 'price', 'spend', 'investimento', 'receita', 'faturamento']
 
 const RATE_PATTERNS = ['taxa_', 'rate', 'conv_', 'pct_', 'percent']
 
-const DIMENSION_PATTERNS = ['vendedor', 'vendedora', 'unidade', 'origem', 'fonte', 'source', 'canal', 'modalidade', 'categoria', 'tipo', 'campanha', 'campaign']
+const DIMENSION_PATTERNS = ['vendedor', 'vendedora', 'unidade', 'origem', 'fonte', 'source', 'canal', 'modalidade', 'categoria', 'tipo', 'campanha', 'campaign', 'retencao']
 
 function generateLabel(name: string): string {
   const labelMap: Record<string, string> = {
@@ -319,65 +348,110 @@ function buildSemanticModel(
     let aggregator: SemanticColumn['aggregator'] = 'none'
     let format: SemanticColumn['format'] = 'text'
     let confidence = 0.5
+    let usable_as_filter = false
+    let usable_in_kpi = false
+    let usable_in_chart = false
+    let ignore_in_ui = false
+
+    // 0. Check if this column should be IGNORED completely
+    const shouldIgnore = IGNORE_PATTERNS.some(p => lowerName.includes(p))
+    if (shouldIgnore) {
+      role = 'ignore'
+      confidence = 1.0
+      ignore_in_ui = true
+      notes.push('Coluna ignorada por conter padrão sensível/interno')
+    }
 
     // 1. Check for TIME column
-    const isTimeByName = TIME_PATTERNS.some(p => lowerName === p || lowerName.startsWith(p) || lowerName.includes('created') || lowerName.includes('updated'))
-    const isTimeByValue = dateParseRate > 0.7
-    
-    if (isTimeByName && isTimeByValue) {
-      role = 'time'
-      aggregator = 'none'
-      format = 'date'
-      confidence = 1.0
-      notes.push('Nome e valores confirmam coluna de tempo')
+    if (role === 'unknown' || role === 'ignore') {
+      const isTimeByName = TIME_PATTERNS.some(p => lowerName === p || lowerName.startsWith(p) || lowerName.includes('created') || lowerName.includes('updated'))
+      const isTimeByValue = dateParseRate > 0.7
       
-      if (!timeColumn) {
-        timeColumn = colName
-        // Extract date range
-        const dates = nonNull.filter(v => looksLikeDate(v)).sort()
-        if (dates.length > 0) {
-          dateMin = String(dates[0])
-          dateMax = String(dates[dates.length - 1])
+      if (isTimeByName && isTimeByValue) {
+        role = 'time'
+        aggregator = 'none'
+        format = 'date'
+        confidence = 1.0
+        usable_as_filter = true
+        usable_in_chart = true
+        ignore_in_ui = false
+        notes.push('Nome e valores confirmam coluna de tempo')
+        
+        if (!timeColumn) {
+          timeColumn = colName
+          // Extract date range
+          const dates = nonNull.filter(v => looksLikeDate(v)).sort()
+          if (dates.length > 0) {
+            dateMin = String(dates[0])
+            dateMax = String(dates[dates.length - 1])
+          }
         }
+      } else if (isTimeByValue && !isTimeByName && role !== 'ignore') {
+        role = 'time'
+        format = 'date'
+        confidence = 0.8
+        usable_as_filter = true
+        usable_in_chart = true
+        notes.push('Valores parecem datas mas nome não é típico')
+        assumptions.push(`Coluna ${colName} classificada como tempo por valores`)
+      } else if (isTimeByName && !isTimeByValue) {
+        warnings.push(`Coluna ${colName} tem nome de tempo mas valores não parseiam (${Math.round(dateParseRate * 100)}% válidos)`)
       }
-    } else if (isTimeByValue && !isTimeByName) {
-      role = 'time'
-      format = 'date'
-      confidence = 0.8
-      notes.push('Valores parecem datas mas nome não é típico')
-      assumptions.push(`Coluna ${colName} classificada como tempo por valores`)
-    } else if (isTimeByName && !isTimeByValue) {
-      warnings.push(`Coluna ${colName} tem nome de tempo mas valores não parseiam (${Math.round(dateParseRate * 100)}% válidos)`)
     }
 
-    // 2. Check for ID column
+    // 2. Check for ID/CODE column - MUST be ignored in UI but can be used for count_distinct
     if (role === 'unknown') {
-      const isIdByName = ID_PATTERNS.some(p => lowerName === p || lowerName.endsWith(p))
+      const isIdByName = ID_PATTERNS.some(p => lowerName === p || lowerName.endsWith(p) || lowerName.startsWith(p))
       const highCardinality = distinctCount > sampleRows.length * 0.5
+      const veryHighCardinality = distinctCount > sampleRows.length * 0.8
       
       if (isIdByName && highCardinality) {
-        role = 'id'
-        aggregator = 'count_distinct'
-        format = 'integer'
-        confidence = 0.9
-        notes.push('Padrão de ID com alta cardinalidade')
+        // Check if this is the PRIMARY ID (lead_id preferred)
+        const isPreferredId = lowerName.includes('lead') || lowerName === 'id'
         
-        if (!idColumn && lowerName.includes('lead')) {
+        if (isPreferredId && !idColumn) {
           idColumn = colName
+          role = 'id'
+          aggregator = 'count_distinct'
+          format = 'integer'
+          confidence = 0.95
+          usable_in_kpi = true  // For count_distinct(lead_id)
+          ignore_in_ui = true   // Never show in tables/charts
+          notes.push('ID primário escolhido para count_distinct')
+        } else {
+          // Secondary ID - completely ignore
+          role = 'code'
+          aggregator = 'none'
+          format = 'text'
+          confidence = 0.9
+          ignore_in_ui = true
+          notes.push('ID/código secundário - ignorado na visualização')
         }
+      } else if (veryHighCardinality && !isIdByName) {
+        // High cardinality without ID pattern - likely code/token
+        role = 'code'
+        aggregator = 'none'
+        format = 'text'
+        confidence = 0.7
+        ignore_in_ui = true
+        notes.push('Alta cardinalidade sugere código interno - ignorado')
+        assumptions.push(`Coluna ${colName} tem ${distinctCount}/${sampleRows.length} valores únicos, tratada como código`)
       }
     }
 
-    // 3. Check for STAGE_FLAG (funnel stages)
+    // 3. Check for STAGE_FLAG (funnel stages) - USE truthy_count aggregation
     if (role === 'unknown') {
       const stageMatch = STAGE_PATTERNS.find(s => s.pattern.test(lowerName))
       
-      if (stageMatch && booleanLikeRate > 0.7) {
+      if (stageMatch) {
         role = 'stage_flag'
-        aggregator = 'sum'  // Will count truthy values
+        aggregator = 'truthy_count'  // CRITICAL: use truthy_count, not sum
         format = 'integer'
-        confidence = 0.95
-        notes.push(`Etapa de funil: ${stageMatch.label}`)
+        confidence = booleanLikeRate > 0.7 ? 0.95 : 0.8
+        usable_in_kpi = true
+        usable_in_chart = true
+        usable_as_filter = true
+        notes.push(`Etapa de funil: ${stageMatch.label} (truthy_count)`)
         
         funnelStages.push({
           column: colName,
@@ -388,9 +462,11 @@ function buildSemanticModel(
       } else if (booleanLikeRate > 0.8 && distinctCount <= 5) {
         // Boolean-like but not a known stage
         role = 'stage_flag'
-        aggregator = 'sum'
+        aggregator = 'truthy_count'
         format = 'integer'
         confidence = 0.7
+        usable_in_kpi = true
+        usable_as_filter = true
         notes.push('Parece flag booleano (alto boolean_like_rate)')
         assumptions.push(`Coluna ${colName} tratada como flag por ter ${Math.round(booleanLikeRate * 100)}% valores booleanos`)
       }
@@ -406,6 +482,8 @@ function buildSemanticModel(
         aggregator = 'sum'
         format = 'currency'
         confidence = 0.9
+        usable_in_kpi = true
+        usable_in_chart = true
         notes.push('Padrão de moeda por nome')
         metrics.push(colName)
       } else if (isRate) {
@@ -413,6 +491,8 @@ function buildSemanticModel(
         aggregator = 'avg'
         format = 'percent'
         confidence = 0.9
+        usable_in_kpi = true
+        usable_in_chart = true
         notes.push('Padrão de taxa/percentual')
         metrics.push(colName)
       } else if (lowerName.endsWith('_total') || lowerName.includes('count') || lowerName.includes('qtd')) {
@@ -420,6 +500,8 @@ function buildSemanticModel(
         aggregator = 'sum'
         format = 'integer'
         confidence = 0.85
+        usable_in_kpi = true
+        usable_in_chart = true
         notes.push('Padrão de contagem/total')
         metrics.push(colName)
       } else {
@@ -428,22 +510,30 @@ function buildSemanticModel(
         aggregator = 'sum'
         format = 'float'
         confidence = 0.6
+        usable_in_kpi = true
+        usable_in_chart = true
         notes.push('Numérico genérico')
         metrics.push(colName)
       }
     }
 
-    // 5. Check for DIMENSION
+    // 5. Check for DIMENSION (categorical columns for grouping/filtering)
     if (role === 'unknown') {
       const isDimensionByName = DIMENSION_PATTERNS.some(p => lowerName.includes(p))
       const isCategorical = distinctCount >= 2 && distinctCount <= 100 && distinctCount < sampleRows.length * 0.3
+      const hasReasonableCardinalityForFilter = distinctCount >= 2 && distinctCount <= 500
       
       if (isDimensionByName || isCategorical) {
         role = 'dimension'
         aggregator = 'none'
         format = 'text'
         confidence = isDimensionByName ? 0.9 : 0.7
+        usable_as_filter = hasReasonableCardinalityForFilter
+        usable_in_chart = true
         notes.push(isDimensionByName ? 'Padrão de dimensão por nome' : 'Baixa cardinalidade sugere dimensão')
+        if (hasReasonableCardinalityForFilter) {
+          notes.push(`Adequado para filtro (${distinctCount} valores distintos)`)
+        }
         dimensions.push(colName)
       }
     }
@@ -465,7 +555,11 @@ function buildSemanticModel(
       format,
       stats,
       confidence,
-      notes
+      notes,
+      usable_as_filter,
+      usable_in_kpi,
+      usable_in_chart,
+      ignore_in_ui
     })
   }
 

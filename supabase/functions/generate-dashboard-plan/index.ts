@@ -210,7 +210,11 @@ function validatePlan(plan: any): { valid: boolean; errors: string[] } {
 
 function generateHeuristicPlan(semanticModel: any, userPrompt?: string): DashboardPlan {
   // Safely extract with defaults
-  const columns = semanticModel?.columns || []
+  const allColumns = semanticModel?.columns || []
+  
+  // CRITICAL: Filter out columns that should be ignored in UI
+  const columns = allColumns.filter((c: any) => !c.ignore_in_ui)
+  
   const time_column = semanticModel?.time_column
   const id_column = semanticModel?.id_column
   const funnel = semanticModel?.funnel
@@ -239,15 +243,17 @@ function generateHeuristicPlan(semanticModel: any, userPrompt?: string): Dashboa
     'st_perdida', 'perdida'
   ]
 
-  // Build labels and formatting maps
-  for (const col of columns) {
+  // Build labels and formatting maps (from ALL columns for lookups)
+  for (const col of allColumns) {
     labels[col.name] = col.display_label
     formatting[col.name] = col.format
   }
 
-  // 1. Build KPIs from metrics and stage_flags
-  const stageFlags = columns.filter((c: any) => c.semantic_role === 'stage_flag')
-  const metricCols = columns.filter((c: any) => c.semantic_role === 'metric' || c.semantic_role === 'rate')
+  // 1. Build KPIs - ONLY from columns with usable_in_kpi = true
+  const stageFlags = columns.filter((c: any) => c.semantic_role === 'stage_flag' && c.usable_in_kpi !== false)
+  const metricCols = columns.filter((c: any) => 
+    (c.semantic_role === 'metric' || c.semantic_role === 'rate') && c.usable_in_kpi !== false
+  )
   
   // Get funnel stages - use detected funnel or build from stage_flags
   let funnelStages = funnel?.stages || []
@@ -432,6 +438,56 @@ function generateHeuristicPlan(semanticModel: any, userPrompt?: string): Dashboa
     tiles: [{ id: 'data_table', type: 'table' }]
   })
 
+  // CRITICAL: Guarantee minimum KPIs - spec must never be empty
+  if (kpis.length === 0 && columns.length > 0) {
+    warnings.push('Nenhum KPI gerado pelos heurísticos, criando KPIs mínimos')
+    
+    // Try to find ANY column that could be a KPI
+    const anyNumeric = columns.find((c: any) => c.semantic_role === 'metric' || c.format === 'currency' || c.format === 'integer')
+    const anyStageFlag = columns.find((c: any) => c.semantic_role === 'stage_flag')
+    
+    if (anyStageFlag) {
+      kpis.push({
+        column: anyStageFlag.name,
+        label: anyStageFlag.display_label || anyStageFlag.name,
+        aggregation: 'truthy_count',
+        format: 'integer',
+        goal_direction: 'higher_better'
+      })
+    }
+    
+    if (anyNumeric) {
+      kpis.push({
+        column: anyNumeric.name,
+        label: anyNumeric.display_label || anyNumeric.name,
+        aggregation: anyNumeric.format === 'percent' ? 'avg' : 'sum',
+        format: anyNumeric.format as 'currency' | 'integer' | 'percent' | 'float' || 'integer',
+        goal_direction: anyNumeric.name.includes('custo') ? 'lower_better' : 'higher_better'
+      })
+    }
+    
+    // If still empty, add a count of rows KPI
+    if (kpis.length === 0 && id_column) {
+      kpis.push({
+        column: id_column,
+        label: 'Total de Registros',
+        aggregation: 'count_distinct',
+        format: 'integer',
+        goal_direction: 'higher_better'
+      })
+    } else if (kpis.length === 0) {
+      // Last resort: use first column as count
+      const firstCol = columns[0]
+      kpis.push({
+        column: firstCol?.name || '*',
+        label: 'Total de Linhas',
+        aggregation: 'count',
+        format: 'integer',
+        goal_direction: 'higher_better'
+      })
+    }
+  }
+
   // Calculate confidence based on what we actually generated
   const confidence = (
     (kpis.length > 0 ? 0.3 : 0) +
@@ -539,10 +595,19 @@ async function generateLLMPlan(
   }
 
   try {
-    const columns = semanticModel?.columns || []
-    const columnSummary = columns.map((c: any) => 
-      `- ${c.name} (${c.semantic_role}, ${c.format || 'text'}): ${c.display_label}${c.stats?.distinct_count ? ` [${c.stats.distinct_count} unique]` : ''}`
+    const allColumns = semanticModel?.columns || []
+    // Filter out columns that should be ignored in UI for the summary
+    const visibleColumns = allColumns.filter((c: any) => !c.ignore_in_ui)
+    const columnSummary = visibleColumns.map((c: any) => 
+      `- ${c.name} (${c.semantic_role}, ${c.format || 'text'}): ${c.display_label}${c.stats?.distinct_count ? ` [${c.stats.distinct_count} unique]` : ''}${c.usable_in_kpi ? ' [KPI]' : ''}${c.usable_as_filter ? ' [FILTER]' : ''}`
     ).join('\n')
+    
+    // Log ignored columns
+    const ignoredColumns = allColumns.filter((c: any) => c.ignore_in_ui).map((c: any) => c.name)
+    if (ignoredColumns.length > 0) {
+      console.log(`Ignoring ${ignoredColumns.length} columns in LLM prompt: ${ignoredColumns.join(', ')}`)
+
+    }
 
     const funnelInfo = semanticModel.funnel?.detected 
       ? `Etapas: ${semanticModel.funnel.stages?.map((s: any) => `${s.label} (${s.column})`).join(' → ')}`
@@ -550,9 +615,9 @@ async function generateLLMPlan(
 
     const crmHints = crmMode ? `
 MODO CRM ATIVO:
-- Priorizar truthy_count para etapas (não count simples)
-- Priorizar count_distinct(lead_id) para total de leads
-- Priorizar dimensões: unidade, vendedora, origem, modalidade
+- OBRIGATÓRIO usar truthy_count para etapas de funil (não count simples)
+- OBRIGATÓRIO usar count_distinct(lead_id) para total de leads
+- Priorizar dimensões: unidade, vendedora, origem, modalidade, retencao
 - Tratar colunas text com nomes de etapa como stage_flag` : ''
 
     const userSection = userPrompt ? `\nREQUISITOS DO USUÁRIO:\n${userPrompt}` : ''
