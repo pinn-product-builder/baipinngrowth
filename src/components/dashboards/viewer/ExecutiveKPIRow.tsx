@@ -273,6 +273,9 @@ export default function ExecutiveKPIRow({
     const hasV3Data = EXECUTIVE_KPIS_V3.some(key => data[key] !== undefined && isFinite(data[key]));
     const kpiList = hasV3Data ? EXECUTIVE_KPIS_V3 : EXECUTIVE_KPIS;
     
+    // Ensure dailyData is always an array
+    const safeDaily = Array.isArray(dailyData) ? dailyData : [];
+    
     kpiList.forEach(key => {
       if (data[key] !== undefined && isFinite(data[key])) {
         // For sparklines, map v3 fields to daily data
@@ -281,7 +284,7 @@ export default function ExecutiveKPIRow({
           key,
           value: data[key],
           previousValue: previousData?.[key],
-          sparkline: dailyData.map(row => {
+          sparkline: safeDaily.map(row => {
             // Try exact key first, then the base key
             const val = row[key] ?? row[sparklineKey];
             return typeof val === 'number' && isFinite(val) ? val : 0;
