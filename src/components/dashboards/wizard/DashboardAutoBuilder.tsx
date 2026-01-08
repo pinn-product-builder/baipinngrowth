@@ -706,7 +706,7 @@ export default function DashboardAutoBuilder({
         
         const { data: htmlResult, error: htmlError } = await supabase.functions.invoke(
           'generate-crm-html',
-          { body: { dataset_id: selectedDatasetId, output: 'html' } }
+          { body: { dataset_id: selectedDatasetId, output: 'json' } }
         );
 
         if (htmlError) {
@@ -715,7 +715,7 @@ export default function DashboardAutoBuilder({
         }
         
         if (!htmlResult?.ok) {
-          throw new Error(htmlResult?.error || 'Erro na geração HTML');
+          throw new Error(htmlResult?.error || htmlResult?.message || 'Erro na geração HTML');
         }
         
         // Store HTML result as a special spec
