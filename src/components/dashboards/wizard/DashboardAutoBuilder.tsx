@@ -35,8 +35,11 @@ import {
   CheckCircle2,
   XCircle,
   Settings2,
-  MapPin
+  MapPin,
+  Code,
+  FileCode
 } from 'lucide-react';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
@@ -100,6 +103,73 @@ interface DatasetMapping {
 }
 
 type WizardStep = 'select' | 'generate' | 'mapping' | 'preview' | 'save';
+type GenerationMode = 'react' | 'html';
+
+// CRM Funnel detection patterns for Kommo datasets
+const CRM_FUNNEL_DETECTION = {
+  id_patterns: ['lead_id', 'leadid', 'kommo_lead_id', 'idd'],
+  time_patterns: ['created_at', 'created_at_ts', 'dia', 'data', 'inserted_at'],
+  stage_patterns: [
+    'st_entrada', 'st_lead_ativo', 'st_qualificado', 'st_exp_nao_confirmada',
+    'st_exp_agendada', 'st_faltou_exp', 'st_reagendou', 'st_exp_realizada',
+    'st_venda', 'st_perdida', 'entrada', 'qualificado', 'venda', 'perdida'
+  ],
+  dimension_patterns: ['unidade', 'vendedora', 'professor', 'modalidade', 'origem', 'retencao']
+};
+
+// Detect if dataset looks like CRM/Kommo funnel
+function detectCrmFunnelDataset(columns: string[], datasetName: string): { isCrm: boolean; confidence: number; reasons: string[] } {
+  const colNamesLower = columns.map(c => c.toLowerCase());
+  const reasons: string[] = [];
+  let score = 0;
+  
+  // Check dataset name
+  if (datasetName.toLowerCase().includes('kommo') || datasetName.toLowerCase().includes('crm')) {
+    score += 20;
+    reasons.push('Nome contém "kommo" ou "crm"');
+  }
+  
+  // Check for ID column
+  const hasIdColumn = CRM_FUNNEL_DETECTION.id_patterns.some(p => colNamesLower.includes(p));
+  if (hasIdColumn) {
+    score += 15;
+    reasons.push('Coluna lead_id encontrada');
+  }
+  
+  // Check for time column
+  const hasTimeColumn = CRM_FUNNEL_DETECTION.time_patterns.some(p => colNamesLower.includes(p));
+  if (hasTimeColumn) {
+    score += 10;
+    reasons.push('Coluna de tempo encontrada');
+  }
+  
+  // Check for stage columns (need at least 4)
+  const stageCount = CRM_FUNNEL_DETECTION.stage_patterns.filter(p => 
+    colNamesLower.some(c => c.includes(p.replace('st_', '')) || c === p)
+  ).length;
+  if (stageCount >= 4) {
+    score += 35;
+    reasons.push(`${stageCount} etapas de funil detectadas`);
+  } else if (stageCount >= 2) {
+    score += 15;
+    reasons.push(`${stageCount} etapas de funil detectadas (mínimo 4 ideal)`);
+  }
+  
+  // Check for dimension columns
+  const dimCount = CRM_FUNNEL_DETECTION.dimension_patterns.filter(p => 
+    colNamesLower.some(c => c.includes(p))
+  ).length;
+  if (dimCount >= 2) {
+    score += 20;
+    reasons.push(`${dimCount} dimensões encontradas (unidade, vendedora, etc)`);
+  }
+  
+  return {
+    isCrm: score >= 60,
+    confidence: Math.min(score, 100),
+    reasons
+  };
+}
 
 const DEFAULT_PROMPT = `Você é o BAI Dashboard Architect, especialista em BI para CRM + tráfego pago.
 Gere um DashboardSpec v1 (JSON) adaptativo usando APENAS as colunas do dataset_profile.
@@ -466,6 +536,9 @@ export default function DashboardAutoBuilder({
   const [isTestingQuery, setIsTestingQuery] = useState(false);
   const [crmMode, setCrmMode] = useState(false);
   const [aggregationPreview, setAggregationPreview] = useState<AggregationPreview | null>(null);
+  const [generationMode, setGenerationMode] = useState<GenerationMode>('react');
+  const [crmDetection, setCrmDetection] = useState<{ isCrm: boolean; confidence: number; reasons: string[] } | null>(null);
+  const [isGeneratingHtml, setIsGeneratingHtml] = useState(false);
   const { toast } = useToast();
 
   // Load datasets on open
@@ -499,6 +572,9 @@ export default function DashboardAutoBuilder({
     setIsTestingQuery(false);
     setCrmMode(false);
     setAggregationPreview(null);
+    setGenerationMode('react');
+    setCrmDetection(null);
+    setIsGeneratingHtml(false);
   };
 
   const loadDatasets = async () => {
@@ -543,11 +619,37 @@ export default function DashboardAutoBuilder({
     }
   };
 
-  const handleSelectDataset = (datasetId: string) => {
+  const handleSelectDataset = async (datasetId: string) => {
     setSelectedDatasetId(datasetId);
     const dataset = datasets.find(d => d.id === datasetId);
     if (dataset) {
       setDashboardName(`Dashboard - ${dataset.name}`);
+      
+      // Fetch columns to detect CRM dataset
+      try {
+        const { data: columns } = await supabase
+          .from('dataset_columns')
+          .select('column_name')
+          .eq('dataset_id', datasetId);
+        
+        if (columns && columns.length > 0) {
+          const columnNames = columns.map(c => c.column_name);
+          const detection = detectCrmFunnelDataset(columnNames, dataset.name);
+          setCrmDetection(detection);
+          
+          // Auto-select HTML mode if high confidence CRM
+          if (detection.isCrm && detection.confidence >= 70) {
+            setGenerationMode('html');
+            setCrmMode(true);
+            toast({
+              title: 'Dataset CRM Detectado!',
+              description: `Modo HTML recomendado (${detection.confidence}% confiança)`
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Error detecting CRM dataset:', err);
+      }
     }
   };
 
@@ -562,13 +664,21 @@ export default function DashboardAutoBuilder({
 
     const dataset = datasets.find(d => d.id === selectedDatasetId);
     
-    // Initialize progress steps - new semantic pipeline
-    setProgressSteps([
-      { id: 'columns', label: 'Lendo colunas...', status: 'pending' },
-      { id: 'semantic', label: 'Construindo modelo semântico...', status: 'pending' },
-      { id: 'plan', label: 'Gerando plano de dashboard...', status: 'pending' },
-      { id: 'validate', label: 'Validando...', status: 'pending' },
-    ]);
+    // Different progress steps for HTML vs React mode
+    if (generationMode === 'html') {
+      setProgressSteps([
+        { id: 'columns', label: 'Lendo colunas...', status: 'pending' },
+        { id: 'html', label: 'Gerando dashboard HTML CRM...', status: 'pending' },
+        { id: 'validate', label: 'Validando...', status: 'pending' },
+      ]);
+    } else {
+      setProgressSteps([
+        { id: 'columns', label: 'Lendo colunas...', status: 'pending' },
+        { id: 'semantic', label: 'Construindo modelo semântico...', status: 'pending' },
+        { id: 'plan', label: 'Gerando plano de dashboard...', status: 'pending' },
+        { id: 'validate', label: 'Validando...', status: 'pending' },
+      ]);
+    }
 
     setStep('generate');
     setIsGenerating(true);
@@ -589,6 +699,71 @@ export default function DashboardAutoBuilder({
       }
       updateProgress('columns', 'done');
 
+      // HTML CRM Mode - generate HTML dashboard directly
+      if (generationMode === 'html') {
+        updateProgress('html', 'running');
+        setIsGeneratingHtml(true);
+        
+        const { data: htmlResult, error: htmlError } = await supabase.functions.invoke(
+          'generate-crm-html',
+          { body: { dataset_id: selectedDatasetId, output: 'html' } }
+        );
+
+        if (htmlError) {
+          console.error('HTML generation error:', htmlError);
+          throw new Error('Erro ao gerar dashboard HTML');
+        }
+        
+        if (!htmlResult?.ok) {
+          throw new Error(htmlResult?.error || 'Erro na geração HTML');
+        }
+        
+        // Store HTML result as a special spec
+        const htmlSpec = {
+          version: 1,
+          mode: 'html_generated',
+          html: htmlResult.html,
+          dataset_kind: 'crm_funnel_kommo',
+          detection: crmDetection,
+          _meta: {
+            dataset_id: selectedDatasetId,
+            dataset_name: dataset?.name,
+            generated_at: new Date().toISOString(),
+            rows_used: htmlResult.rows_used || 0
+          }
+        };
+        
+        updateProgress('html', 'done');
+        updateProgress('validate', 'running');
+        
+        setGeneratedSpec(htmlSpec);
+        setSpecSource('heuristic');
+        setValidation({ 
+          valid: true, 
+          errors: [], 
+          warnings: htmlResult.warnings || [] 
+        });
+        setDiagnostics({
+          columns_detected: htmlResult.columns_used?.map((c: string) => ({ name: c, semantic: null, label: c })) || [],
+          time_column: htmlResult.time_column || null,
+          funnel_candidates: htmlResult.funnel_stages || [],
+          warnings: htmlResult.warnings || [],
+          errors: [],
+          assumptions: ['Dashboard HTML CRM gerado com filtros e abas integrados']
+        });
+        
+        updateProgress('validate', 'done');
+        setStep('preview');
+        setIsGeneratingHtml(false);
+        
+        toast({
+          title: 'Dashboard HTML gerado!',
+          description: 'Dashboard CRM completo com abas, filtros e export CSV'
+        });
+        return;
+      }
+
+      // React Mode - continue with semantic pipeline
       // Step 2: Build Semantic Model (new pipeline)
       updateProgress('semantic', 'running');
       
@@ -965,10 +1140,13 @@ export default function DashboardAutoBuilder({
 
       if (!datasetData) throw new Error('Dataset não encontrado');
 
+      // Determine display type based on generation mode
+      const isHtmlMode = generationMode === 'html' || generatedSpec.mode === 'html_generated';
+      
       // Enrich spec with time column and test query info
       const enrichedSpec = {
         ...generatedSpec,
-        time: {
+        time: isHtmlMode ? null : {
           ...generatedSpec.time,
           column: generatedSpec.time?.column || diagnostics?.time_column || datasetMapping.time_column,
         },
@@ -982,11 +1160,12 @@ export default function DashboardAutoBuilder({
           max_date: testQueryResult?.max_date,
           rows_tested: testQueryResult?.rows_returned,
           created_at: new Date().toISOString(),
-          spec_source: specSource
+          spec_source: specSource,
+          generation_mode: generationMode
         }
       };
 
-      // Create dashboard
+      // Create dashboard with appropriate display_type
       const { data: dashboard, error: createError } = await supabase
         .from('dashboards')
         .insert({
@@ -994,11 +1173,11 @@ export default function DashboardAutoBuilder({
           name: dashboardName.trim(),
           description: specificRequirements.trim() || null,
           source_kind: 'supabase_view',
-          display_type: 'json',
+          display_type: isHtmlMode ? 'html' : 'json',
           data_source_id: datasetData.datasource_id,
           view_name: datasetData.object_name,
           dashboard_spec: enrichedSpec,
-          template_kind: 'custom',
+          template_kind: isHtmlMode ? 'costs_funnel_daily' : 'custom',
           is_active: true,
           detected_columns: diagnostics?.columns_detected?.map(c => c.name) || null,
           default_filters: testQueryResult?.min_date ? {
@@ -1020,12 +1199,12 @@ export default function DashboardAutoBuilder({
           dashboard_id: dashboard.id,
           version: 1,
           dashboard_spec: enrichedSpec,
-          notes: `Auto-gerado via ${specSource === 'ai' ? 'IA' : 'heurística'}${testQueryResult?.rows_returned ? ` (${testQueryResult.rows_returned} rows testadas)` : ''}`
+          notes: `Auto-gerado via ${isHtmlMode ? 'HTML CRM' : (specSource === 'ai' ? 'IA' : 'heurística')}${testQueryResult?.rows_returned ? ` (${testQueryResult.rows_returned} rows testadas)` : ''}`
         });
 
       toast({
         title: 'Dashboard criado!',
-        description: `${dashboardName} está pronto para uso`
+        description: `${dashboardName} está pronto para uso${isHtmlMode ? ' (HTML CRM)' : ''}`
       });
 
       onSuccess?.(dashboard.id);
@@ -1293,6 +1472,72 @@ export default function DashboardAutoBuilder({
                     <p className="text-xs text-muted-foreground">
                       Instruções adicionais específicas para este dashboard.
                     </p>
+                  </div>
+
+                  {/* CRM Detection Banner */}
+                  {crmDetection && crmDetection.isCrm && (
+                    <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30">
+                      <p className="text-sm font-medium text-green-600 dark:text-green-400 flex items-center gap-2">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Dataset CRM Detectado ({crmDetection.confidence}% confiança)
+                      </p>
+                      <ul className="mt-2 text-xs text-muted-foreground list-disc list-inside">
+                        {crmDetection.reasons.map((r, i) => <li key={i}>{r}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Generation Mode Selector */}
+                  <div className="space-y-3 pt-2">
+                    <Label>Modo de Geração</Label>
+                    <RadioGroup 
+                      value={generationMode} 
+                      onValueChange={(v) => setGenerationMode(v as GenerationMode)}
+                      className="grid grid-cols-2 gap-3"
+                    >
+                      <Label 
+                        htmlFor="mode-react"
+                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                          generationMode === 'react' 
+                            ? 'border-primary bg-primary/5' 
+                            : 'hover:border-primary/50'
+                        }`}
+                      >
+                        <RadioGroupItem value="react" id="mode-react" />
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <Code className="h-4 w-4 text-primary" />
+                            <span className="font-medium">React (padrão)</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Dashboard dinâmico com spec JSON. Melhor para dados genéricos.
+                          </p>
+                        </div>
+                      </Label>
+                      
+                      <Label 
+                        htmlFor="mode-html"
+                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                          generationMode === 'html' 
+                            ? 'border-primary bg-primary/5' 
+                            : 'hover:border-primary/50'
+                        } ${crmDetection?.isCrm ? 'ring-2 ring-green-500/30' : ''}`}
+                      >
+                        <RadioGroupItem value="html" id="mode-html" />
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <FileCode className="h-4 w-4 text-primary" />
+                            <span className="font-medium">HTML CRM</span>
+                            {crmDetection?.isCrm && (
+                              <Badge variant="secondary" className="text-xs">Recomendado</Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Dashboard completo com abas e filtros. Ideal para CRM/Kommo.
+                          </p>
+                        </div>
+                      </Label>
+                    </RadioGroup>
                   </div>
 
                   <div className="flex items-center space-x-2 pt-2">
