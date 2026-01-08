@@ -286,6 +286,8 @@ Deno.serve(async (req) => {
 
     // Parse request
     let dashboardId: string | null = null
+    let directView: string | null = null
+    let directDatasourceId: string | null = null
     let start: string | null = null
     let end: string | null = null
     let limit: number = 1000
@@ -293,21 +295,30 @@ Deno.serve(async (req) => {
     if (req.method === 'POST') {
       const body = await req.json()
       dashboardId = body.dashboard_id
+      directView = body.view
+      directDatasourceId = body.datasource_id
       start = body.start
       end = body.end
       limit = parseInt(body.limit) || 1000
     } else {
       const url = new URL(req.url)
       dashboardId = url.searchParams.get('dashboard_id')
+      directView = url.searchParams.get('view')
+      directDatasourceId = url.searchParams.get('datasource_id')
       start = url.searchParams.get('start')
       end = url.searchParams.get('end')
       limit = parseInt(url.searchParams.get('limit') || '1000')
     }
 
-    if (!dashboardId) {
+    // Mode 1: Dashboard-bound query (requires dashboard_id)
+    // Mode 2: Direct dataset query (requires view + datasource_id) - used by DashboardAutoBuilder
+    const isDashboardMode = !!dashboardId
+    const isDirectMode = !!directView
+
+    if (!isDashboardMode && !isDirectMode) {
       return new Response(JSON.stringify({ 
         ok: false,
-        error: { code: 'MISSING_PARAM', message: 'dashboard_id é obrigatório' },
+        error: { code: 'MISSING_PARAM', message: 'Informe dashboard_id ou (view + datasource_id)' },
         trace_id: traceId
       }), {
         status: 400,
@@ -315,144 +326,265 @@ Deno.serve(async (req) => {
       })
     }
 
-    console.log(`[${traceId}] Dashboard ${dashboardId}, period: ${start} to ${end}`)
+    console.log(`[${traceId}] Mode: ${isDashboardMode ? 'dashboard' : 'direct'}, period: ${start} to ${end}`)
 
     // Use service role for admin queries
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
 
-    // 1. Fetch dashboard with its data source
-    const { data: dashboard, error: dashboardError } = await adminClient
-      .from('dashboards')
-      .select('*, tenant_data_sources(*)')
-      .eq('id', dashboardId)
-      .maybeSingle()
-
-    if (dashboardError || !dashboard) {
-      return new Response(JSON.stringify({ 
-        ok: false,
-        error: { code: 'DASHBOARD_NOT_FOUND', message: 'Dashboard não encontrado' },
-        trace_id: traceId
-      }), {
-        status: 404,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
-
-    // 2. Verify user has access to this dashboard's tenant
+    // Get user's profile and tenant
     const { data: profile } = await adminClient
       .from('profiles')
       .select('tenant_id')
       .eq('id', userId)
       .maybeSingle()
 
-    const isAdmin = await adminClient
+    const { data: userRoleData } = await adminClient
       .from('user_roles')
       .select('role')
       .eq('user_id', userId)
       .eq('role', 'admin')
       .maybeSingle()
+    
+    const isAdmin = !!userRoleData
 
-    if (!isAdmin?.data && profile?.tenant_id !== dashboard.tenant_id) {
-      return new Response(JSON.stringify({ 
-        ok: false,
-        error: { code: 'ACCESS_DENIED', message: 'Sem permissão para acessar este dashboard' },
-        trace_id: traceId
-      }), {
-        status: 403,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+    // Variables for either mode
+    let dataSource: any
+    let viewName: string
+    let timeColumn: string | null = null
+    let dashboardName: string | null = null
+    let tenantId: string | null = null
+    let cacheTtl = 300
+
+    if (isDashboardMode) {
+      // === MODE 1: Dashboard-bound query ===
+      console.log(`[${traceId}] Dashboard mode: ${dashboardId}`)
+      
+      const { data: dashboard, error: dashboardError } = await adminClient
+        .from('dashboards')
+        .select('*, tenant_data_sources(*)')
+        .eq('id', dashboardId)
+        .maybeSingle()
+
+      if (dashboardError || !dashboard) {
+        return new Response(JSON.stringify({ 
+          ok: false,
+          error: { code: 'DASHBOARD_NOT_FOUND', message: 'Dashboard não encontrado' },
+          trace_id: traceId
+        }), {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      // Verify tenant access
+      if (!isAdmin && profile?.tenant_id !== dashboard.tenant_id) {
+        return new Response(JSON.stringify({ 
+          ok: false,
+          error: { code: 'ACCESS_DENIED', message: 'Sem permissão para acessar este dashboard' },
+          trace_id: traceId
+        }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      // Validate data source binding
+      if (!dashboard.data_source_id) {
+        return new Response(JSON.stringify({ 
+          ok: false,
+          error: { 
+            code: 'NO_DATASOURCE', 
+            message: 'Dashboard não possui data source vinculado',
+            fix: 'Configure o data_source_id no dashboard'
+          },
+          binding: {
+            dashboard_id: dashboardId,
+            dashboard_name: dashboard.name,
+            data_source_id: null
+          },
+          trace_id: traceId
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      dataSource = dashboard.tenant_data_sources
+      if (!dataSource || !dataSource.is_active) {
+        return new Response(JSON.stringify({ 
+          ok: false,
+          error: { 
+            code: 'DATASOURCE_INACTIVE', 
+            message: 'Data source não encontrado ou inativo' 
+          },
+          binding: {
+            dashboard_id: dashboardId,
+            data_source_id: dashboard.data_source_id
+          },
+          trace_id: traceId
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      viewName = dashboard.view_name
+      if (!viewName) {
+        return new Response(JSON.stringify({ 
+          ok: false,
+          error: { 
+            code: 'NO_VIEW_NAME', 
+            message: 'Dashboard não possui view_name configurado',
+            fix: 'Configure o view_name no dashboard'
+          },
+          binding: {
+            dashboard_id: dashboardId,
+            dashboard_name: dashboard.name,
+            data_source_id: dashboard.data_source_id,
+            data_source_name: dataSource.name,
+            view_name: null
+          },
+          trace_id: traceId
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      // Validate view is in allowed_views
+      const allowedViews = dataSource.allowed_views || []
+      if (!allowedViews.includes(viewName)) {
+        return new Response(JSON.stringify({ 
+          ok: false,
+          error: { 
+            code: 'VIEW_NOT_ALLOWED', 
+            message: `A view '${viewName}' não está na lista de views permitidas do data source '${dataSource.name}'`,
+            fix: `Adicione '${viewName}' em allowed_views do data source ou corrija o view_name do dashboard`
+          },
+          binding: {
+            dashboard_id: dashboardId,
+            dashboard_name: dashboard.name,
+            view_name: viewName,
+            data_source_id: dataSource.id,
+            data_source_name: dataSource.name,
+            allowed_views: allowedViews
+          },
+          trace_id: traceId
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      // Extract time column from dashboard_spec
+      const spec = dashboard.dashboard_spec as Record<string, any> | null
+      if (spec?.time?.column) {
+        timeColumn = spec.time.column
+      } else if (spec?.columns) {
+        const dateCol = (spec.columns as any[]).find((c: any) => 
+          c.semantic_type === 'date' || 
+          c.role_hint === 'time' ||
+          c.name?.toLowerCase().includes('created') ||
+          c.name?.toLowerCase().includes('date') ||
+          c.name?.toLowerCase().includes('dia')
+        )
+        if (dateCol) {
+          timeColumn = dateCol.name
+        }
+      }
+
+      dashboardName = dashboard.name
+      tenantId = dashboard.tenant_id
+      cacheTtl = dashboard.cache_ttl_seconds || 300
+
+    } else {
+      // === MODE 2: Direct dataset query (for DashboardAutoBuilder) ===
+      console.log(`[${traceId}] Direct mode: view=${directView}, datasource_id=${directDatasourceId}`)
+      
+      viewName = directView!
+
+      // If datasource_id is provided, use it; otherwise find by tenant
+      if (directDatasourceId) {
+        const { data: ds, error: dsError } = await adminClient
+          .from('tenant_data_sources')
+          .select('*')
+          .eq('id', directDatasourceId)
+          .eq('is_active', true)
+          .maybeSingle()
+
+        if (dsError || !ds) {
+          return new Response(JSON.stringify({ 
+            ok: false,
+            error: { code: 'DATASOURCE_NOT_FOUND', message: 'Data source não encontrado' },
+            trace_id: traceId
+          }), {
+            status: 404,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          })
+        }
+
+        // Verify tenant access
+        if (!isAdmin && profile?.tenant_id !== ds.tenant_id) {
+          return new Response(JSON.stringify({ 
+            ok: false,
+            error: { code: 'ACCESS_DENIED', message: 'Sem permissão para acessar este data source' },
+            trace_id: traceId
+          }), {
+            status: 403,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          })
+        }
+
+        dataSource = ds
+        tenantId = ds.tenant_id
+      } else {
+        // Find datasource by tenant that has the view in allowed_views
+        const userTenantId = profile?.tenant_id
+        if (!userTenantId && !isAdmin) {
+          return new Response(JSON.stringify({ 
+            ok: false,
+            error: { code: 'NO_TENANT', message: 'Usuário não possui tenant associado' },
+            trace_id: traceId
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          })
+        }
+
+        // Find a datasource that has this view
+        const { data: dataSources } = await adminClient
+          .from('tenant_data_sources')
+          .select('*')
+          .eq('is_active', true)
+          .eq('tenant_id', userTenantId)
+
+        const matchingDs = dataSources?.find(ds => 
+          ds.allowed_views?.includes(viewName)
+        )
+
+        if (!matchingDs) {
+          // Fallback to first active datasource
+          const fallbackDs = dataSources?.[0]
+          if (!fallbackDs) {
+            return new Response(JSON.stringify({ 
+              ok: false,
+              error: { code: 'NO_DATASOURCE', message: 'Nenhum data source ativo encontrado' },
+              trace_id: traceId
+            }), {
+              status: 404,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            })
+          }
+          dataSource = fallbackDs
+          console.log(`[${traceId}] Using fallback datasource: ${fallbackDs.name}`)
+        } else {
+          dataSource = matchingDs
+        }
+        tenantId = userTenantId
+      }
     }
 
-    // 3. Validate data source binding
-    if (!dashboard.data_source_id) {
-      return new Response(JSON.stringify({ 
-        ok: false,
-        error: { 
-          code: 'NO_DATASOURCE', 
-          message: 'Dashboard não possui data source vinculado',
-          fix: 'Configure o data_source_id no dashboard'
-        },
-        binding: {
-          dashboard_id: dashboardId,
-          dashboard_name: dashboard.name,
-          data_source_id: null
-        },
-        trace_id: traceId
-      }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
-
-    const dataSource = dashboard.tenant_data_sources
-    if (!dataSource || !dataSource.is_active) {
-      return new Response(JSON.stringify({ 
-        ok: false,
-        error: { 
-          code: 'DATASOURCE_INACTIVE', 
-          message: 'Data source não encontrado ou inativo' 
-        },
-        binding: {
-          dashboard_id: dashboardId,
-          data_source_id: dashboard.data_source_id
-        },
-        trace_id: traceId
-      }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
-
-    // 4. Get view_name from dashboard - this is the relation to query
-    const viewName = dashboard.view_name
-    if (!viewName) {
-      return new Response(JSON.stringify({ 
-        ok: false,
-        error: { 
-          code: 'NO_VIEW_NAME', 
-          message: 'Dashboard não possui view_name configurado',
-          fix: 'Configure o view_name no dashboard'
-        },
-        binding: {
-          dashboard_id: dashboardId,
-          dashboard_name: dashboard.name,
-          data_source_id: dashboard.data_source_id,
-          data_source_name: dataSource.name,
-          view_name: null
-        },
-        trace_id: traceId
-      }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
-
-    // 5. Validate view is in allowed_views
-    const allowedViews = dataSource.allowed_views || []
-    if (!allowedViews.includes(viewName)) {
-      return new Response(JSON.stringify({ 
-        ok: false,
-        error: { 
-          code: 'VIEW_NOT_ALLOWED', 
-          message: `A view '${viewName}' não está na lista de views permitidas do data source '${dataSource.name}'`,
-          fix: `Adicione '${viewName}' em allowed_views do data source ou corrija o view_name do dashboard`
-        },
-        binding: {
-          dashboard_id: dashboardId,
-          dashboard_name: dashboard.name,
-          view_name: viewName,
-          data_source_id: dataSource.id,
-          data_source_name: dataSource.name,
-          allowed_views: allowedViews
-        },
-        trace_id: traceId
-      }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
-
-    // 6. Get data source credentials
+    // Get data source credentials
     const remoteKey = await getDataSourceKey(dataSource)
     if (!remoteKey) {
       return new Response(JSON.stringify({ 
@@ -472,46 +604,30 @@ Deno.serve(async (req) => {
       })
     }
 
-    // 7. Extract time column from dashboard_spec or use null
-    let timeColumn: string | null = null
-    const spec = dashboard.dashboard_spec as Record<string, any> | null
-    if (spec?.time?.column) {
-      timeColumn = spec.time.column
-    } else if (spec?.columns) {
-      const dateCol = (spec.columns as any[]).find((c: any) => 
-        c.semantic_type === 'date' || 
-        c.role_hint === 'time' ||
-        c.name?.toLowerCase().includes('created') ||
-        c.name?.toLowerCase().includes('date') ||
-        c.name?.toLowerCase().includes('dia')
-      )
-      if (dateCol) {
-        timeColumn = dateCol.name
+    // Check cache (only for dashboard mode)
+    const cacheKey = isDashboardMode ? getCacheKey(dashboardId!, start || '', end || '') : null
+    if (cacheKey) {
+      const cachedData = getFromCache(cacheKey)
+      if (cachedData) {
+        console.log(`[${traceId}] Returning cached data`)
+        return new Response(JSON.stringify({ 
+          ok: true,
+          ...cachedData, 
+          cached: true,
+          trace_id: traceId
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
       }
     }
 
-    // 8. Check cache
-    const cacheKey = getCacheKey(dashboardId, start || '', end || '')
-    const cachedData = getFromCache(cacheKey)
-    if (cachedData) {
-      console.log(`[${traceId}] Returning cached data`)
-      return new Response(JSON.stringify({ 
-        ok: true,
-        ...cachedData, 
-        cached: true,
-        trace_id: traceId
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
-
-    // 9. Fetch data from external database - NO FALLBACKS, exact binding only
+    // Fetch data from external database
     console.log(`[${traceId}] Querying ${dataSource.name} (${dataSource.project_ref}): public.${viewName}`)
     
     const result = await fetchFromExternalView(
       dataSource.project_url,
       remoteKey,
-      'public', // Schema is always public for PostgREST
+      'public',
       viewName,
       timeColumn,
       start,
@@ -528,7 +644,7 @@ Deno.serve(async (req) => {
         },
         binding: {
           dashboard_id: dashboardId,
-          dashboard_name: dashboard.name,
+          dashboard_name: dashboardName,
           view_name: viewName,
           time_column: timeColumn,
           data_source_id: dataSource.id,
@@ -543,8 +659,7 @@ Deno.serve(async (req) => {
       })
     }
 
-    // 10. Cache and return
-    const ttl = dashboard.cache_ttl_seconds || 300
+    // Cache and return
     const responseData = {
       data: result.data,
       rows_returned: result.data.length,
@@ -557,7 +672,10 @@ Deno.serve(async (req) => {
         period: { start, end }
       }
     }
-    setCache(cacheKey, responseData, ttl)
+    
+    if (cacheKey) {
+      setCache(cacheKey, responseData, cacheTtl)
+    }
 
     return new Response(JSON.stringify({ 
       ok: true,
@@ -569,7 +687,7 @@ Deno.serve(async (req) => {
     })
 
   } catch (error) {
-    console.error(`[${traceId}] Internal error:`, error)
+    console.error('Internal error:', error)
     return new Response(JSON.stringify({ 
       ok: false,
       error: { 
@@ -577,7 +695,7 @@ Deno.serve(async (req) => {
         message: 'Erro interno no servidor',
         details: String(error)
       },
-      trace_id: traceId
+      trace_id: crypto.randomUUID().slice(0, 8)
     }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
