@@ -81,6 +81,13 @@ interface TestQueryResult {
   max_date: string | null;
   time_column: string | null;
   error?: string;
+  all_rows?: Record<string, any>[];  // All rows for aggregation preview
+}
+
+interface AggregationPreview {
+  kpis: { key: string; label: string; value: number; format: string }[];
+  funnel: { column: string; label: string; value: number }[];
+  computed: boolean;
 }
 
 interface DatasetMapping {
@@ -458,6 +465,7 @@ export default function DashboardAutoBuilder({
   const [testQueryResult, setTestQueryResult] = useState<TestQueryResult | null>(null);
   const [isTestingQuery, setIsTestingQuery] = useState(false);
   const [crmMode, setCrmMode] = useState(false);
+  const [aggregationPreview, setAggregationPreview] = useState<AggregationPreview | null>(null);
   const { toast } = useToast();
 
   // Load datasets on open
@@ -490,6 +498,7 @@ export default function DashboardAutoBuilder({
     setTestQueryResult(null);
     setIsTestingQuery(false);
     setCrmMode(false);
+    setAggregationPreview(null);
   };
 
   const loadDatasets = async () => {
@@ -750,11 +759,85 @@ export default function DashboardAutoBuilder({
     }
   };
 
-  // Test query to verify data access and get min/max dates
+  // Helper: check if value is truthy for CRM flags
+  const isTruthy = (value: any): boolean => {
+    if (value === null || value === undefined || value === '') return false;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value > 0;
+    const v = String(value).toLowerCase().trim();
+    return ['1', 'true', 'sim', 's', 'yes', 'y', 'ok', 'x', 'on'].includes(v);
+  };
+
+  // Compute aggregation preview from rows and spec
+  const computeAggregationPreview = (rows: Record<string, any>[], spec: any): AggregationPreview => {
+    const result: AggregationPreview = {
+      kpis: [],
+      funnel: [],
+      computed: false
+    };
+
+    if (!rows || rows.length === 0 || !spec) return result;
+
+    // Compute KPIs
+    for (const kpi of spec.kpis || []) {
+      const column = kpi.key || kpi.column;
+      let value = 0;
+
+      switch (kpi.aggregation) {
+        case 'sum':
+          value = rows.reduce((sum, row) => {
+            const v = parseFloat(row[column]);
+            return sum + (isFinite(v) ? v : 0);
+          }, 0);
+          break;
+        case 'count':
+          value = rows.length;
+          break;
+        case 'count_distinct':
+          value = new Set(rows.map(row => row[column]).filter(v => v != null)).size;
+          break;
+        case 'avg':
+          const nums = rows.map(row => parseFloat(row[column])).filter(v => isFinite(v));
+          value = nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
+          break;
+        case 'truthy_count':
+          value = rows.filter(row => isTruthy(row[column])).length;
+          break;
+        default:
+          value = rows.filter(row => row[column] != null).length;
+      }
+
+      result.kpis.push({
+        key: column,
+        label: kpi.label || column,
+        value: Math.round(value * 100) / 100,
+        format: kpi.format || 'integer'
+      });
+    }
+
+    // Compute funnel
+    const funnelStages = spec.funnel?.stages || spec.funnel?.steps || [];
+    for (const stage of funnelStages) {
+      const column = stage.column || stage.key;
+      const value = rows.filter(row => isTruthy(row[column])).length;
+      result.funnel.push({
+        column,
+        label: stage.label || column,
+        value
+      });
+    }
+
+    result.computed = true;
+    return result;
+  };
+
+  // Test query to verify data access, get min/max dates, and compute aggregation preview
   const handleTestQuery = async () => {
     if (!selectedDatasetId || !generatedSpec) return;
     
     setIsTestingQuery(true);
+    setAggregationPreview(null);
+    
     try {
       const dataset = datasets.find(d => d.id === selectedDatasetId);
       if (!dataset) throw new Error('Dataset não encontrado');
@@ -771,12 +854,12 @@ export default function DashboardAutoBuilder({
       // Determine time column from spec or diagnostics
       const timeColumn = generatedSpec.time?.column || diagnostics?.time_column || 'created_at';
       
-      // Call dataset-preview edge function (not dashboard-data, since no dashboard exists yet)
+      // Fetch more rows for aggregation preview (up to 1000)
       const { data: result, error } = await supabase.functions.invoke('dataset-preview', {
         body: {
           view: datasetData.object_name,
           datasource_id: datasetData.datasource_id,
-          limit: 100
+          limit: 1000
         }
       });
       
@@ -805,7 +888,6 @@ export default function DashboardAutoBuilder({
           .map((d: any) => {
             if (d instanceof Date) return d.toISOString().split('T')[0];
             const str = String(d);
-            // Try to parse various formats
             if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.split('T')[0];
             if (/^\d{2}\/\d{2}\/\d{4}/.test(str)) {
               const [day, month, year] = str.split('/');
@@ -825,10 +907,17 @@ export default function DashboardAutoBuilder({
       setTestQueryResult({
         rows_returned: rows.length,
         sample_rows: rows.slice(0, 5),
+        all_rows: rows,
         min_date: minDate,
         max_date: maxDate,
         time_column: timeColumn
       });
+      
+      // Compute aggregation preview
+      if (rows.length > 0) {
+        const preview = computeAggregationPreview(rows, generatedSpec);
+        setAggregationPreview(preview);
+      }
       
       toast({
         title: rows.length > 0 ? 'Query executada!' : 'Query vazia',
@@ -1637,14 +1726,16 @@ export default function DashboardAutoBuilder({
                   <div>
                     <p className="text-sm font-medium flex items-center gap-2">
                       <Database className="h-4 w-4" />
-                      Testar Conexão com Dataset
+                      Testar Conexão e Preview de Dados
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Executa uma query real para verificar conectividade e período de dados
+                      {aggregationPreview 
+                        ? 'Query executada! Veja o preview dos dados agregados abaixo.'
+                        : 'Execute a query para ver os valores reais dos KPIs e funil antes de salvar.'}
                     </p>
                   </div>
                   <Button 
-                    variant="outline" 
+                    variant={aggregationPreview ? "outline" : "default"}
                     size="sm"
                     onClick={handleTestQuery}
                     disabled={isTestingQuery}
@@ -1654,10 +1745,15 @@ export default function DashboardAutoBuilder({
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                         Testando...
                       </>
-                    ) : (
+                    ) : aggregationPreview ? (
                       <>
                         <Database className="h-4 w-4 mr-2" />
-                        Test Query
+                        Recarregar
+                      </>
+                    ) : (
+                      <>
+                        <BarChart3 className="h-4 w-4 mr-2" />
+                        Ver Preview
                       </>
                     )}
                   </Button>
@@ -1738,6 +1834,93 @@ export default function DashboardAutoBuilder({
                   </div>
                 )}
               </div>
+              
+              {/* Aggregation Preview - Shows real computed values */}
+              {aggregationPreview && aggregationPreview.computed && (
+                <div className="p-4 rounded-lg border bg-primary/5 border-primary/20 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium flex items-center gap-2 text-primary">
+                      <BarChart3 className="h-4 w-4" />
+                      Preview de Dados Agregados
+                    </p>
+                    <Badge variant="outline" className="text-xs">
+                      Calculado com {testQueryResult?.rows_returned || 0} linhas
+                    </Badge>
+                  </div>
+                  
+                  {/* KPIs Preview */}
+                  {aggregationPreview.kpis.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground mb-2">KPIs</p>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {aggregationPreview.kpis.map((kpi, i) => (
+                          <div key={i} className="p-2 rounded-lg bg-background border">
+                            <p className="text-xs text-muted-foreground truncate">{kpi.label}</p>
+                            <p className={`text-lg font-bold ${kpi.value > 0 ? 'text-foreground' : 'text-muted-foreground'}`}>
+                              {kpi.format === 'percent' 
+                                ? `${kpi.value}%` 
+                                : kpi.format === 'currency' 
+                                  ? `R$ ${kpi.value.toLocaleString('pt-BR')}`
+                                  : kpi.value.toLocaleString('pt-BR')}
+                            </p>
+                            {kpi.value === 0 && (
+                              <p className="text-xs text-yellow-600">⚠️ Vazio</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Funnel Preview */}
+                  {aggregationPreview.funnel.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground mb-2">Funil</p>
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {aggregationPreview.funnel.map((stage, i) => (
+                          <div key={i} className="flex items-center gap-1">
+                            <div className={`px-2 py-1 rounded text-xs ${
+                              stage.value > 0 
+                                ? 'bg-primary/10 border border-primary/20' 
+                                : 'bg-yellow-500/10 border border-yellow-500/20'
+                            }`}>
+                              <span className="font-medium">{stage.label}</span>
+                              <span className={`ml-1 ${stage.value > 0 ? 'text-primary' : 'text-yellow-600'}`}>
+                                ({stage.value})
+                              </span>
+                            </div>
+                            {i < aggregationPreview.funnel.length - 1 && (
+                              <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      
+                      {/* Warning if funnel has empty stages */}
+                      {aggregationPreview.funnel.some(s => s.value === 0) && (
+                        <p className="text-xs text-yellow-600 mt-2">
+                          ⚠️ Algumas etapas do funil estão vazias. Verifique se as colunas contêm valores truthy (1, true, sim, etc.)
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Summary check */}
+                  {aggregationPreview.kpis.every(k => k.value === 0) && aggregationPreview.funnel.every(f => f.value === 0) && (
+                    <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+                      <p className="text-sm text-destructive flex items-center gap-2">
+                        <XCircle className="h-4 w-4" />
+                        Todos os valores estão zerados! Verifique:
+                      </p>
+                      <ul className="text-xs text-destructive/80 mt-1 list-disc list-inside">
+                        <li>Se os nomes das colunas no spec correspondem às colunas do dataset</li>
+                        <li>Se os dados contêm valores truthy (1, true, sim, x)</li>
+                        <li>Se o período de datas selecionado contém dados</li>
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
               
               {/* Validation messages */}
               {validation && (
