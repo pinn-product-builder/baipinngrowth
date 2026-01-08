@@ -94,19 +94,20 @@ interface DatasetMapping {
 
 type WizardStep = 'select' | 'generate' | 'mapping' | 'preview' | 'save';
 
-const DEFAULT_PROMPT = `Você é um especialista em BI para CRM e tráfego pago.
-Sua tarefa é gerar um DashboardSpec (JSON) para um SaaS de dashboards, usando APENAS as colunas fornecidas no dataset profile.
-O dashboard deve seguir um layout padrão em abas: Decisões, Executivo, Funil, Tendências, Detalhes.
+const DEFAULT_PROMPT = `Você é o BAI Dashboard Architect, especialista em BI para CRM + tráfego pago.
+Gere um DashboardSpec v1 (JSON) adaptativo usando APENAS as colunas do dataset_profile.
 
-Regras:
-- Nunca referencie colunas que não existam (use match case-insensitive e normalize underscores).
-- Se não houver coluna de data válida, ainda assim gere um dashboard útil com KPIs + Funil total + Detalhes (sem séries temporais).
-- Para campos de funil em texto (ex.: entrada, qualificado, venda), trate como boolean "truthy" (1/true/sim/x/ok) e gere contagens.
-- KPIs devem ser poucos (máximo 8) e focados em tomada de decisão.
-- Tendências: se existir data, use séries por dia com métricas principais.
-- Detalhes: sempre incluir tabela completa com export CSV.
+REGRAS:
+- Nunca referencie colunas inexistentes (match case-insensitive)
+- Para campos de funil em text (entrada, qualificado, venda), use aggregation "truthy_count" (não count simples)
+- Se não houver coluna de tempo, gere KPIs agregados + Funil total + Detalhes (nunca spec vazio)
+- KPIs: máx 8, focados em decisão
+- Gráficos: máx 4, priorize tendências e funil
+- Diferencie dimensões (vendedora, origem) de métricas (valor_venda, custo)
 
-Saída obrigatória: um JSON válido no schema DashboardSpec v1 contendo time, kpis, charts, tabs, table.`;
+ABAS: Decisões, Executivo, Funil, Tendências, Detalhes
+
+Inclua diagnostics e queryPlan no JSON.`;
 
 // Convert DashboardPlan to DashboardSpec format
 function convertPlanToSpec(plan: any, semanticModel: any): any {
@@ -206,6 +207,7 @@ export default function DashboardAutoBuilder({
   const [needsMapping, setNeedsMapping] = useState(false);
   const [testQueryResult, setTestQueryResult] = useState<TestQueryResult | null>(null);
   const [isTestingQuery, setIsTestingQuery] = useState(false);
+  const [crmMode, setCrmMode] = useState(false);
   const { toast } = useToast();
 
   // Load datasets on open
@@ -237,6 +239,7 @@ export default function DashboardAutoBuilder({
     setNeedsMapping(false);
     setTestQueryResult(null);
     setIsTestingQuery(false);
+    setCrmMode(false);
   };
 
   const loadDatasets = async () => {
@@ -374,8 +377,9 @@ export default function DashboardAutoBuilder({
           body: { 
             dataset_id: selectedDatasetId,
             semantic_model: semanticModel,
-            user_intent: userIntent,
-            use_llm: true
+            user_prompt: userIntent,
+            use_llm: true,
+            crm_mode: crmMode
           } 
         }
       );
@@ -921,6 +925,22 @@ export default function DashboardAutoBuilder({
                       Instruções adicionais específicas para este dashboard.
                     </p>
                   </div>
+
+                  <div className="flex items-center space-x-2 pt-2">
+                    <Checkbox
+                      id="crm-mode"
+                      checked={crmMode}
+                      onCheckedChange={(checked) => setCrmMode(checked === true)}
+                    />
+                    <Label htmlFor="crm-mode" className="flex items-center gap-2 cursor-pointer">
+                      <Database className="h-4 w-4 text-muted-foreground" />
+                      <span>Modo CRM (flags em texto)</span>
+                    </Label>
+                  </div>
+                  <p className="text-xs text-muted-foreground pl-6">
+                    Ativa quando o dataset tem colunas de funil em texto (sim/não, 1/0, true/false). 
+                    Prioriza truthy_count e count_distinct(lead_id).
+                  </p>
                 </div>
               )}
             </div>
