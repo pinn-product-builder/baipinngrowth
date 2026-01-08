@@ -110,33 +110,272 @@ ABAS: Decisões, Executivo, Funil, Tendências, Detalhes
 Inclua diagnostics e queryPlan no JSON.`;
 
 // Convert DashboardPlan to DashboardSpec format
+// Column name normalization helper for fuzzy matching
+function normalizeColumnName(name: string): string {
+  return (name || '')
+    .toLowerCase()
+    .replace(/[_\-\s]+/g, '')
+    .replace(/^(st|flag|is|has|col)/, '');
+}
+
+function findColumnMatch(target: string, availableColumns: string[]): string | null {
+  const normalizedTarget = normalizeColumnName(target);
+  
+  // Exact match first
+  if (availableColumns.includes(target)) return target;
+  
+  // Case-insensitive match
+  const caseMatch = availableColumns.find(c => c.toLowerCase() === target.toLowerCase());
+  if (caseMatch) return caseMatch;
+  
+  // Normalized match (removes prefixes like st_, flag_, etc.)
+  const normalizedMatch = availableColumns.find(c => normalizeColumnName(c) === normalizedTarget);
+  if (normalizedMatch) return normalizedMatch;
+  
+  // Partial match (e.g., "entrada" matches "st_entrada")
+  const partialMatch = availableColumns.find(c => 
+    c.toLowerCase().includes(target.toLowerCase()) || 
+    target.toLowerCase().includes(c.toLowerCase())
+  );
+  if (partialMatch) return partialMatch;
+  
+  return null;
+}
+
+// CRM fallback funnel order
+const CRM_FUNNEL_ORDER = [
+  'st_entrada', 'entrada',
+  'st_lead_ativo', 'lead_ativo',
+  'st_qualificado', 'qualificado',
+  'st_exp_agendada', 'exp_agendada', 'agendada',
+  'st_exp_realizada', 'exp_realizada', 'realizada',
+  'st_venda', 'venda', 'vendas',
+  'aluno_ativo',
+  'st_perdida', 'perdida'
+];
+
+function generateFallbackSpec(semanticModel: any): any {
+  const columns = semanticModel?.columns || [];
+  const columnNames = columns.map((c: any) => c.name);
+  
+  // Detect time column with priority
+  const timePriority = ['dia', 'data', 'created_at_ts', 'created_at', 'inserted_at', 'updated_at'];
+  let timeColumn: string | null = semanticModel?.time_column || null;
+  if (!timeColumn) {
+    for (const t of timePriority) {
+      const match = findColumnMatch(t, columnNames);
+      if (match) {
+        timeColumn = match;
+        break;
+      }
+    }
+  }
+  
+  // Detect ID column
+  const idColumn = semanticModel?.id_column || findColumnMatch('lead_id', columnNames) || findColumnMatch('id', columnNames);
+  
+  // Detect stage flags
+  const stageFlags = columns.filter((c: any) => 
+    c.semantic_role === 'stage_flag' || 
+    c.name.startsWith('st_') ||
+    CRM_FUNNEL_ORDER.some(s => c.name.toLowerCase().includes(s.replace('st_', '')))
+  );
+  
+  // Sort stage flags by CRM funnel order
+  const sortedStages = stageFlags.sort((a: any, b: any) => {
+    const aIndex = CRM_FUNNEL_ORDER.findIndex(s => 
+      a.name.toLowerCase().includes(s.replace('st_', '')) || a.name.toLowerCase() === s
+    );
+    const bIndex = CRM_FUNNEL_ORDER.findIndex(s => 
+      b.name.toLowerCase().includes(s.replace('st_', '')) || b.name.toLowerCase() === s
+    );
+    return (aIndex === -1 ? 999 : aIndex) - (bIndex === -1 ? 999 : bIndex);
+  });
+  
+  // Detect dimensions
+  const dimensions = columns.filter((c: any) => 
+    c.semantic_role === 'dimension' || 
+    ['origem', 'vendedora', 'unidade', 'modalidade', 'retencao', 'source', 'channel'].some(d => 
+      c.name.toLowerCase().includes(d)
+    )
+  );
+  
+  // Build KPIs (max 8)
+  const kpis: any[] = [];
+  
+  // Lead count KPI
+  if (idColumn) {
+    kpis.push({
+      key: idColumn,
+      label: 'Total de Leads',
+      format: 'integer',
+      aggregation: 'count_distinct'
+    });
+  }
+  
+  // Stage KPIs
+  for (const stage of sortedStages.slice(0, 7)) {
+    if (kpis.length >= 8) break;
+    kpis.push({
+      key: stage.name,
+      label: stage.display_label || stage.name.replace(/^st_/, '').replace(/_/g, ' '),
+      format: 'integer',
+      aggregation: 'truthy_count'
+    });
+  }
+  
+  // Build funnel (5-7 steps)
+  const funnelSteps = sortedStages.slice(0, 7).map((s: any) => ({
+    column: s.name,
+    label: s.display_label || s.name.replace(/^st_/, '').replace(/_/g, ' ')
+  }));
+  
+  // Build charts
+  const charts: any[] = [];
+  if (timeColumn && sortedStages.length > 0) {
+    // Leads over time
+    charts.push({
+      type: 'line',
+      metric: sortedStages[0]?.name || kpis[0]?.key,
+      groupBy: timeColumn,
+      label: 'Leads por Dia'
+    });
+    
+    // Vendas over time (if exists)
+    const vendaStage = sortedStages.find((s: any) => 
+      s.name.toLowerCase().includes('venda')
+    );
+    if (vendaStage) {
+      charts.push({
+        type: 'line',
+        metric: vendaStage.name,
+        groupBy: timeColumn,
+        label: 'Vendas por Dia'
+      });
+    }
+  }
+  
+  // Add dimension charts
+  if (dimensions.length > 0 && sortedStages.length > 0) {
+    const dim = dimensions[0];
+    charts.push({
+      type: 'bar',
+      metric: sortedStages[0]?.name || kpis[0]?.key,
+      groupBy: dim.name,
+      label: `Leads por ${dim.display_label || dim.name}`
+    });
+  }
+  
+  // Build table columns
+  const tableColumns = columns
+    .filter((c: any) => !c.is_hidden)
+    .map((c: any) => ({
+      key: c.name,
+      label: c.display_label || c.name,
+      format: c.format || 'text'
+    }));
+  
+  return {
+    version: 1,
+    time: timeColumn ? { column: timeColumn } : null,
+    kpis,
+    charts,
+    funnel: funnelSteps.length >= 2 ? {
+      stages: funnelSteps,
+      id_column: idColumn || 'id'
+    } : null,
+    tabs: ['Executivo', 'Funil', 'Tendências', 'Detalhes'],
+    table: { columns: tableColumns },
+    labels: {},
+    formatting: {},
+    _fallback: true,
+    _fallback_reason: 'Spec gerado automaticamente a partir do modelo semântico'
+  };
+}
+
 function convertPlanToSpec(plan: any, semanticModel: any): any {
+  const columnNames = (semanticModel?.columns || []).map((c: any) => c.name);
+  
   const spec: any = {
     version: 1,
     time: plan.time_column ? { column: plan.time_column } : null,
     kpis: [],
     charts: [],
     funnel: null,
-    tabs: plan.tabs || ['Executivo', 'Tendências', 'Detalhes'],
+    tabs: Array.isArray(plan.tabs) 
+      ? plan.tabs.map((t: any) => typeof t === 'string' ? t : t.name).filter(Boolean)
+      : ['Executivo', 'Tendências', 'Detalhes'],
     table: { columns: [] },
     labels: plan.labels || {},
     formatting: plan.formatting || {}
   };
 
-  // Convert KPI tiles
-  if (plan.tiles) {
-    plan.tiles.forEach((tile: any) => {
-      if (tile.type === 'kpi') {
+  // Handle plan.kpis directly (from heuristic/LLM plan)
+  if (Array.isArray(plan.kpis) && plan.kpis.length > 0) {
+    for (const kpi of plan.kpis) {
+      const resolvedColumn = findColumnMatch(kpi.column, columnNames);
+      if (resolvedColumn) {
         spec.kpis.push({
-          key: tile.metric,
-          label: tile.label || tile.metric,
-          format: tile.format || 'number',
-          aggregation: tile.aggregation || 'count'
+          key: resolvedColumn,
+          label: kpi.label || resolvedColumn,
+          format: kpi.format || 'integer',
+          aggregation: kpi.aggregation || 'count'
         });
-      } else if (tile.type === 'funnel') {
+      } else {
+        console.warn(`[convertPlanToSpec] KPI column not found: ${kpi.column}`);
+      }
+    }
+  }
+
+  // Handle plan.charts directly
+  if (Array.isArray(plan.charts) && plan.charts.length > 0) {
+    for (const chart of plan.charts) {
+      const resolvedX = findColumnMatch(chart.x_column, columnNames);
+      if (resolvedX) {
+        spec.charts.push({
+          type: chart.type || 'line',
+          metric: chart.series?.[0]?.column || chart.metric,
+          groupBy: resolvedX,
+          label: chart.title || chart.label || 'Chart'
+        });
+      }
+    }
+  }
+
+  // Handle plan.funnel directly
+  if (plan.funnel?.stages?.length >= 2) {
+    const resolvedStages = plan.funnel.stages
+      .map((s: any) => {
+        const resolved = findColumnMatch(s.column, columnNames);
+        return resolved ? { column: resolved, label: s.label || resolved } : null;
+      })
+      .filter(Boolean);
+    
+    if (resolvedStages.length >= 2) {
+      spec.funnel = {
+        stages: resolvedStages,
+        id_column: semanticModel?.id_column || plan.id_column || 'lead_id'
+      };
+    }
+  }
+
+  // Handle legacy plan.tiles format (backward compatibility)
+  if (Array.isArray(plan.tiles)) {
+    for (const tile of plan.tiles) {
+      if (tile.type === 'kpi') {
+        const resolved = findColumnMatch(tile.metric, columnNames);
+        if (resolved) {
+          spec.kpis.push({
+            key: resolved,
+            label: tile.label || resolved,
+            format: tile.format || 'number',
+            aggregation: tile.aggregation || 'count'
+          });
+        }
+      } else if (tile.type === 'funnel' && !spec.funnel) {
         spec.funnel = {
           stages: tile.stages || [],
-          id_column: semanticModel.id_column || 'lead_id'
+          id_column: semanticModel?.id_column || 'lead_id'
         };
       } else if (tile.type === 'line' || tile.type === 'bar') {
         spec.charts.push({
@@ -154,7 +393,7 @@ function convertPlanToSpec(plan: any, semanticModel: any): any {
           limit: tile.limit || 10
         });
       }
-    });
+    }
   }
 
   // Build table columns from semantic model
@@ -166,6 +405,17 @@ function convertPlanToSpec(plan: any, semanticModel: any): any {
         label: c.display_label || c.name,
         format: c.format || 'text'
       }));
+  }
+
+  // Check if spec is empty and needs fallback
+  const isEmpty = 
+    (!spec.kpis || spec.kpis.length === 0) &&
+    (!spec.charts || spec.charts.length === 0) &&
+    (!spec.funnel || !spec.funnel.stages || spec.funnel.stages.length < 2);
+
+  if (isEmpty && semanticModel) {
+    console.warn('[convertPlanToSpec] Empty spec detected, generating fallback...');
+    return generateFallbackSpec(semanticModel);
   }
 
   return spec;
@@ -192,7 +442,7 @@ export default function DashboardAutoBuilder({
     errors: string[];
     warnings: string[];
   } | null>(null);
-  const [specSource, setSpecSource] = useState<'ai' | 'fallback'>('fallback');
+  const [specSource, setSpecSource] = useState<'ai' | 'llm' | 'heuristic' | 'fallback'>('heuristic');
   const [diagnostics, setDiagnostics] = useState<DiagnosticInfo | null>(null);
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const [debugOpen, setDebugOpen] = useState(false);
@@ -392,7 +642,18 @@ export default function DashboardAutoBuilder({
       
       // Convert dashboard plan to spec format
       const dashboardPlan = planResult.dashboard_plan;
-      const generatedSpec = convertPlanToSpec(dashboardPlan, semanticModel);
+      let generatedSpec = convertPlanToSpec(dashboardPlan, semanticModel);
+      
+      // Check if spec is empty and apply fallback
+      const isEmptySpec = 
+        (!generatedSpec.kpis || generatedSpec.kpis.length === 0) &&
+        (!generatedSpec.charts || generatedSpec.charts.length === 0) &&
+        (!generatedSpec.funnel || !generatedSpec.funnel.stages || generatedSpec.funnel.stages.length < 2);
+      
+      if (isEmptySpec) {
+        console.warn('[handleGenerate] Empty spec detected after conversion, applying fallback...');
+        generatedSpec = generateFallbackSpec(semanticModel);
+      }
       
       updateProgress('plan', 'done');
 
@@ -400,11 +661,30 @@ export default function DashboardAutoBuilder({
       updateProgress('validate', 'running');
       
       setGeneratedSpec(generatedSpec);
-      setSpecSource(planResult.source || 'heuristic');
+      setSpecSource(generatedSpec._fallback ? 'fallback' : (planResult.source || 'heuristic'));
+      
+      // Build warnings list
+      const warnings = [...(dashboardPlan.warnings || [])];
+      const errors: string[] = [];
+      
+      // Add diagnostics about what was generated
+      if (generatedSpec._fallback) {
+        warnings.push(`Fallback aplicado: ${generatedSpec._fallback_reason || 'spec original estava vazio'}`);
+      }
+      if (!generatedSpec.kpis?.length) {
+        errors.push('Nenhum KPI gerado - verifique se há colunas numéricas ou etapas de funil');
+      }
+      if (!generatedSpec.funnel?.stages?.length && semanticModel.funnel?.detected) {
+        errors.push('Funil detectado no dataset mas não mapeado no spec');
+      }
+      if (!generatedSpec.time?.column && semanticModel.time_column) {
+        warnings.push('Coluna de tempo detectada mas não usada no spec');
+      }
+      
       setValidation({ 
-        valid: true, 
-        errors: [], 
-        warnings: dashboardPlan.warnings || [] 
+        valid: errors.length === 0, 
+        errors, 
+        warnings 
       });
       
       // Build diagnostics from semantic model
@@ -419,8 +699,8 @@ export default function DashboardAutoBuilder({
         funnel_candidates: semanticModel.columns
           .filter((c: any) => c.semantic_role === 'stage_flag')
           .map((c: any) => c.name),
-        warnings: dashboardPlan.warnings || [],
-        errors: [],
+        warnings,
+        errors,
         assumptions: dashboardPlan.assumptions || []
       };
       setDiagnostics(diagInfo);
@@ -1159,19 +1439,71 @@ export default function DashboardAutoBuilder({
           {/* Step 3: Preview */}
           {step === 'preview' && generatedSpec && (
             <div className="space-y-4 py-4">
-              {/* Spec Empty Warning */}
-              {(!generatedSpec.kpis?.length && !generatedSpec.charts?.length && !generatedSpec.funnel?.steps?.length) && (
-                <div className="p-4 rounded-lg bg-destructive/10 border border-destructive/30">
-                  <p className="text-sm font-medium text-destructive flex items-center gap-2">
-                    <AlertTriangle className="h-4 w-4" />
-                    Spec Vazio Detectado
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    O auto-builder não conseguiu gerar KPIs, gráficos ou funil. 
-                    Verifique se o dataset foi introspectado corretamente.
-                  </p>
+              {/* Spec Generated Summary */}
+              <div className={`p-4 rounded-lg border ${
+                generatedSpec._fallback ? 'bg-yellow-500/10 border-yellow-500/30' :
+                (generatedSpec.kpis?.length > 0 || generatedSpec.funnel?.stages?.length > 0) 
+                  ? 'bg-green-500/10 border-green-500/30' 
+                  : 'bg-destructive/10 border-destructive/30'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className={`text-sm font-medium flex items-center gap-2 ${
+                      generatedSpec._fallback ? 'text-yellow-600' :
+                      (generatedSpec.kpis?.length > 0 || generatedSpec.funnel?.stages?.length > 0) 
+                        ? 'text-green-600' : 'text-destructive'
+                    }`}>
+                      {(generatedSpec.kpis?.length > 0 || generatedSpec.funnel?.stages?.length > 0) ? (
+                        <>
+                          <CheckCircle2 className="h-4 w-4" />
+                          Spec Gerado {generatedSpec._fallback && '(Fallback)'}
+                        </>
+                      ) : (
+                        <>
+                          <AlertTriangle className="h-4 w-4" />
+                          Spec Vazio
+                        </>
+                      )}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <BarChart3 className="h-3 w-3" />
+                        {generatedSpec.kpis?.length || 0} KPIs
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Filter className="h-3 w-3" />
+                        {generatedSpec.funnel?.stages?.length || 0} etapas funil
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {generatedSpec.charts?.length || 0} gráficos
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Table className="h-3 w-3" />
+                        {generatedSpec.table?.columns?.length || 0} colunas
+                      </span>
+                    </div>
+                  </div>
+                  <Badge variant={(specSource === 'llm' || specSource === 'ai') ? 'default' : specSource === 'fallback' ? 'secondary' : 'outline'}>
+                    {(specSource === 'llm' || specSource === 'ai') ? 'IA' : specSource === 'fallback' ? 'Fallback' : 'Heurística'}
+                  </Badge>
                 </div>
-              )}
+                
+                {/* Errors */}
+                {validation?.errors && validation.errors.length > 0 && (
+                  <div className="mt-3 p-2 bg-destructive/10 rounded text-xs text-destructive">
+                    <p className="font-medium mb-1">Problemas detectados:</p>
+                    <ul className="list-disc list-inside space-y-1">
+                      {validation.errors.map((err, i) => <li key={i}>{err}</li>)}
+                    </ul>
+                  </div>
+                )}
+                
+                {/* Fallback reason */}
+                {generatedSpec._fallback_reason && (
+                  <p className="mt-2 text-xs text-yellow-600">{generatedSpec._fallback_reason}</p>
+                )}
+              </div>
               
               {/* Diagnostics Panel */}
               {diagnostics && (

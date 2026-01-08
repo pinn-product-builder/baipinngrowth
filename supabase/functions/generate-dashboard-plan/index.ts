@@ -97,6 +97,7 @@ interface DashboardPlan {
   formatting: Record<string, string>
   confidence: number
   assumptions: string[]
+  warnings?: string[]
   diagnostics?: DiagnosticsInfo
   queryPlan?: QueryPlan
 }
@@ -224,6 +225,19 @@ function generateHeuristicPlan(semanticModel: any, userPrompt?: string): Dashboa
   const labels: Record<string, string> = {}
   const formatting: Record<string, string> = {}
   const assumptions: string[] = []
+  const warnings: string[] = []
+
+  // CRM funnel order for fallback detection
+  const CRM_FUNNEL_ORDER = [
+    'st_entrada', 'entrada',
+    'st_lead_ativo', 'lead_ativo',
+    'st_qualificado', 'qualificado',
+    'st_exp_agendada', 'exp_agendada', 'agendada',
+    'st_exp_realizada', 'exp_realizada', 'realizada',
+    'st_venda', 'venda', 'vendas',
+    'aluno_ativo',
+    'st_perdida', 'perdida'
+  ]
 
   // Build labels and formatting maps
   for (const col of columns) {
@@ -235,8 +249,32 @@ function generateHeuristicPlan(semanticModel: any, userPrompt?: string): Dashboa
   const stageFlags = columns.filter((c: any) => c.semantic_role === 'stage_flag')
   const metricCols = columns.filter((c: any) => c.semantic_role === 'metric' || c.semantic_role === 'rate')
   
+  // Get funnel stages - use detected funnel or build from stage_flags
+  let funnelStages = funnel?.stages || []
+  
+  if (funnelStages.length < 2 && stageFlags.length >= 2) {
+    // Fallback: build funnel from stage_flag columns, sorted by CRM order
+    const sortedStageFlags = [...stageFlags].sort((a: any, b: any) => {
+      const aIndex = CRM_FUNNEL_ORDER.findIndex(s => 
+        a.name.toLowerCase().includes(s.replace('st_', '')) || a.name.toLowerCase() === s
+      )
+      const bIndex = CRM_FUNNEL_ORDER.findIndex(s => 
+        b.name.toLowerCase().includes(s.replace('st_', '')) || b.name.toLowerCase() === s
+      )
+      return (aIndex === -1 ? 999 : aIndex) - (bIndex === -1 ? 999 : bIndex)
+    })
+    
+    funnelStages = sortedStageFlags.slice(0, 7).map((c: any) => ({
+      column: c.name,
+      label: c.display_label || c.name.replace(/^st_/, '').replace(/_/g, ' '),
+      truthy_count_expression: `CASE WHEN "${c.name}" IN ('1','true','sim','s','ok','x','yes','y','on') THEN 1 ELSE 0 END`
+    }))
+    
+    assumptions.push('Funil construído a partir de colunas stage_flag detectadas')
+  }
+  
   // Add funnel stage KPIs
-  for (const stage of funnel?.stages || []) {
+  for (const stage of funnelStages.slice(0, 8)) {
     kpis.push({
       column: stage.column,
       label: stage.label,
@@ -345,7 +383,7 @@ function generateHeuristicPlan(semanticModel: any, userPrompt?: string): Dashboa
     name: 'Decisões',
     tiles: [
       { id: 'kpi_main', type: 'kpi_row', columns: decisoesKpis },
-      ...(funnel?.stages?.length >= 2 ? [{ id: 'funnel_main', type: 'funnel' as const }] : []),
+      ...(funnelStages.length >= 2 ? [{ id: 'funnel_main', type: 'funnel' as const }] : []),
       ...(charts.length > 0 ? [{ id: 'chart_preview', type: 'chart' as const, config: { chart_id: charts[0].id } }] : [])
     ]
   })
@@ -355,12 +393,12 @@ function generateHeuristicPlan(semanticModel: any, userPrompt?: string): Dashboa
     name: 'Executivo',
     tiles: [
       { id: 'kpi_all', type: 'kpi_row', columns: kpis.map(k => k.column) },
-      ...(funnel?.stages?.length >= 2 ? [{ id: 'funnel_exec', type: 'funnel' as const }] : []),
+      ...(funnelStages.length >= 2 ? [{ id: 'funnel_exec', type: 'funnel' as const }] : []),
     ]
   })
 
   // Funil tab (if funnel detected)
-  if (funnel?.stages?.length >= 2) {
+  if (funnelStages.length >= 2) {
     tabs.push({
       name: 'Funil',
       tiles: [
@@ -394,11 +432,11 @@ function generateHeuristicPlan(semanticModel: any, userPrompt?: string): Dashboa
     tiles: [{ id: 'data_table', type: 'table' }]
   })
 
-  // Calculate confidence
+  // Calculate confidence based on what we actually generated
   const confidence = (
     (kpis.length > 0 ? 0.3 : 0) +
     (time_column ? 0.2 : 0) +
-    (funnel?.stages?.length >= 2 ? 0.3 : 0) +
+    (funnelStages.length >= 2 ? 0.3 : 0) +
     (dimensions.length > 0 ? 0.1 : 0) +
     (charts.length > 0 ? 0.1 : 0)
   )
@@ -406,8 +444,8 @@ function generateHeuristicPlan(semanticModel: any, userPrompt?: string): Dashboa
   if (!time_column) {
     assumptions.push('Sem coluna de tempo - gráficos de tendência limitados')
   }
-  if (!funnel?.detected) {
-    assumptions.push('Funil não detectado automaticamente')
+  if (funnelStages.length < 2) {
+    assumptions.push('Funil não detectado ou insuficiente (< 2 etapas)')
   }
 
   return {
@@ -417,12 +455,12 @@ function generateHeuristicPlan(semanticModel: any, userPrompt?: string): Dashboa
     kpis,
     charts,
     rankings,
-    funnel: funnel?.detected ? {
+    funnel: funnelStages.length >= 2 ? {
       title: 'Funil de Conversão',
-      stages: funnel.stages.map((s: any) => ({
+      stages: funnelStages.map((s: any) => ({
         column: s.column,
         label: s.label,
-        expression: s.truthy_count_expression
+        expression: s.truthy_count_expression || 'truthy'
       }))
     } : undefined,
     time_column,
@@ -430,7 +468,8 @@ function generateHeuristicPlan(semanticModel: any, userPrompt?: string): Dashboa
     labels,
     formatting,
     confidence,
-    assumptions
+    assumptions,
+    warnings
   }
 }
 
