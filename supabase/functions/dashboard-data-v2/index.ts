@@ -323,19 +323,17 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: false, error: { code: 'MISSING_PARAM', message: 'dashboard_id é obrigatório' }, trace_id: traceId }, 400)
     }
 
-    // Fetch dashboard with its spec and plan
+    // Fetch dashboard with its spec and datasource
     const { data: dashboard, error: dashError } = await adminClient
       .from('dashboards')
       .select(`
         id, name, tenant_id, 
         data_source_id,
+        view_name,
         dashboard_spec,
         detected_columns,
-        datasets!dashboards_data_source_id_fkey(
-          id, name, object_name, schema_name, datasource_id, primary_time_column,
-          tenant_data_sources(
-            id, project_url, anon_key_encrypted, service_role_key_encrypted
-          )
+        tenant_data_sources(
+          id, project_url, anon_key_encrypted, service_role_key_encrypted
         )
       `)
       .eq('id', dashboard_id)
@@ -366,14 +364,14 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Get the dataset and datasource info
-    const datasetInfo = dashboard.datasets as any
-    const dataSource = datasetInfo?.tenant_data_sources
+    // Get the datasource info (direct relationship: dashboards -> tenant_data_sources)
+    const dataSource = dashboard.tenant_data_sources as any
+    const objectName = dashboard.view_name
 
-    if (!dataSource || !datasetInfo?.object_name) {
+    if (!dataSource || !objectName) {
       return jsonResponse({ 
         ok: false, 
-        error: { code: 'NO_BINDING', message: 'Dashboard não está vinculado a um dataset/datasource válido' },
+        error: { code: 'NO_BINDING', message: 'Dashboard não está vinculado a um view_name/datasource válido' },
         trace_id: traceId 
       }, 400)
     }
@@ -412,8 +410,7 @@ Deno.serve(async (req) => {
     }
 
     // Fetch raw data from external datasource
-    const objectName = datasetInfo.object_name
-    const timeColumn = datasetInfo.primary_time_column || dashboard.dashboard_spec?.time?.column
+    const timeColumn = dashboard.dashboard_spec?.time?.column
     
     let fetchUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*`
     
