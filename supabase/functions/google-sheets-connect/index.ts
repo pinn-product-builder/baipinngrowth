@@ -174,6 +174,9 @@ Deno.serve(async (req) => {
         return errorResponse('CONFIG_ERROR', 'Credenciais Google não fornecidas. Preencha Client ID e Client Secret.')
       }
 
+      console.log('[OAuth Debug] exchange_code - redirect_uri:', redirect_uri)
+      console.log('[OAuth Debug] exchange_code - client_id (first 20 chars):', clientId.substring(0, 20))
+
       const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -188,8 +191,23 @@ Deno.serve(async (req) => {
 
       if (!tokenResponse.ok) {
         const error = await tokenResponse.text()
-        console.error('Token exchange failed:', error)
-        return errorResponse('OAUTH_ERROR', 'Falha na troca do código OAuth', error)
+        console.error('[OAuth Debug] Token exchange failed:', error)
+        console.error('[OAuth Debug] Used redirect_uri:', redirect_uri)
+        console.error('[OAuth Debug] Used client_id:', clientId.substring(0, 30) + '...')
+        
+        // Parse error to provide better feedback
+        let errorDetails = error
+        try {
+          const errorJson = JSON.parse(error)
+          if (errorJson.error === 'redirect_uri_mismatch') {
+            errorDetails = `redirect_uri_mismatch: O redirect_uri "${redirect_uri}" não está cadastrado no Google Cloud Console. ` +
+              `Vá em APIs & Services → Credentials → seu OAuth Client ID → Authorized redirect URIs e adicione exatamente: ${redirect_uri}`
+          }
+        } catch {
+          // Keep original error
+        }
+        
+        return errorResponse('OAUTH_ERROR', 'Falha na troca do código OAuth', errorDetails)
       }
 
       const tokens = await tokenResponse.json()
