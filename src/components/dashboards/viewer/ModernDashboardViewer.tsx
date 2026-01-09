@@ -1085,21 +1085,39 @@ export default function ModernDashboardViewer({
               </div>
             )}
 
-            {/* KPIs - use v2Aggregations if available */}
+            {/* KPIs - use v2Aggregations if available, with spec KPIs for dynamic columns */}
             <ExecutiveKPIRow
               data={v2Aggregations?.kpis || aggregatedData}
               previousData={comparisonEnabled ? previousAggregated : undefined}
               dailyData={v2Aggregations?.series || data}
               goals={templateConfig.goals}
               comparisonEnabled={comparisonEnabled}
+              specKpis={dashboardSpec?.kpis?.map(k => ({
+                key: k.column,
+                label: k.label,
+                format: k.format === 'integer' ? 'integer' : k.format === 'currency' ? 'currency' : k.format === 'percent' ? 'percent' : 'float',
+              })) || (rawDashboardSpec?.kpis as any[])?.map(k => ({
+                key: k.key || k.column,
+                label: k.label,
+                format: k.format,
+              }))}
             />
 
-            {/* Funnel - use v2Aggregations if available */}
+            {/* Funnel - use v2Aggregations if available, with spec funnel for dynamic stages */}
             <ExecutiveFunnel
               data={v2Aggregations?.kpis || aggregatedData}
               previousData={comparisonEnabled ? previousAggregated : undefined}
               comparisonEnabled={comparisonEnabled}
               funnelStages={v2Aggregations?.funnel}
+              specFunnelStages={dashboardSpec?.funnel?.steps?.map((s, i) => ({
+                column: s.column,
+                label: s.label,
+                order: i,
+              })) || (rawDashboardSpec?.funnel as any)?.stages?.map((s: any, i: number) => ({
+                column: s.column,
+                label: s.label,
+                order: s.order ?? i,
+              }))}
             />
 
             {/* Trend charts (2 main ones) */}
@@ -1125,6 +1143,15 @@ export default function ModernDashboardViewer({
               previousData={comparisonEnabled ? previousAggregated : undefined}
               comparisonEnabled={comparisonEnabled}
               funnelStages={v2Aggregations?.funnel}
+              specFunnelStages={dashboardSpec?.funnel?.steps?.map((s, i) => ({
+                column: s.column,
+                label: s.label,
+                order: i,
+              })) || (rawDashboardSpec?.funnel as any)?.stages?.map((s: any, i: number) => ({
+                column: s.column,
+                label: s.label,
+                order: s.order ?? i,
+              }))}
               className="min-h-[400px]"
             />
             

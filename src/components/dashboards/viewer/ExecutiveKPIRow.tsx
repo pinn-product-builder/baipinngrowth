@@ -37,6 +37,15 @@ interface KPIData {
   previousValue?: number;
   sparkline?: number[];
   goal?: number;
+  label?: string;
+  format?: 'integer' | 'currency' | 'percent' | 'float';
+}
+
+interface SpecKPI {
+  key: string;
+  label: string;
+  aggregation?: string;
+  format?: 'integer' | 'currency' | 'percent' | 'float';
 }
 
 interface ExecutiveKPIRowProps {
@@ -46,6 +55,8 @@ interface ExecutiveKPIRowProps {
   goals?: Record<string, number>;
   comparisonEnabled?: boolean;
   className?: string;
+  /** KPIs from dashboard_spec - if provided, use these instead of hardcoded EXECUTIVE_KPIS */
+  specKpis?: SpecKPI[];
 }
 
 const KPI_ICONS: Record<string, React.ElementType> = {
@@ -106,6 +117,29 @@ function SparklineChart({ data, isPositive }: { data: number[]; isPositive: bool
   );
 }
 
+// Helper function to format values with custom format
+function formatWithCustomFormat(value: number, format: 'integer' | 'currency' | 'percent' | 'float'): string {
+  if (!isFinite(value)) return '—';
+  
+  switch (format) {
+    case 'currency':
+      return new Intl.NumberFormat('pt-BR', { 
+        style: 'currency', 
+        currency: 'BRL',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value);
+    case 'percent':
+      const pct = value <= 1 ? value * 100 : value;
+      return `${pct.toFixed(1)}%`;
+    case 'integer':
+      return value.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+    case 'float':
+    default:
+      return value.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+  }
+}
+
 function KPICardExecutive({ 
   kpiKey, 
   value, 
@@ -113,6 +147,8 @@ function KPICardExecutive({
   sparkline,
   goal,
   comparisonEnabled,
+  customLabel,
+  customFormat,
 }: { 
   kpiKey: string;
   value: number;
@@ -120,10 +156,12 @@ function KPICardExecutive({
   sparkline?: number[];
   goal?: number;
   comparisonEnabled?: boolean;
+  customLabel?: string;
+  customFormat?: 'integer' | 'currency' | 'percent' | 'float';
 }) {
   const Icon = KPI_ICONS[kpiKey] || Target;
-  const label = getColumnLabel(kpiKey);
-  const description = getColumnDescription(kpiKey);
+  const label = customLabel || getColumnLabel(kpiKey);
+  const description = customLabel ? undefined : getColumnDescription(kpiKey);
   const goalDirection = getGoalDirection(kpiKey);
   
   // Calculate delta
@@ -200,7 +238,7 @@ function KPICardExecutive({
             
             {/* Value */}
             <p className="text-2xl font-bold tracking-tight tabular-nums">
-              {formatColumnValue(value, kpiKey)}
+              {customFormat ? formatWithCustomFormat(value, customFormat) : formatColumnValue(value, kpiKey)}
             </p>
             
             {/* Delta */}
@@ -263,29 +301,49 @@ export default function ExecutiveKPIRow({
   goals = {},
   comparisonEnabled = false,
   className,
+  specKpis,
 }: ExecutiveKPIRowProps) {
-  // Build KPIs from data - only show metrics that exist
-  // First try v3 KPIs, then fallback to legacy
+  // Build KPIs from data
+  // PRIORITY 1: Use spec KPIs if provided (from dashboard_spec.kpis)
+  // PRIORITY 2: Fallback to hardcoded lists (legacy/v3)
   const kpis = useMemo(() => {
     const result: KPIData[] = [];
+    const safeDaily = Array.isArray(dailyData) ? dailyData : [];
     
-    // Check if we have v3 data
+    // If spec KPIs provided, use those
+    if (specKpis && specKpis.length > 0) {
+      specKpis.forEach(kpi => {
+        const value = data[kpi.key];
+        if (value !== undefined && isFinite(value)) {
+          result.push({
+            key: kpi.key,
+            value,
+            previousValue: previousData?.[kpi.key],
+            sparkline: safeDaily.map(row => {
+              const val = row[kpi.key];
+              return typeof val === 'number' && isFinite(val) ? val : 0;
+            }),
+            goal: goals[kpi.key],
+            label: kpi.label,
+            format: kpi.format,
+          });
+        }
+      });
+      return result;
+    }
+    
+    // Fallback: Check if we have v3 data, then legacy
     const hasV3Data = EXECUTIVE_KPIS_V3.some(key => data[key] !== undefined && isFinite(data[key]));
     const kpiList = hasV3Data ? EXECUTIVE_KPIS_V3 : EXECUTIVE_KPIS;
     
-    // Ensure dailyData is always an array
-    const safeDaily = Array.isArray(dailyData) ? dailyData : [];
-    
     kpiList.forEach(key => {
       if (data[key] !== undefined && isFinite(data[key])) {
-        // For sparklines, map v3 fields to daily data
         const sparklineKey = key.replace('_7d', '').replace('_30d', '');
         result.push({
           key,
           value: data[key],
           previousValue: previousData?.[key],
           sparkline: safeDaily.map(row => {
-            // Try exact key first, then the base key
             const val = row[key] ?? row[sparklineKey];
             return typeof val === 'number' && isFinite(val) ? val : 0;
           }),
@@ -295,7 +353,7 @@ export default function ExecutiveKPIRow({
     });
     
     return result;
-  }, [data, previousData, dailyData, goals]);
+  }, [data, previousData, dailyData, goals, specKpis]);
   
   if (kpis.length === 0) return null;
   
@@ -312,6 +370,8 @@ export default function ExecutiveKPIRow({
             sparkline={kpi.sparkline}
             goal={kpi.goal}
             comparisonEnabled={comparisonEnabled}
+            customLabel={kpi.label}
+            customFormat={kpi.format}
           />
         ))}
       </div>
