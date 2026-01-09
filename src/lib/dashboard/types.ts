@@ -327,6 +327,20 @@ export interface GateCheckResult {
 }
 
 /**
+ * Result of tab generation (exported from tabGenerator but declared here for convenience)
+ */
+export interface TabGenerationResult {
+  /** Enabled tabs in order */
+  tabs: TabDefinition[];
+  /** Default tab ID */
+  defaultTab: DynamicTabId;
+  /** Tabs that were discarded with reasons */
+  discarded: DiscardInfo[];
+  /** Warnings generated during analysis */
+  warnings: string[];
+}
+
+/**
  * Compiled layout (output of LayoutCompiler)
  */
 export interface CompiledLayout {

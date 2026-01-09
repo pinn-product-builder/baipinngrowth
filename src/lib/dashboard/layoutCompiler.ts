@@ -17,7 +17,8 @@ import {
   DiscardInfo,
   TraceStep,
 } from './types';
-import { generateTabs, TabGenerationResult } from './tabGenerator';
+import { generateTabs } from './tabGenerator';
+import type { TabGenerationResult } from './types';
 import type { DashboardPlan, KPIDefinition, ChartDefinition, FunnelDefinition } from '@/components/dashboards/wizard/types';
 
 export const COMPILER_VERSION = '2.0.0';
@@ -582,7 +583,7 @@ export function compileLayout(
   try {
     tabResult = generateTabs(capabilities);
     warnings.push(...tabResult.warnings);
-    allDiscards.push(...tabResult.discards);
+    allDiscards.push(...tabResult.discarded);
     
     trace[trace.length - 1].status = 'done';
     trace[trace.length - 1].completedAt = new Date().toISOString();
@@ -590,7 +591,7 @@ export function compileLayout(
       tabsGenerated: tabResult.tabs.map(t => t.id),
       defaultTab: tabResult.defaultTab,
     };
-    trace[trace.length - 1].discards = tabResult.discards;
+    trace[trace.length - 1].discards = tabResult.discarded;
     trace[trace.length - 1].warnings = tabResult.warnings;
   } catch (err) {
     trace[trace.length - 1].status = 'error';
