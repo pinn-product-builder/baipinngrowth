@@ -1328,13 +1328,41 @@ Deno.serve(async (req) => {
     // Return JSON with HTML string
     const html = generateHTML(dashboardData)
     
+    // P0 FIX: Build KPIs for diagnostics
+    const kpis = [
+      { key: 'total_leads', label: 'Total Leads', aggregation: 'count', format: 'integer' }
+    ]
+    
+    // Add funnel stage KPIs
+    for (const stage of mapping.funnelStages.slice(0, 6)) {
+      kpis.push({
+        key: stage.column,
+        label: stage.label,
+        aggregation: 'truthy_count',
+        format: 'integer'
+      })
+    }
+    
+    // P0 FIX: Build structured funnel_stages array with column names
+    const funnelStagesStructured = mapping.funnelStages.map((s, i) => ({
+      column: s.column,
+      label: s.label,
+      order: i + 1
+    }))
+    
     return jsonResponse({
       ok: true,
       html,
       rows_used: rawRows.length,
       columns_used: columnNames,
       time_column: mapping.timeColumn,
-      funnel_stages: mapping.funnelStages.map(s => s.label),
+      // P0 FIX: Return structured data for frontend diagnostics
+      funnel_stages: funnelStagesStructured,
+      kpis: kpis,
+      charts: [
+        { type: 'line', title: 'Leads por Dia', x_column: mapping.timeColumn, series: ['entrada'] },
+        { type: 'bar', title: 'Leads por Dimensão', x_column: mapping.dimensions[0] || null, series: ['total'] }
+      ],
       warnings: [],
       stats: {
         rows: rawRows.length,
@@ -1352,7 +1380,9 @@ Deno.serve(async (req) => {
       // P0 DEBUG: Include extraction info
       _debug: {
         column_count: columnNames.length,
-        extraction_method: 'object_keys'
+        extraction_method: 'object_keys',
+        kpis_count: kpis.length,
+        funnel_stages_count: funnelStagesStructured.length
       }
     })
 

@@ -79,6 +79,8 @@ interface DiagnosticInfo {
   warnings: string[];
   errors: string[];
   assumptions: string[];
+  kpis_count?: number;
+  funnel_stages_count?: number;
 }
 
 interface TestQueryResult {
@@ -1137,18 +1139,32 @@ export default function DashboardAutoBuilder({
           throw new Error(htmlResult?.error || htmlResult?.message || 'Erro na geração HTML');
         }
         
-        // Store HTML result as a special spec
+        // Store HTML result as a spec that includes structured data for diagnostics
+        // The HTML generator returns columns_used, time_column, funnel_stages, kpis etc.
         const htmlSpec = {
           version: 1,
           mode: 'html_generated',
           html: htmlResult.html,
           dataset_kind: 'crm_funnel_kommo',
           detection: crmDetection,
+          // P0 FIX: Include structured data from HTML generator for diagnostics
+          kpis: htmlResult.kpis || htmlResult.summary?.kpis || [],
+          charts: htmlResult.charts || [],
+          funnel: htmlResult.funnel_stages?.length >= 2 ? {
+            stages: htmlResult.funnel_stages.map((col: string, i: number) => ({
+              column: col,
+              label: col.replace(/^(st_|status_)/, '').replace(/_/g, ' ')
+            }))
+          } : null,
+          columns: htmlResult.columns_used || [],
+          time: htmlResult.time_column ? { column: htmlResult.time_column } : null,
           _meta: {
             dataset_id: selectedDatasetId,
             dataset_name: dataset?.name,
             generated_at: new Date().toISOString(),
-            rows_used: htmlResult.rows_used || 0
+            rows_used: htmlResult.rows_used || 0,
+            columns_count: htmlResult.columns_used?.length || 0,
+            funnel_stages_count: htmlResult.funnel_stages?.length || 0
           }
         };
         
@@ -1162,13 +1178,21 @@ export default function DashboardAutoBuilder({
           errors: [], 
           warnings: htmlResult.warnings || [] 
         });
+        
+        // P0 FIX: Build diagnostics from HTML result structured data
+        const funnelCandidates = htmlResult.funnel_stages?.map((s: any) => 
+          typeof s === 'string' ? s : s.column
+        ) || [];
+        
         setDiagnostics({
           columns_detected: htmlResult.columns_used?.map((c: string) => ({ name: c, semantic: null, label: c })) || [],
           time_column: htmlResult.time_column || null,
-          funnel_candidates: htmlResult.funnel_stages || [],
+          funnel_candidates: funnelCandidates,
           warnings: htmlResult.warnings || [],
           errors: [],
-          assumptions: ['Dashboard HTML CRM gerado com filtros e abas integrados']
+          assumptions: ['Dashboard HTML CRM gerado com filtros e abas integrados'],
+          kpis_count: htmlResult.kpis?.length || 0,
+          funnel_stages_count: htmlResult.funnel_stages?.length || 0
         });
         
         updateProgress('validate', 'done');
@@ -1177,7 +1201,7 @@ export default function DashboardAutoBuilder({
         
         toast({
           title: 'Dashboard HTML gerado!',
-          description: 'Dashboard CRM completo com abas, filtros e export CSV'
+          description: `Dashboard CRM com ${htmlResult.kpis?.length || 0} KPIs e ${htmlResult.funnel_stages?.length || 0} etapas de funil`
         });
         return;
       }
@@ -2023,10 +2047,16 @@ export default function DashboardAutoBuilder({
                       (generatedSpec.kpis?.length > 0 || generatedSpec.funnel?.stages?.length > 0) 
                         ? 'text-green-600' : 'text-destructive'
                     }`}>
-                      {(generatedSpec.kpis?.length > 0 || generatedSpec.funnel?.stages?.length > 0) ? (
+                      {/* P0 FIX: Consider both regular spec and HTML mode */}
+                      {(generatedSpec.kpis?.length > 0 || 
+                        generatedSpec.funnel?.stages?.length > 0 || 
+                        generatedSpec.columns?.length > 0 ||
+                        generatedSpec.mode === 'html_generated') ? (
                         <>
                           <CheckCircle2 className="h-4 w-4" />
-                          Spec Gerado {generatedSpec._fallback && '(Fallback)'}
+                          {generatedSpec.mode === 'html_generated' 
+                            ? 'Dashboard HTML Gerado' 
+                            : `Spec Gerado ${generatedSpec._fallback ? '(Fallback)' : ''}`}
                         </>
                       ) : (
                         <>
@@ -2038,11 +2068,11 @@ export default function DashboardAutoBuilder({
                     <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
                       <span className="flex items-center gap-1">
                         <BarChart3 className="h-3 w-3" />
-                        {generatedSpec.kpis?.length || 0} KPIs
+                        {generatedSpec.kpis?.length || diagnostics?.kpis_count || 0} KPIs
                       </span>
                       <span className="flex items-center gap-1">
                         <Filter className="h-3 w-3" />
-                        {generatedSpec.funnel?.stages?.length || 0} etapas funil
+                        {generatedSpec.funnel?.stages?.length || diagnostics?.funnel_stages_count || 0} etapas funil
                       </span>
                       <span className="flex items-center gap-1">
                         <Clock className="h-3 w-3" />
@@ -2050,7 +2080,7 @@ export default function DashboardAutoBuilder({
                       </span>
                       <span className="flex items-center gap-1">
                         <Table className="h-3 w-3" />
-                        {generatedSpec.table?.columns?.length || 0} colunas
+                        {generatedSpec.columns?.length || generatedSpec.table?.columns?.length || 0} colunas
                       </span>
                     </div>
                   </div>
