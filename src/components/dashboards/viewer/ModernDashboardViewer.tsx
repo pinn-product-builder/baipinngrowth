@@ -7,7 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, BarChart3, LogIn, Bug, Clock, Table, Calendar } from 'lucide-react';
+import { RefreshCw, BarChart3, LogIn, Bug, Clock, Table, Calendar, Wand2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 
 import DashboardFilterBar, { DateRange } from './DashboardFilterBar';
@@ -18,6 +18,7 @@ import DiagnosticsDrawer from './DiagnosticsDrawer';
 import ThemeToggle from './ThemeToggle';
 import AIAnalystDrawer from './AIAnalystDrawer';
 import AIAnalystButton from './AIAnalystButton';
+import AIEditDrawer from './AIEditDrawer';
 import { generateTemplateConfig, TemplateConfig, getDefaultTemplateConfig } from './templateEngine';
 import { normalizeDataset, NormalizedDataset, formatValue } from './datasetNormalizer';
 import { parseDashboardSpec, DashboardSpec } from './types/dashboardSpec';
@@ -199,6 +200,7 @@ export default function ModernDashboardViewer({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
+  const [aiEditDrawerOpen, setAiEditDrawerOpen] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [compatibilityMode, setCompatibilityMode] = useState(false);
   const [availableDateRange, setAvailableDateRange] = useState<{ min: string; max: string } | null>(null);
@@ -985,6 +987,16 @@ export default function ModernDashboardViewer({
               <Button 
                 variant="ghost" 
                 size="icon"
+                onClick={() => setAiEditDrawerOpen(true)}
+                title="Editar com IA"
+              >
+                <Wand2 className="h-4 w-4" />
+              </Button>
+            )}
+            {isAdminOrManager && (
+              <Button 
+                variant="ghost" 
+                size="icon"
                 onClick={() => setDiagnosticsOpen(true)}
                 title="Diagnóstico"
               >
@@ -1233,6 +1245,19 @@ export default function ModernDashboardViewer({
         dashboardName={dashboardName}
         dateRange={dateRange}
       />
+      
+      {/* AI Edit Drawer (admin only) */}
+      {isAdminOrManager && (
+        <AIEditDrawer
+          open={aiEditDrawerOpen}
+          onOpenChange={setAiEditDrawerOpen}
+          dashboardId={dashboardId}
+          dashboardName={dashboardName}
+          currentSpec={rawDashboardSpec}
+          currentVersion={dashboardSpec?.version || 1}
+          onSpecUpdated={() => fetchData(comparisonEnabled)}
+        />
+      )}
     </div>
   );
 }

@@ -11,6 +11,7 @@ export { default as DiagnosticsDrawer } from './DiagnosticsDrawer';
 export { default as ThemeToggle } from './ThemeToggle';
 export { default as AIAnalystDrawer } from './AIAnalystDrawer';
 export { default as AIAnalystButton } from './AIAnalystButton';
+export { default as AIEditDrawer } from './AIEditDrawer';
 export { DatasetValidator, validateDataset, type ValidationResult, type ValidationIssue, type ValidationStatus } from './DatasetValidator';
 
 // Template engine exports

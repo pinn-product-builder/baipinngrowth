@@ -483,21 +483,31 @@ Deno.serve(async (req) => {
       dashboard_id, 
       start, 
       end, 
-      // NEW: Support pagination for details table
+      // MODE: 'aggregate' (default) for KPIs/charts/funnel, 'details' for paginated table
+      mode = 'aggregate',
+      // Pagination for details mode
       page = 1,
       pageSize = 100,
-      // NEW: Allow unlimited aggregation (remove hard 1000 limit)
+      // Sorting for details mode
+      sort_column,
+      sort_direction = 'desc',
+      // Filters (key-value pairs for WHERE clauses)
+      filters = {},
+      // Allow unlimited aggregation (remove hard 1000 limit)
       // Default is high enough for aggregation but can be overridden
       aggregation_limit = 50000,
-      // For details table only
-      details_limit = 500
     } = body
 
-    console.log(`[${traceId}] dashboard-data-v2: dashboard_id=${dashboard_id}, start=${start}, end=${end}, aggregation_limit=${aggregation_limit}`)
+    console.log(`[${traceId}] dashboard-data-v2: mode=${mode}, dashboard_id=${dashboard_id}, start=${start}, end=${end}`)
 
     if (!dashboard_id) {
       console.warn(`[${traceId}] Missing dashboard_id parameter`)
       return errorResponse('MISSING_PARAM', 'dashboard_id é obrigatório', undefined, traceId)
+    }
+
+    // Validate mode
+    if (mode !== 'aggregate' && mode !== 'details') {
+      return errorResponse('INVALID_PARAM', 'mode deve ser "aggregate" ou "details"', undefined, traceId)
     }
 
     // Fetch dashboard with its spec and datasource
@@ -595,21 +605,110 @@ Deno.serve(async (req) => {
     const timeColumn = spec.time?.column
     
     // =====================================================
-    // STEP 1: FETCH ALL DATA FOR AGGREGATION (NO HARD LIMIT)
+    // BUILD BASE URL WITH FILTERS
     // =====================================================
     
-    let aggregationUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*`
+    function buildFilteredUrl(baseUrl: string, limit?: number): string {
+      let url = `${baseUrl}?select=*`
+      
+      // Add date filters if we have a time column and date range
+      if (timeColumn && start && end) {
+        url += `&${timeColumn}=gte.${start}&${timeColumn}=lte.${end}`
+      }
+      
+      // Add dynamic filters (from request body)
+      for (const [key, value] of Object.entries(filters)) {
+        if (value !== undefined && value !== null && value !== '') {
+          if (Array.isArray(value)) {
+            // Multi-select filter: column IN (values)
+            url += `&${key}=in.(${value.map(v => encodeURIComponent(String(v))).join(',')})`
+          } else if (typeof value === 'string' && value.includes('*')) {
+            // Pattern filter with wildcards
+            url += `&${key}=ilike.${encodeURIComponent(value)}`
+          } else {
+            // Exact match
+            url += `&${key}=eq.${encodeURIComponent(String(value))}`
+          }
+        }
+      }
+      
+      if (limit) {
+        url += `&limit=${limit}`
+      }
+      
+      return url
+    }
+
+    // =====================================================
+    // MODE: DETAILS - Paginated table data only
+    // =====================================================
     
-    // Add date filters if we have a time column and date range
-    if (timeColumn && start && end) {
-      aggregationUrl += `&${timeColumn}=gte.${start}&${timeColumn}=lte.${end}`
-      aggregationUrl += `&order=${timeColumn}.asc`
+    if (mode === 'details') {
+      const offset = (page - 1) * pageSize
+      let detailsUrl = buildFilteredUrl(`${dataSource.project_url}/rest/v1/${objectName}`, pageSize)
+      detailsUrl += `&offset=${offset}`
+      
+      // Add sorting
+      if (sort_column) {
+        detailsUrl += `&order=${sort_column}.${sort_direction === 'asc' ? 'asc' : 'desc'}`
+      } else if (timeColumn) {
+        detailsUrl += `&order=${timeColumn}.desc`
+      }
+      
+      console.log(`[${traceId}] Details mode: page=${page}, pageSize=${pageSize}`)
+      
+      const detailsResponse = await fetch(detailsUrl, {
+        headers: {
+          'apikey': apiKey,
+          'Authorization': `Bearer ${apiKey}`,
+          'Accept': 'application/json',
+          'Prefer': 'count=exact'
+        }
+      })
+      
+      if (!detailsResponse.ok) {
+        const errorText = await detailsResponse.text()
+        console.error(`[${traceId}] Details fetch error: ${detailsResponse.status}`)
+        return errorResponse('FETCH_ERROR', `Erro ao consultar dados: ${detailsResponse.status}`, errorText, traceId)
+      }
+      
+      const rows = await detailsResponse.json()
+      const totalCount = parseInt(detailsResponse.headers.get('content-range')?.split('/')[1] || '0')
+      
+      return successResponse({
+        mode: 'details',
+        rows,
+        pagination: {
+          page,
+          pageSize,
+          total_rows: totalCount,
+          total_pages: Math.ceil(totalCount / pageSize),
+          has_more: (page * pageSize) < totalCount
+        },
+        meta: {
+          dashboard_id,
+          dataset_ref: `public.${objectName}`,
+          range: { start, end },
+          sort_column,
+          sort_direction,
+          filters_applied: Object.keys(filters).length,
+          trace_id: traceId
+        }
+      })
     }
     
-    // Use high limit for aggregation - this ensures KPIs and charts are accurate
-    aggregationUrl += `&limit=${aggregation_limit}`
+    // =====================================================
+    // MODE: AGGREGATE - Full aggregation for KPIs/charts/funnel
+    // =====================================================
+    
+    let aggregationUrl = buildFilteredUrl(`${dataSource.project_url}/rest/v1/${objectName}`, aggregation_limit)
+    
+    // Add ordering by time for proper series computation
+    if (timeColumn) {
+      aggregationUrl += `&order=${timeColumn}.asc`
+    }
 
-    console.log(`[${traceId}] Fetching for aggregation: ${objectName}, time_column=${timeColumn}, limit=${aggregation_limit}`)
+    console.log(`[${traceId}] Aggregate mode: limit=${aggregation_limit}, time_column=${timeColumn}`)
 
     const aggregationResponse = await fetch(aggregationUrl, {
       headers: {
