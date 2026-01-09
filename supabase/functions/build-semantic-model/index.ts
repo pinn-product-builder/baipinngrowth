@@ -405,6 +405,81 @@ function calculateAdvancedStats(
 // MAIN SEMANTIC MODEL BUILDER v2
 // =====================================================
 
+// P0 HOTFIX: Robust column extraction with multiple fallbacks
+function extractColumnNamesRobust(sampleRows: any[]): string[] {
+  if (!sampleRows || sampleRows.length === 0) return []
+  
+  // Fallback 1: If first row is a string (might be stringified JSON)
+  let firstRow = sampleRows[0]
+  if (typeof firstRow === 'string') {
+    try {
+      firstRow = JSON.parse(firstRow)
+    } catch {
+      // Not valid JSON, treat as single column
+      return ['col_0']
+    }
+  }
+  
+  // Fallback 2: If rows are arrays (CSV-like), generate col_0, col_1...
+  if (Array.isArray(firstRow)) {
+    // Check if first row looks like headers (all strings)
+    const looksLikeHeaders = firstRow.every((v: any) => typeof v === 'string' && !/^\d+$/.test(v))
+    if (looksLikeHeaders) {
+      return firstRow.map((v: any) => String(v))
+    }
+    return firstRow.map((_: any, i: number) => `col_${i}`)
+  }
+  
+  // Fallback 3: If it's an object, get keys
+  if (typeof firstRow === 'object' && firstRow !== null) {
+    // Get union of keys from first 20 rows (handles sparse data)
+    const allKeys = new Set<string>()
+    for (let i = 0; i < Math.min(sampleRows.length, 20); i++) {
+      const row = sampleRows[i]
+      if (row && typeof row === 'object' && !Array.isArray(row)) {
+        // Convert all keys to strings (handles numeric keys)
+        Object.keys(row).forEach(k => allKeys.add(String(k)))
+      }
+    }
+    return Array.from(allKeys)
+  }
+  
+  // Ultimate fallback: create a single column
+  return ['value']
+}
+
+// P0 HOTFIX: Normalize rows to ensure they are objects
+function normalizeRowsToObjects(sampleRows: any[], columnNames: string[]): Record<string, any>[] {
+  return sampleRows.map(row => {
+    // Already an object
+    if (typeof row === 'object' && !Array.isArray(row) && row !== null) {
+      return row
+    }
+    
+    // Stringified JSON
+    if (typeof row === 'string') {
+      try {
+        const parsed = JSON.parse(row)
+        if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed
+        }
+      } catch {}
+    }
+    
+    // Array to object
+    if (Array.isArray(row)) {
+      const obj: Record<string, any> = {}
+      row.forEach((val, i) => {
+        obj[columnNames[i] || `col_${i}`] = val
+      })
+      return obj
+    }
+    
+    // Primitive value
+    return { [columnNames[0] || 'value']: row }
+  })
+}
+
 function buildSemanticModel(
   datasetId: string,
   datasetName: string,
@@ -422,10 +497,11 @@ function buildSemanticModel(
     ids_detected: [] as string[],
     ids_discarded: [] as string[],
     time_candidates: [] as string[],
-    rows_analyzed: sampleRows.length
+    rows_analyzed: sampleRows.length,
+    extraction_method: 'normal' as string
   }
   
-  if (sampleRows.length === 0) {
+  if (!sampleRows || sampleRows.length === 0) {
     return {
       version: 2,
       dataset_id: datasetId,
@@ -446,7 +522,42 @@ function buildSemanticModel(
     }
   }
 
-  const columnNames = Object.keys(sampleRows[0])
+  // P0 HOTFIX: Use robust column extraction
+  const columnNames = extractColumnNamesRobust(sampleRows)
+  
+  // P0 HOTFIX: Log extraction result for debugging
+  console.log(`[${traceId}] P0 Column extraction: ${columnNames.length} columns extracted`, {
+    first5Cols: columnNames.slice(0, 5),
+    firstRowType: typeof sampleRows[0],
+    isArray: Array.isArray(sampleRows[0])
+  })
+  
+  // P0 CRITICAL: If no columns, try harder
+  if (columnNames.length === 0) {
+    warnings.push('P0 FALLBACK: Nenhuma coluna detectada, tentando inferência alternativa')
+    debug.extraction_method = 'emergency_fallback'
+    
+    // Last resort: scan all rows for any keys
+    const emergencyKeys = new Set<string>()
+    for (const row of sampleRows) {
+      if (row && typeof row === 'object') {
+        Object.keys(row).forEach(k => emergencyKeys.add(String(k)))
+      }
+    }
+    
+    if (emergencyKeys.size > 0) {
+      columnNames.push(...Array.from(emergencyKeys))
+      console.log(`[${traceId}] P0 EMERGENCY: Found ${emergencyKeys.size} columns in emergency scan`)
+    } else {
+      // Absolute last resort
+      columnNames.push('data')
+      console.log(`[${traceId}] P0 CRITICAL: No columns found, using fallback 'data' column`)
+    }
+  }
+  
+  // P0 HOTFIX: Normalize rows to ensure they're objects
+  const normalizedRows = normalizeRowsToObjects(sampleRows, columnNames)
+  debug.extraction_method = debug.extraction_method === 'normal' ? 'normalized' : debug.extraction_method
   const funnelStages: FunnelStage[] = []
   let timeColumn: string | null = null
   let idPrimary: string | null = null
@@ -461,7 +572,8 @@ function buildSemanticModel(
   // =====================================================
   
   for (const colName of columnNames) {
-    const values = sampleRows.map(row => row[colName])
+    // P0 HOTFIX: Use normalized rows
+    const values = normalizedRows.map(row => row[colName])
     const stats = calculateAdvancedStats(values, colName)
     const notes: string[] = []
     
@@ -671,7 +783,7 @@ function buildSemanticModel(
     // 6. Check for DIMENSION
     if (role === 'unknown') {
       const isDimensionByName = DIMENSION_PATTERNS.some(p => lowerName.includes(p))
-      const isCategorical = stats.distinct_count >= 2 && stats.distinct_count <= 100 && stats.distinct_count < sampleRows.length * 0.3
+      const isCategorical = stats.distinct_count >= 2 && stats.distinct_count <= 100 && stats.distinct_count < normalizedRows.length * 0.3
       const hasReasonableCardinalityForFilter = stats.distinct_count >= 2 && stats.distinct_count <= 500
       const needsSearch = stats.distinct_count > 50
       

@@ -2124,11 +2124,20 @@ export default function DashboardAutoBuilder({
                       
                       {/* P0 FIX: Critical error when columns = 0 */}
                       {diagnostics.columns_detected?.length === 0 && (
-                        <div className="mt-2 p-2 rounded bg-destructive/10 border border-destructive/30 text-xs text-destructive">
-                          <strong>ERRO CRÍTICO:</strong> Introspecção do dataset falhou (Colunas = 0). 
-                          O dataset retornou linhas mas as colunas não foram detectadas. 
-                          <br />
-                          <strong>Ação:</strong> Clique em "Voltar" e tente novamente ou verifique a configuração do data source.
+                        <div className="mt-2 p-2 rounded bg-destructive/10 border border-destructive/30 text-xs text-destructive space-y-1">
+                          <p><strong>ERRO CRÍTICO:</strong> Introspecção falhou (Colunas = 0)</p>
+                          <p>O dataset retornou linhas mas as colunas não foram detectadas.</p>
+                          <div className="bg-destructive/5 p-2 rounded mt-1 font-mono text-[10px]">
+                            <p>trace_id: {datasetProfile?._debug?.trace_id || datasetProfile?.trace_id || 'N/A'}</p>
+                            <p>sample_rows: {datasetProfile?.sample_rows?.length || 0}</p>
+                            <p>firstRowType: {datasetProfile?.sample_rows?.[0] ? typeof datasetProfile.sample_rows[0] : 'N/A'}</p>
+                            <p>firstRowKeys: {datasetProfile?.sample_rows?.[0] && typeof datasetProfile.sample_rows[0] === 'object' 
+                              ? Object.keys(datasetProfile.sample_rows[0]).slice(0, 5).join(', ') 
+                              : 'N/A'}</p>
+                          </div>
+                          <p className="text-yellow-700 dark:text-yellow-400">
+                            <strong>Ação:</strong> Volte ao passo de mapeamento ou verifique o data source.
+                          </p>
                         </div>
                       )}
                     </div>

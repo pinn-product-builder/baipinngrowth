@@ -258,8 +258,51 @@ Deno.serve(async (req) => {
       percent_columns: []
     }
 
-    // Get all column names from sample
-    const sampleColumnNames = Object.keys(sampleRows[0] || {})
+    // P0 HOTFIX: Robust column extraction
+    let sampleColumnNames: string[] = []
+    const firstRow = sampleRows[0]
+    
+    if (typeof firstRow === 'string') {
+      // Row might be stringified JSON
+      try {
+        const parsed = JSON.parse(firstRow)
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+          sampleColumnNames = Object.keys(parsed)
+          console.log('P0: Parsed stringified JSON row')
+        }
+      } catch {
+        console.warn('P0: First row is string but not valid JSON')
+      }
+    } else if (Array.isArray(firstRow)) {
+      // CSV-like
+      const looksLikeHeaders = firstRow.every((v: any) => typeof v === 'string' && !/^\d+$/.test(String(v)))
+      if (looksLikeHeaders) {
+        sampleColumnNames = firstRow.map((v: any) => String(v))
+      } else {
+        sampleColumnNames = firstRow.map((_: any, i: number) => `col_${i}`)
+      }
+    } else if (typeof firstRow === 'object' && firstRow !== null) {
+      // Normal object row - get union of keys from first 20 rows
+      const allKeys = new Set<string>()
+      for (let i = 0; i < Math.min(sampleRows.length, 20); i++) {
+        const row = sampleRows[i]
+        if (row && typeof row === 'object' && !Array.isArray(row)) {
+          Object.keys(row).forEach(k => allKeys.add(String(k)))
+        }
+      }
+      sampleColumnNames = Array.from(allKeys)
+    }
+    
+    // P0: Fallback if still no columns
+    if (sampleColumnNames.length === 0) {
+      console.error('P0 CRITICAL: No columns detected from rows!', {
+        firstRowType: typeof firstRow,
+        rowsCount: sampleRows.length
+      })
+      return errorResponse('NO_COLUMNS', 'Nenhuma coluna detectada no dataset')
+    }
+    
+    console.log(`P0: Detected ${sampleColumnNames.length} columns: ${sampleColumnNames.slice(0, 5).join(', ')}...`)
 
     for (const colName of sampleColumnNames) {
       const values = sampleRows.map(row => row[colName])
