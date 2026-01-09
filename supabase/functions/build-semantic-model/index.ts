@@ -20,21 +20,59 @@ function successResponse(data: Record<string, any>) {
   return jsonResponse({ ok: true, ...data })
 }
 
-// Encryption helpers - MUST match google-sheets-connect encryption format
-async function getEncryptionKey(): Promise<CryptoKey> {
+// Encryption helpers - Google Sheets format (Base64 key)
+async function getEncryptionKeyGoogleFormat(): Promise<CryptoKey> {
   const keyB64 = Deno.env.get('MASTER_ENCRYPTION_KEY')
   if (!keyB64) throw new Error('MASTER_ENCRYPTION_KEY not set')
   const raw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0))
   return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
 }
 
-async function decrypt(ciphertext: string): Promise<string> {
-  const key = await getEncryptionKey()
+// Encryption helpers - Supabase datasource format (raw text padded)
+async function getEncryptionKeySupabaseFormat(): Promise<CryptoKey> {
+  const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
+  if (!masterKey) throw new Error('MASTER_ENCRYPTION_KEY not set')
+  const encoder = new TextEncoder()
+  return await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(masterKey.padEnd(32, '0').slice(0, 32)),
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt', 'decrypt']
+  )
+}
+
+async function decryptGoogleFormat(ciphertext: string): Promise<string> {
+  const key = await getEncryptionKeyGoogleFormat()
   const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
   const iv = combined.slice(0, 12)
   const data = combined.slice(12)
   const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
   return new TextDecoder().decode(decrypted)
+}
+
+async function decryptSupabaseFormat(ciphertext: string): Promise<string> {
+  const key = await getEncryptionKeySupabaseFormat()
+  const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
+  const iv = combined.slice(0, 12)
+  const data = combined.slice(12)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
+  return new TextDecoder().decode(decrypted)
+}
+
+async function encryptGoogleFormat(plaintext: string): Promise<string> {
+  const key = await getEncryptionKeyGoogleFormat()
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const encoder = new TextEncoder()
+  const encrypted = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    encoder.encode(plaintext)
+  )
+  const combined = new Uint8Array(iv.length + new Uint8Array(encrypted).length)
+  combined.set(iv)
+  combined.set(new Uint8Array(encrypted), iv.length)
+  return btoa(String.fromCharCode(...combined))
 }
 
 // =====================================================
@@ -1036,7 +1074,7 @@ Deno.serve(async (req) => {
       // Try to decrypt stored access token if not expired
       if (!tokenExpired && dataSource.google_access_token_encrypted) {
         try {
-          accessToken = await decrypt(dataSource.google_access_token_encrypted)
+          accessToken = await decryptGoogleFormat(dataSource.google_access_token_encrypted)
           console.log(`[${traceId}] Using stored access token (expires: ${dataSource.google_token_expires_at})`)
         } catch (e) {
           console.error(`[${traceId}] Failed to decrypt access token:`, e)
@@ -1047,12 +1085,12 @@ Deno.serve(async (req) => {
       if (!accessToken && dataSource.google_refresh_token_encrypted) {
         console.log(`[${traceId}] Attempting to refresh Google OAuth token...`)
         try {
-          const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
+          const refreshToken = await decryptGoogleFormat(dataSource.google_refresh_token_encrypted)
           const clientId = dataSource.google_client_id_encrypted 
-            ? await decrypt(dataSource.google_client_id_encrypted) 
+            ? await decryptGoogleFormat(dataSource.google_client_id_encrypted) 
             : null
           const clientSecret = dataSource.google_client_secret_encrypted 
-            ? await decrypt(dataSource.google_client_secret_encrypted) 
+            ? await decryptGoogleFormat(dataSource.google_client_secret_encrypted) 
             : null
           
           if (clientId && clientSecret && refreshToken) {
@@ -1079,18 +1117,7 @@ Deno.serve(async (req) => {
               
               // Save the new access token to the database for future use
               try {
-                const keyForEncrypt = await getEncryptionKey()
-                const encoder = new TextEncoder()
-                const iv = crypto.getRandomValues(new Uint8Array(12))
-                const encrypted = await crypto.subtle.encrypt(
-                  { name: 'AES-GCM', iv },
-                  keyForEncrypt,
-                  encoder.encode(accessToken!)
-                )
-                const combined = new Uint8Array(iv.length + new Uint8Array(encrypted).length)
-                combined.set(iv)
-                combined.set(new Uint8Array(encrypted), iv.length)
-                const encryptedToken = btoa(String.fromCharCode(...combined))
+                const encryptedToken = await encryptGoogleFormat(accessToken!)
                 
                 await adminClient
                   .from('tenant_data_sources')
@@ -1161,12 +1188,12 @@ Deno.serve(async (req) => {
       
       console.log(`[${traceId}] Got ${sampleRows.length} rows from Google Sheets with ${headers.length} columns`)
     } else {
-      // Handle Supabase data source
+      // Handle Supabase data source - uses different encryption format
       let apiKey: string | null = null
 
       if (dataSource.service_role_key_encrypted) {
         try {
-          apiKey = await decrypt(dataSource.service_role_key_encrypted)
+          apiKey = await decryptSupabaseFormat(dataSource.service_role_key_encrypted)
         } catch (e) {
           console.error(`[${traceId}] Failed to decrypt service_role_key`)
         }
@@ -1174,7 +1201,7 @@ Deno.serve(async (req) => {
 
       if (!apiKey && dataSource.anon_key_encrypted) {
         try {
-          apiKey = await decrypt(dataSource.anon_key_encrypted)
+          apiKey = await decryptSupabaseFormat(dataSource.anon_key_encrypted)
         } catch (e) {
           console.error(`[${traceId}] Failed to decrypt anon_key`)
         }
