@@ -347,12 +347,20 @@ Deno.serve(async (req) => {
     let tenantId: string | null = null
     let cacheTtl = 300
 
-    // Fetch dashboard with its data source
+    // Fetch dashboard with all data source fields including Google Sheets
     console.log(`[${traceId}] Fetching dashboard: ${dashboardId}`)
     
     const { data: dashboard, error: dashboardError } = await adminClient
       .from('dashboards')
-      .select('*, tenant_data_sources(*)')
+      .select(`
+        *, 
+        tenant_data_sources(
+          *, 
+          google_access_token_encrypted, google_refresh_token_encrypted,
+          google_client_id_encrypted, google_client_secret_encrypted,
+          google_spreadsheet_id, google_sheet_name, google_token_expires_at
+        )
+      `)
       .eq('id', dashboardId)
       .maybeSingle()
 
@@ -488,24 +496,92 @@ Deno.serve(async (req) => {
     tenantId = dashboard.tenant_id
     cacheTtl = dashboard.cache_ttl_seconds || 300
 
-    // Get data source credentials
-    const remoteKey = await getDataSourceKey(dataSource)
-    if (!remoteKey) {
-      return new Response(JSON.stringify({ 
-        ok: false,
-        error: { 
-          code: 'NO_CREDENTIALS', 
-          message: 'Credenciais do data source não configuradas' 
-        },
-        binding: {
-          data_source_id: dataSource.id,
-          data_source_name: dataSource.name
-        },
-        trace_id: traceId
-      }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+    // Check if this is a Google Sheets data source
+    const isGoogleSheets = dataSource.type === 'google_sheets'
+    let remoteKey: string | null = null
+    let googleAccessToken: string | null = null
+
+    if (isGoogleSheets) {
+      // Try to get Google Sheets access token
+      if (dataSource.google_access_token_encrypted) {
+        try { googleAccessToken = await decrypt(dataSource.google_access_token_encrypted) } catch (e) {
+          console.error(`[${traceId}] Failed to decrypt Google access token:`, e)
+        }
+      }
+      
+      // Refresh token if needed
+      if (!googleAccessToken && dataSource.google_refresh_token_encrypted) {
+        try {
+          const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
+          const clientId = dataSource.google_client_id_encrypted 
+            ? await decrypt(dataSource.google_client_id_encrypted) 
+            : Deno.env.get('GOOGLE_CLIENT_ID')
+          const clientSecret = dataSource.google_client_secret_encrypted 
+            ? await decrypt(dataSource.google_client_secret_encrypted) 
+            : Deno.env.get('GOOGLE_CLIENT_SECRET')
+          
+          if (refreshToken && clientId && clientSecret) {
+            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                client_id: clientId,
+                client_secret: clientSecret,
+                refresh_token: refreshToken,
+                grant_type: 'refresh_token'
+              })
+            })
+            
+            if (tokenResponse.ok) {
+              const tokenData = await tokenResponse.json()
+              googleAccessToken = tokenData.access_token
+              console.log(`[${traceId}] Refreshed Google access token`)
+            } else {
+              console.error(`[${traceId}] Failed to refresh token:`, await tokenResponse.text())
+            }
+          }
+        } catch (e) {
+          console.error(`[${traceId}] Token refresh error:`, e)
+        }
+      }
+      
+      if (!googleAccessToken) {
+        return new Response(JSON.stringify({ 
+          ok: false,
+          error: { 
+            code: 'NO_CREDENTIALS', 
+            message: 'Credenciais do Google Sheets não configuradas ou expiradas' 
+          },
+          binding: {
+            data_source_id: dataSource.id,
+            data_source_name: dataSource.name
+          },
+          trace_id: traceId
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+    } else {
+      // Get Supabase data source credentials
+      remoteKey = await getDataSourceKey(dataSource)
+      if (!remoteKey) {
+        return new Response(JSON.stringify({ 
+          ok: false,
+          error: { 
+            code: 'NO_CREDENTIALS', 
+            message: 'Credenciais do data source não configuradas' 
+          },
+          binding: {
+            data_source_id: dataSource.id,
+            data_source_name: dataSource.name
+          },
+          trace_id: traceId
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
     }
 
     // Check cache
@@ -523,26 +599,81 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Fetch data from external database
-    console.log(`[${traceId}] Querying ${dataSource.name} (${dataSource.project_ref}): public.${viewName}`)
-    
-    const result = await fetchFromExternalView(
-      dataSource.project_url,
-      remoteKey,
-      'public',
-      viewName,
-      timeColumn,
-      start,
-      end,
-      limit
-    )
+    let resultData: any[] = []
+    let resultError: string | null = null
+    let resultDebug: any = {}
 
-    if (result.error) {
+    if (isGoogleSheets) {
+      // Fetch from Google Sheets
+      const spreadsheetId = dataSource.google_spreadsheet_id
+      const sheetName = viewName
+      
+      const sheetsUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName)}?majorDimension=ROWS`
+      
+      console.log(`[${traceId}] Fetching Google Sheet: ${sheetName} from ${spreadsheetId}`)
+      
+      try {
+        const sheetsResponse = await fetch(sheetsUrl, {
+          headers: { 'Authorization': `Bearer ${googleAccessToken}` }
+        })
+        
+        if (!sheetsResponse.ok) {
+          const errorText = await sheetsResponse.text()
+          console.error(`[${traceId}] Google Sheets error ${sheetsResponse.status}:`, errorText)
+          resultError = `Erro ao acessar planilha: ${sheetsResponse.status}`
+        } else {
+          const sheetsData = await sheetsResponse.json()
+          const rawRows = sheetsData.values || []
+          
+          if (rawRows.length > 0) {
+            // Convert to objects using first row as headers
+            const headers = rawRows[0]
+            resultData = rawRows.slice(1, limit + 1).map((row: string[]) => {
+              const obj: Record<string, any> = {}
+              headers.forEach((h: string, i: number) => {
+                obj[h] = row[i] ?? null
+              })
+              return obj
+            })
+          }
+        }
+        
+        resultDebug = {
+          type: 'google_sheets',
+          spreadsheet_id: spreadsheetId,
+          sheet_name: sheetName,
+          period: { start, end }
+        }
+      } catch (error) {
+        console.error(`[${traceId}] Google Sheets fetch error:`, error)
+        resultError = `Erro ao acessar Google Sheets: ${String(error)}`
+      }
+    } else {
+      // Fetch from Supabase external database
+      console.log(`[${traceId}] Querying ${dataSource.name} (${dataSource.project_ref}): public.${viewName}`)
+      
+      const result = await fetchFromExternalView(
+        dataSource.project_url,
+        remoteKey!,
+        'public',
+        viewName,
+        timeColumn,
+        start,
+        end,
+        limit
+      )
+      
+      resultData = result.data
+      resultError = result.error
+      resultDebug = result.debug
+    }
+
+    if (resultError) {
       return new Response(JSON.stringify({ 
         ok: false,
         error: { 
           code: 'FETCH_ERROR', 
-          message: result.error 
+          message: resultError 
         },
         binding: {
           dashboard_id: dashboardId,
@@ -553,7 +684,7 @@ Deno.serve(async (req) => {
           data_source_name: dataSource.name,
           project_ref: dataSource.project_ref
         },
-        debug: result.debug,
+        debug: resultDebug,
         trace_id: traceId
       }), {
         status: 400,
@@ -563,13 +694,14 @@ Deno.serve(async (req) => {
 
     // Cache and return
     const responseData = {
-      data: result.data,
-      rows_returned: result.data.length,
+      data: resultData,
+      rows_returned: resultData.length,
       binding: {
         dashboard_id: dashboardId,
         view_name: viewName,
         time_column: timeColumn,
         data_source_name: dataSource.name,
+        data_source_type: isGoogleSheets ? 'google_sheets' : 'supabase',
         project_ref: dataSource.project_ref,
         period: { start, end }
       }
