@@ -6,34 +6,43 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Encryption helpers - must match google-sheets-connect format (base64 encoded key)
-async function getEncryptionKey(): Promise<CryptoKey> {
+// Encryption helpers - Google Sheets format (Base64 key)
+async function getEncryptionKeyGoogleFormat(): Promise<CryptoKey> {
   const keyB64 = Deno.env.get('MASTER_ENCRYPTION_KEY')
   if (!keyB64) throw new Error('MASTER_ENCRYPTION_KEY not configured')
-  
-  // Key is stored as base64 - decode it first
   const raw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0))
+  return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['decrypt'])
+}
+
+// Encryption helpers - Supabase datasource format (raw text padded)
+async function getEncryptionKeySupabaseFormat(): Promise<CryptoKey> {
+  const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
+  if (!masterKey) throw new Error('MASTER_ENCRYPTION_KEY not configured')
+  const encoder = new TextEncoder()
   return await crypto.subtle.importKey(
     'raw',
-    raw,
+    encoder.encode(masterKey.padEnd(32, '0').slice(0, 32)),
     { name: 'AES-GCM' },
     false,
     ['decrypt']
   )
 }
 
-async function decrypt(ciphertext: string): Promise<string> {
-  const key = await getEncryptionKey()
+async function decryptGoogleFormat(ciphertext: string): Promise<string> {
+  const key = await getEncryptionKeyGoogleFormat()
   const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
   const iv = combined.slice(0, 12)
-  const encrypted = combined.slice(12)
-  
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    encrypted
-  )
-  
+  const data = combined.slice(12)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
+  return new TextDecoder().decode(decrypted)
+}
+
+async function decryptSupabaseFormat(ciphertext: string): Promise<string> {
+  const key = await getEncryptionKeySupabaseFormat()
+  const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
+  const iv = combined.slice(0, 12)
+  const data = combined.slice(12)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
   return new TextDecoder().decode(decrypted)
 }
 
@@ -106,7 +115,7 @@ async function getDataSourceKey(dataSource: any): Promise<string | null> {
 
   if (dataSource.anon_key_encrypted) {
     try {
-      remoteKey = await decrypt(dataSource.anon_key_encrypted)
+      remoteKey = await decryptSupabaseFormat(dataSource.anon_key_encrypted)
     } catch (e) {
       console.error('Failed to decrypt anon_key:', e)
     }
@@ -114,7 +123,7 @@ async function getDataSourceKey(dataSource: any): Promise<string | null> {
 
   if (!remoteKey && dataSource.service_role_key_encrypted) {
     try {
-      remoteKey = await decrypt(dataSource.service_role_key_encrypted)
+      remoteKey = await decryptSupabaseFormat(dataSource.service_role_key_encrypted)
     } catch (e) {
       console.error('Failed to decrypt service_role_key:', e)
     }
@@ -502,7 +511,7 @@ Deno.serve(async (req) => {
     if (isGoogleSheets) {
       // Try to get Google Sheets access token
       if (dataSource.google_access_token_encrypted) {
-        try { googleAccessToken = await decrypt(dataSource.google_access_token_encrypted) } catch (e) {
+        try { googleAccessToken = await decryptGoogleFormat(dataSource.google_access_token_encrypted) } catch (e) {
           console.error(`[${traceId}] Failed to decrypt Google access token:`, e)
         }
       }
@@ -510,12 +519,12 @@ Deno.serve(async (req) => {
       // Refresh token if needed
       if (!googleAccessToken && dataSource.google_refresh_token_encrypted) {
         try {
-          const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
+          const refreshToken = await decryptGoogleFormat(dataSource.google_refresh_token_encrypted)
           const clientId = dataSource.google_client_id_encrypted 
-            ? await decrypt(dataSource.google_client_id_encrypted) 
+            ? await decryptGoogleFormat(dataSource.google_client_id_encrypted) 
             : Deno.env.get('GOOGLE_CLIENT_ID')
           const clientSecret = dataSource.google_client_secret_encrypted 
-            ? await decrypt(dataSource.google_client_secret_encrypted) 
+            ? await decryptGoogleFormat(dataSource.google_client_secret_encrypted) 
             : Deno.env.get('GOOGLE_CLIENT_SECRET')
           
           if (refreshToken && clientId && clientSecret) {
