@@ -596,7 +596,20 @@ export default function Datasets() {
       )}
 
       {/* Create/Edit Dataset Dialog */}
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+      <Dialog open={isDialogOpen} onOpenChange={(open) => {
+        setIsDialogOpen(open);
+        if (open) {
+          // Refresh data sources when opening dialog
+          supabase
+            .from('tenant_data_sources')
+            .select('id, name, project_url, tenant_id')
+            .eq('is_active', true)
+            .order('name')
+            .then(({ data }) => {
+              if (data) setDataSources(data);
+            });
+        }
+      }}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
