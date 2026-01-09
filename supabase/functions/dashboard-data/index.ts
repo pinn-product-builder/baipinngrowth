@@ -6,22 +6,20 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Encryption helpers
+// Encryption helpers - must match google-sheets-connect format (base64 encoded key)
 async function getEncryptionKey(): Promise<CryptoKey> {
-  const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
-  if (!masterKey) {
-    throw new Error('MASTER_ENCRYPTION_KEY not configured')
-  }
+  const keyB64 = Deno.env.get('MASTER_ENCRYPTION_KEY')
+  if (!keyB64) throw new Error('MASTER_ENCRYPTION_KEY not configured')
   
-  const encoder = new TextEncoder()
-  const keyMaterial = await crypto.subtle.importKey(
+  // Key is stored as base64 - decode it first
+  const raw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0))
+  return await crypto.subtle.importKey(
     'raw',
-    encoder.encode(masterKey.padEnd(32, '0').slice(0, 32)),
+    raw,
     { name: 'AES-GCM' },
     false,
     ['decrypt']
   )
-  return keyMaterial
 }
 
 async function decrypt(ciphertext: string): Promise<string> {
