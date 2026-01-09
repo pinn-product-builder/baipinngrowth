@@ -11,7 +11,7 @@ async function getEncryptionKeyGoogleFormat(): Promise<CryptoKey> {
   const keyB64 = Deno.env.get('MASTER_ENCRYPTION_KEY')
   if (!keyB64) throw new Error('MASTER_ENCRYPTION_KEY not configured')
   const raw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0))
-  return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['decrypt'])
+  return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
 }
 
 // Encryption helpers - Supabase datasource format (raw text padded)
@@ -44,6 +44,17 @@ async function decryptSupabaseFormat(ciphertext: string): Promise<string> {
   const data = combined.slice(12)
   const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
   return new TextDecoder().decode(decrypted)
+}
+
+async function encryptGoogleFormat(plaintext: string): Promise<string> {
+  const key = await getEncryptionKeyGoogleFormat()
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const encoder = new TextEncoder()
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(plaintext))
+  const combined = new Uint8Array(iv.length + new Uint8Array(encrypted).length)
+  combined.set(iv)
+  combined.set(new Uint8Array(encrypted), iv.length)
+  return btoa(String.fromCharCode(...combined))
 }
 
 // In-memory rate limiting
@@ -509,15 +520,25 @@ Deno.serve(async (req) => {
     let googleAccessToken: string | null = null
 
     if (isGoogleSheets) {
-      // Try to get Google Sheets access token
-      if (dataSource.google_access_token_encrypted) {
-        try { googleAccessToken = await decryptGoogleFormat(dataSource.google_access_token_encrypted) } catch (e) {
+      // Check if token is expired
+      const tokenExpiry = dataSource.google_token_expires_at 
+        ? new Date(dataSource.google_token_expires_at).getTime() 
+        : 0
+      const isTokenExpired = tokenExpiry < Date.now() - 60000 // 1 min buffer
+      
+      // Try to get Google Sheets access token (only if not expired)
+      if (dataSource.google_access_token_encrypted && !isTokenExpired) {
+        try { 
+          googleAccessToken = await decryptGoogleFormat(dataSource.google_access_token_encrypted) 
+          console.log(`[${traceId}] Using existing Google access token (expires: ${new Date(tokenExpiry).toISOString()})`)
+        } catch (e) {
           console.error(`[${traceId}] Failed to decrypt Google access token:`, e)
         }
       }
       
-      // Refresh token if needed
-      if (!googleAccessToken && dataSource.google_refresh_token_encrypted) {
+      // Refresh token if expired or missing
+      if ((!googleAccessToken || isTokenExpired) && dataSource.google_refresh_token_encrypted) {
+        console.log(`[${traceId}] Token expired or missing, attempting refresh...`)
         try {
           const refreshToken = await decryptGoogleFormat(dataSource.google_refresh_token_encrypted)
           const clientId = dataSource.google_client_id_encrypted 
@@ -541,14 +562,50 @@ Deno.serve(async (req) => {
             
             if (tokenResponse.ok) {
               const tokenData = await tokenResponse.json()
-              googleAccessToken = tokenData.access_token
-              console.log(`[${traceId}] Refreshed Google access token`)
+              googleAccessToken = tokenData.access_token as string
+              const newExpiry = new Date(Date.now() + (tokenData.expires_in || 3600) * 1000)
+              console.log(`[${traceId}] Refreshed Google access token, new expiry: ${newExpiry.toISOString()}`)
+              
+              // Update token in database for future requests
+              const encryptedToken = await encryptGoogleFormat(googleAccessToken!)
+              await adminClient.from('tenant_data_sources').update({
+                google_access_token_encrypted: encryptedToken,
+                google_token_expires_at: newExpiry.toISOString()
+              }).eq('id', dataSource.id)
+              console.log(`[${traceId}] Updated token in database`)
             } else {
-              console.error(`[${traceId}] Failed to refresh token:`, await tokenResponse.text())
+              const errorText = await tokenResponse.text()
+              console.error(`[${traceId}] Failed to refresh token:`, errorText)
+              return new Response(JSON.stringify({ 
+                ok: false,
+                error: { 
+                  code: 'TOKEN_REFRESH_FAILED', 
+                  message: 'Falha ao renovar token do Google. Por favor, reconecte a planilha.',
+                  details: errorText
+                },
+                trace_id: traceId
+              }), {
+                status: 401,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+              })
             }
+          } else {
+            console.error(`[${traceId}] Missing credentials for refresh`)
           }
         } catch (e) {
           console.error(`[${traceId}] Token refresh error:`, e)
+          return new Response(JSON.stringify({ 
+            ok: false,
+            error: { 
+              code: 'TOKEN_REFRESH_ERROR', 
+              message: 'Erro ao renovar token do Google',
+              details: String(e)
+            },
+            trace_id: traceId
+          }), {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          })
         }
       }
       
@@ -557,7 +614,7 @@ Deno.serve(async (req) => {
           ok: false,
           error: { 
             code: 'NO_CREDENTIALS', 
-            message: 'Credenciais do Google Sheets não configuradas ou expiradas' 
+            message: 'Credenciais do Google Sheets não configuradas ou expiradas. Por favor, reconecte a planilha.' 
           },
           binding: {
             data_source_id: dataSource.id,
@@ -565,7 +622,7 @@ Deno.serve(async (req) => {
           },
           trace_id: traceId
         }), {
-          status: 500,
+          status: 401,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         })
       }
