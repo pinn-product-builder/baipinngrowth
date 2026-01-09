@@ -546,26 +546,29 @@ serve(async (req) => {
       
       if (remoteKey && dashboard.view_name) {
         // Use REST API to query external Supabase
+        // P0 FIX: Removed LIMIT 1000 - AI analyst needs FULL data for accurate analysis
         let restUrl = `${ds.project_url}/rest/v1/${dashboard.view_name}?select=*`;
         restUrl += `&dia=gte.${start}`;
         restUrl += `&dia=lte.${end}`;
         restUrl += `&order=dia.asc`;
-        restUrl += `&limit=1000`;
+        // NOTE: No limit - we need full data for accurate AI analysis
         
-        console.log('AI analyst fetching from:', restUrl);
+        console.log('AI analyst fetching from:', restUrl, '(FULL - no limit)');
         
         try {
           const response = await fetch(restUrl, {
             headers: {
               'apikey': remoteKey,
               'Authorization': `Bearer ${remoteKey}`,
-              'Content-Type': 'application/json'
+              'Content-Type': 'application/json',
+              'Prefer': 'count=exact'
             }
           });
           
           if (response.ok) {
             rows = await response.json();
-            console.log(`AI analyst received ${rows.length} rows`);
+            const total = response.headers.get('content-range')?.split('/')[1] || rows.length;
+            console.log(`AI analyst received ${rows.length} rows (total: ${total}) - FULL aggregation`);
           } else {
             console.error('External Supabase error:', response.status, await response.text());
           }

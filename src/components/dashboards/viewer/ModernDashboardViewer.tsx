@@ -307,8 +307,33 @@ export default function ModernDashboardViewer({
     }
   }, [normalizedData, detectedColumns, data, templateKind, rawDashboardSpec]);
 
-  // Aggregate data for KPIs and insights
+  // P0 FIX: Aggregate data for KPIs and insights
+  // PREFER V2 server-side aggregations when available (spec-first, FULL aggregation)
+  // Only fallback to client-side calculation if V2 not available
   const aggregatedData: AggregatedData = useMemo(() => {
+    // PRIORITY 1: Use V2 server-side aggregations (FULL, no limit 1000)
+    if (v2Aggregations?.kpis && Object.keys(v2Aggregations.kpis).length > 0) {
+      console.log('[Viewer] Using V2 FULL aggregations (spec-first):', 
+        v2Aggregations.meta?.rows_aggregated, 'rows');
+      
+      // Return server-computed KPIs directly
+      const serverKpis = { ...v2Aggregations.kpis };
+      
+      // Add derived metrics that may not be in the server response
+      if (serverKpis.custo_total !== undefined && serverKpis.custo_total > 0) {
+        if (serverKpis.leads_total && serverKpis.leads_total > 0) {
+          serverKpis.cpl = serverKpis.custo_total / serverKpis.leads_total;
+        }
+        if (serverKpis.venda_total && serverKpis.venda_total > 0) {
+          serverKpis.cac = serverKpis.custo_total / serverKpis.venda_total;
+        }
+      }
+      
+      return serverKpis;
+    }
+    
+    // PRIORITY 2: Fallback to client-side calculation (legacy mode)
+    console.log('[Viewer] Fallback to client-side aggregation (legacy mode)');
     if (data.length === 0) return {};
     
     const sums: AggregatedData = {};
@@ -347,7 +372,7 @@ export default function ModernDashboardViewer({
     }
     
     return sums;
-  }, [data]);
+  }, [data, v2Aggregations]);
 
   const previousAggregated: AggregatedData = useMemo(() => {
     if (previousData.length === 0) return {};

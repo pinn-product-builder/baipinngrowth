@@ -797,19 +797,24 @@ serve(async (req) => {
       
       if (remoteKey && dashboard.view_name) {
         const fetchData = async (startD: string, endD: string): Promise<any[]> => {
-          const restUrl = `${ds.project_url}/rest/v1/${dashboard.view_name}?select=*&dia=gte.${startD}&dia=lte.${endD}&order=dia.asc&limit=1000`;
+          // P0 FIX: Removed LIMIT 1000 - use FULL data for context aggregation
+          const restUrl = `${ds.project_url}/rest/v1/${dashboard.view_name}?select=*&dia=gte.${startD}&dia=lte.${endD}&order=dia.asc`;
           
           try {
             const response = await fetch(restUrl, {
               headers: {
                 'apikey': remoteKey!,
                 'Authorization': `Bearer ${remoteKey}`,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Prefer': 'count=exact'
               }
             });
             
             if (response.ok) {
-              return await response.json();
+              const data = await response.json();
+              const total = response.headers.get('content-range')?.split('/')[1] || data.length;
+              console.log(`[dashboard-context-v2] Fetched ${data.length} rows (total: ${total}) - FULL aggregation`);
+              return data;
             }
           } catch (e) {
             console.error('Fetch error:', e);
@@ -823,7 +828,7 @@ serve(async (req) => {
           compareRows = await fetchData(compareStart, compareEnd);
         }
         
-        console.log(`Fetched ${rows.length} rows, ${compareRows.length} compare rows`);
+        console.log(`Fetched ${rows.length} rows, ${compareRows.length} compare rows (FULL, no limit)`);
       }
     }
     
