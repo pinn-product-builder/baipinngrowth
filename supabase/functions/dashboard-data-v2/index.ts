@@ -920,15 +920,25 @@ Deno.serve(async (req) => {
     let googleAccessToken: string | null = null
 
     if (isGoogleSheets) {
-      // Try to get Google Sheets access token
-      if (dataSource.google_access_token_encrypted) {
-        try { googleAccessToken = await decryptGoogleFormat(dataSource.google_access_token_encrypted) } catch (e) {
+      // Check if token is expired
+      const tokenExpiry = dataSource.google_token_expires_at 
+        ? new Date(dataSource.google_token_expires_at).getTime() 
+        : 0
+      const isTokenExpired = tokenExpiry < Date.now() - 60000 // 1 min buffer
+      
+      // Try to get Google Sheets access token (only if not expired)
+      if (dataSource.google_access_token_encrypted && !isTokenExpired) {
+        try { 
+          googleAccessToken = await decryptGoogleFormat(dataSource.google_access_token_encrypted) 
+          console.log(`[${traceId}] Using existing Google access token (expires: ${new Date(tokenExpiry).toISOString()})`)
+        } catch (e) {
           console.error(`[${traceId}] Failed to decrypt Google access token:`, e)
         }
       }
       
-      // Refresh token if needed
-      if (!googleAccessToken && dataSource.google_refresh_token_encrypted) {
+      // Refresh token if expired or missing
+      if ((!googleAccessToken || isTokenExpired) && dataSource.google_refresh_token_encrypted) {
+        console.log(`[${traceId}] Token expired or missing, attempting refresh...`)
         try {
           const refreshToken = await decryptGoogleFormat(dataSource.google_refresh_token_encrypted)
           const clientId = dataSource.google_client_id_encrypted 
@@ -952,19 +962,33 @@ Deno.serve(async (req) => {
             
             if (tokenResponse.ok) {
               const tokenData = await tokenResponse.json()
-              googleAccessToken = tokenData.access_token
-              console.log(`[${traceId}] Refreshed Google access token`)
+              googleAccessToken = tokenData.access_token as string
+              const newExpiry = new Date(Date.now() + (tokenData.expires_in || 3600) * 1000)
+              console.log(`[${traceId}] Refreshed Google access token, new expiry: ${newExpiry.toISOString()}`)
+              
+              // Update token in database for future requests
+              const encryptedToken = await encryptGoogleFormat(googleAccessToken!)
+              await adminClient.from('tenant_data_sources').update({
+                google_access_token_encrypted: encryptedToken,
+                google_token_expires_at: newExpiry.toISOString()
+              }).eq('id', dataSource.id)
+              console.log(`[${traceId}] Updated token in database`)
             } else {
-              console.error(`[${traceId}] Failed to refresh token:`, await tokenResponse.text())
+              const errorText = await tokenResponse.text()
+              console.error(`[${traceId}] Failed to refresh token:`, errorText)
+              return errorResponse('TOKEN_REFRESH_FAILED', 'Falha ao renovar token do Google. Por favor, reconecte a planilha.', errorText, traceId)
             }
+          } else {
+            console.error(`[${traceId}] Missing credentials for refresh: clientId=${!!clientId}, clientSecret=${!!clientSecret}, refreshToken=${!!refreshToken}`)
           }
         } catch (e) {
           console.error(`[${traceId}] Token refresh error:`, e)
+          return errorResponse('TOKEN_REFRESH_ERROR', 'Erro ao renovar token do Google', String(e), traceId)
         }
       }
       
       if (!googleAccessToken) {
-        return errorResponse('NO_CREDENTIALS', 'Credenciais do Google Sheets não configuradas ou expiradas', undefined, traceId)
+        return errorResponse('NO_CREDENTIALS', 'Credenciais do Google Sheets não configuradas ou expiradas. Por favor, reconecte a planilha.', undefined, traceId)
       }
     } else {
       // Supabase data source - get API key
