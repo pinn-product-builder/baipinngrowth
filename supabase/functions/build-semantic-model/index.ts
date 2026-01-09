@@ -25,7 +25,7 @@ async function getEncryptionKey(): Promise<CryptoKey> {
   const keyB64 = Deno.env.get('MASTER_ENCRYPTION_KEY')
   if (!keyB64) throw new Error('MASTER_ENCRYPTION_KEY not set')
   const raw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0))
-  return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['decrypt'])
+  return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
 }
 
 async function decrypt(ciphertext: string): Promise<string> {
