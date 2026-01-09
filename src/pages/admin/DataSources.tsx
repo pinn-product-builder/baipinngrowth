@@ -1104,89 +1104,211 @@ export default function DataSources() {
 
                       {googleOAuthStep === 'connect' && (
                         <div className="space-y-4">
-                          {/* Google API Credentials */}
-                          <div className="p-4 border rounded-lg bg-muted/30 space-y-4">
-                            <div className="flex items-center justify-between">
-                              <Label className="text-base font-medium">Credenciais Google OAuth</Label>
-                              <a 
-                                href="https://console.cloud.google.com/apis/credentials" 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="text-sm text-primary hover:underline flex items-center gap-1"
-                              >
-                                <ExternalLink className="h-3 w-3" />
-                                Criar no Google Cloud Console
-                              </a>
-                            </div>
-                            
-                            {/* Fixed Redirect URI - user must copy exactly */}
-                            <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg space-y-2">
-                              <Label className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                                ⚠️ Passo 1: Cadastrar Redirect URI no Google Cloud Console
-                              </Label>
-                              <p className="text-xs text-amber-700 dark:text-amber-300 mb-2">
-                                Copie a URL abaixo e adicione em: <strong>APIs & Services → Credentials → seu OAuth Client ID → Authorized redirect URIs</strong>
-                              </p>
-                              <div className="flex items-center gap-2">
-                                <code className="flex-1 bg-background px-3 py-2 rounded border text-sm font-mono break-all select-all">
-                                  {googleOAuthRedirectUri}
-                                </code>
-                                <Button 
-                                  type="button" 
-                                  size="sm" 
-                                  variant="secondary"
-                                  onClick={copyRedirectUri}
-                                  className="shrink-0"
+                          {/* Tutorial Completo */}
+                          <Alert className="border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800">
+                            <FileSpreadsheet className="h-4 w-4 text-blue-600" />
+                            <AlertTitle className="text-blue-800 dark:text-blue-200">📋 Guia de Configuração do Google Sheets</AlertTitle>
+                            <AlertDescription className="text-blue-700 dark:text-blue-300">
+                              Siga os passos abaixo para conectar suas planilhas. A configuração leva cerca de 5 minutos.
+                            </AlertDescription>
+                          </Alert>
+
+                          {/* Step 1: Create Project */}
+                          <div className="p-4 border rounded-lg bg-muted/30 space-y-3">
+                            <div className="flex items-start gap-3">
+                              <div className="flex items-center justify-center h-6 w-6 rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0">1</div>
+                              <div className="flex-1 space-y-2">
+                                <Label className="text-sm font-medium">Criar projeto no Google Cloud Console</Label>
+                                <p className="text-xs text-muted-foreground">
+                                  Acesse o Google Cloud Console e crie um novo projeto (ou use um existente).
+                                </p>
+                                <a 
+                                  href="https://console.cloud.google.com/projectcreate" 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
                                 >
-                                  Copiar
-                                </Button>
-                              </div>
-                              <div className="text-xs text-amber-700 dark:text-amber-300 space-y-1">
-                                <p>✅ Este é o callback OAuth dedicado (não é uma página da UI)</p>
-                                <p>✅ Copie <strong>exatamente</strong> como está, sem espaços ou barras extras</p>
-                                <p>✅ O Google só permite redirect para URIs cadastrados previamente</p>
+                                  <ExternalLink className="h-3 w-3" />
+                                  Criar Projeto no Google Cloud
+                                </a>
                               </div>
                             </div>
-                            
-                            <div className="grid grid-cols-1 gap-4">
-                              <div className="space-y-2">
-                                <Label htmlFor="googleClientId">Client ID</Label>
-                                <Input
-                                  id="googleClientId"
-                                  value={sheetsFormData.googleClientId}
-                                  onChange={(e) => setSheetsFormData({ ...sheetsFormData, googleClientId: e.target.value })}
-                                  placeholder="xxxxx.apps.googleusercontent.com"
-                                />
+                          </div>
+
+                          {/* Step 2: Enable APIs */}
+                          <div className="p-4 border rounded-lg bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 space-y-3">
+                            <div className="flex items-start gap-3">
+                              <div className="flex items-center justify-center h-6 w-6 rounded-full bg-amber-600 text-white text-xs font-bold shrink-0">2</div>
+                              <div className="flex-1 space-y-2">
+                                <Label className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                                  ⚠️ Habilitar APIs (OBRIGATÓRIO)
+                                </Label>
+                                <p className="text-xs text-amber-700 dark:text-amber-300">
+                                  Você precisa habilitar <strong>duas APIs</strong> no seu projeto:
+                                </p>
+                                <div className="space-y-2">
+                                  <a 
+                                    href="https://console.cloud.google.com/apis/library/sheets.googleapis.com" 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="flex items-center gap-2 p-2 bg-background rounded border hover:bg-accent text-xs"
+                                  >
+                                    <CheckCircle className="h-4 w-4 text-green-600" />
+                                    <span className="font-medium">Google Sheets API</span>
+                                    <ExternalLink className="h-3 w-3 ml-auto text-muted-foreground" />
+                                  </a>
+                                  <a 
+                                    href="https://console.cloud.google.com/apis/library/drive.googleapis.com" 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="flex items-center gap-2 p-2 bg-background rounded border hover:bg-accent text-xs"
+                                  >
+                                    <CheckCircle className="h-4 w-4 text-green-600" />
+                                    <span className="font-medium">Google Drive API</span>
+                                    <span className="text-muted-foreground">(para listar planilhas)</span>
+                                    <ExternalLink className="h-3 w-3 ml-auto text-muted-foreground" />
+                                  </a>
+                                </div>
+                                <p className="text-xs text-amber-700 dark:text-amber-300">
+                                  Clique em cada link e pressione <strong>"Enable"</strong> (Ativar).
+                                </p>
                               </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="googleClientSecret">Client Secret</Label>
-                                <Input
-                                  id="googleClientSecret"
-                                  type="password"
-                                  value={sheetsFormData.googleClientSecret}
-                                  onChange={(e) => setSheetsFormData({ ...sheetsFormData, googleClientSecret: e.target.value })}
-                                  placeholder="GOCSPX-..."
-                                />
+                            </div>
+                          </div>
+
+                          {/* Step 3: OAuth Consent Screen */}
+                          <div className="p-4 border rounded-lg bg-muted/30 space-y-3">
+                            <div className="flex items-start gap-3">
+                              <div className="flex items-center justify-center h-6 w-6 rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0">3</div>
+                              <div className="flex-1 space-y-2">
+                                <Label className="text-sm font-medium">Configurar Tela de Consentimento OAuth</Label>
+                                <p className="text-xs text-muted-foreground">
+                                  Configure a tela de consentimento com tipo <strong>"External"</strong> e adicione os escopos:
+                                </p>
+                                <ul className="text-xs text-muted-foreground list-disc list-inside space-y-1">
+                                  <li><code className="bg-muted px-1 rounded">.../auth/spreadsheets.readonly</code></li>
+                                  <li><code className="bg-muted px-1 rounded">.../auth/drive.readonly</code></li>
+                                </ul>
+                                <a 
+                                  href="https://console.cloud.google.com/apis/credentials/consent" 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                                >
+                                  <ExternalLink className="h-3 w-3" />
+                                  Configurar Tela de Consentimento
+                                </a>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Step 4: Create OAuth Credentials */}
+                          <div className="p-4 border rounded-lg bg-muted/30 space-y-3">
+                            <div className="flex items-start gap-3">
+                              <div className="flex items-center justify-center h-6 w-6 rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0">4</div>
+                              <div className="flex-1 space-y-2">
+                                <Label className="text-sm font-medium">Criar Credenciais OAuth 2.0</Label>
+                                <p className="text-xs text-muted-foreground">
+                                  Em <strong>Credentials → Create Credentials → OAuth client ID</strong>, selecione:
+                                </p>
+                                <ul className="text-xs text-muted-foreground list-disc list-inside space-y-1">
+                                  <li>Tipo: <strong>Web application</strong></li>
+                                  <li>Nome: qualquer nome (ex: "Lovable Dashboard")</li>
+                                </ul>
+                                <a 
+                                  href="https://console.cloud.google.com/apis/credentials" 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                                >
+                                  <ExternalLink className="h-3 w-3" />
+                                  Criar Credenciais OAuth
+                                </a>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Step 5: Add Redirect URI */}
+                          <div className="p-4 border rounded-lg bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800 space-y-3">
+                            <div className="flex items-start gap-3">
+                              <div className="flex items-center justify-center h-6 w-6 rounded-full bg-green-600 text-white text-xs font-bold shrink-0">5</div>
+                              <div className="flex-1 space-y-2">
+                                <Label className="text-sm font-medium text-green-800 dark:text-green-200">
+                                  Adicionar Redirect URI
+                                </Label>
+                                <p className="text-xs text-green-700 dark:text-green-300">
+                                  Nas configurações do OAuth Client ID, em <strong>"Authorized redirect URIs"</strong>, adicione exatamente:
+                                </p>
+                                <div className="flex items-center gap-2">
+                                  <code className="flex-1 bg-background px-3 py-2 rounded border text-sm font-mono break-all select-all">
+                                    {googleOAuthRedirectUri}
+                                  </code>
+                                  <Button 
+                                    type="button" 
+                                    size="sm" 
+                                    variant="secondary"
+                                    onClick={copyRedirectUri}
+                                    className="shrink-0"
+                                  >
+                                    Copiar
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Step 6: Enter Credentials */}
+                          <div className="p-4 border rounded-lg bg-primary/5 border-primary/20 space-y-4">
+                            <div className="flex items-start gap-3">
+                              <div className="flex items-center justify-center h-6 w-6 rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0">6</div>
+                              <div className="flex-1 space-y-3">
+                                <Label className="text-sm font-medium">Inserir suas Credenciais</Label>
+                                <p className="text-xs text-muted-foreground">
+                                  Copie o <strong>Client ID</strong> e <strong>Client Secret</strong> do seu OAuth Client criado:
+                                </p>
+                                <div className="grid grid-cols-1 gap-3">
+                                  <div className="space-y-1">
+                                    <Label htmlFor="googleClientId" className="text-xs">Client ID</Label>
+                                    <Input
+                                      id="googleClientId"
+                                      value={sheetsFormData.googleClientId}
+                                      onChange={(e) => setSheetsFormData({ ...sheetsFormData, googleClientId: e.target.value })}
+                                      placeholder="xxxxx.apps.googleusercontent.com"
+                                      className="font-mono text-xs"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <Label htmlFor="googleClientSecret" className="text-xs">Client Secret</Label>
+                                    <Input
+                                      id="googleClientSecret"
+                                      type="password"
+                                      value={sheetsFormData.googleClientSecret}
+                                      onChange={(e) => setSheetsFormData({ ...sheetsFormData, googleClientSecret: e.target.value })}
+                                      placeholder="GOCSPX-..."
+                                      className="font-mono text-xs"
+                                    />
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           </div>
                           
-                          <div className="flex flex-col items-center gap-4 py-6 border rounded-lg bg-muted/30">
-                            <FileSpreadsheet className="h-12 w-12 text-muted-foreground" />
-                            <p className="text-sm text-muted-foreground">Conecte sua conta Google para acessar planilhas</p>
+                          {/* Connect Button */}
+                          <div className="flex flex-col items-center gap-3 py-4 border rounded-lg bg-muted/30">
                             <Button 
                               type="button" 
                               onClick={startGoogleOAuth}
                               disabled={!sheetsFormData.tenantId || !sheetsFormData.googleClientId.trim() || !sheetsFormData.googleClientSecret.trim()}
+                              size="lg"
                             >
                               <ExternalLink className="mr-2 h-4 w-4" />
                               Conectar Conta Google
                             </Button>
                             {!sheetsFormData.tenantId && (
-                              <p className="text-xs text-destructive">Selecione um tenant primeiro</p>
+                              <p className="text-xs text-destructive">⚠️ Selecione um tenant primeiro</p>
                             )}
                             {sheetsFormData.tenantId && (!sheetsFormData.googleClientId.trim() || !sheetsFormData.googleClientSecret.trim()) && (
-                              <p className="text-xs text-destructive">Preencha as credenciais OAuth antes de conectar</p>
+                              <p className="text-xs text-destructive">⚠️ Preencha as credenciais OAuth acima</p>
                             )}
                           </div>
                         </div>
