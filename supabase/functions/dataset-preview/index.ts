@@ -40,7 +40,15 @@ async function decrypt(ciphertext: string): Promise<string> {
 }
 
 // Validate identifiers to prevent injection
-function isValidIdentifier(name: string): boolean {
+// For Supabase: strict SQL identifier format
+// For Google Sheets: allow unicode letters, numbers, spaces (sheet names)
+function isValidIdentifier(name: string, type: 'supabase' | 'google_sheets' = 'supabase'): boolean {
+  if (type === 'google_sheets') {
+    // Google Sheets: allow letters (including unicode), numbers, spaces, underscores, hyphens
+    // Max 100 chars, no control characters
+    return name.length > 0 && name.length <= 100 && !/[\x00-\x1f]/.test(name)
+  }
+  // Supabase: strict SQL identifier
   return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)
 }
 
@@ -263,8 +271,11 @@ Deno.serve(async (req) => {
       })
     }
 
+    // Determine data source type for validation
+    const dsType = dataSource.type === 'google_sheets' ? 'google_sheets' : 'supabase'
+    
     // Validate relation name
-    if (!isValidIdentifier(relationName)) {
+    if (!isValidIdentifier(relationName, dsType)) {
       return new Response(JSON.stringify({ 
         ok: false,
         error: { code: 'INVALID_IDENTIFIER', message: 'Nome da view/tabela inválido' },
@@ -275,7 +286,131 @@ Deno.serve(async (req) => {
       })
     }
 
-    // Get credentials
+    // Handle Google Sheets data sources
+    if (dataSource.type === 'google_sheets') {
+      let accessToken: string | null = null
+      
+      // Try to get access token
+      if (dataSource.google_access_token_encrypted) {
+        try {
+          accessToken = await decrypt(dataSource.google_access_token_encrypted)
+        } catch (e) {
+          console.error(`[${traceId}] Failed to decrypt access token:`, e)
+        }
+      }
+      
+      // Refresh token if needed
+      if (!accessToken && dataSource.google_refresh_token_encrypted) {
+        try {
+          const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
+          const clientId = dataSource.google_client_id_encrypted ? await decrypt(dataSource.google_client_id_encrypted) : Deno.env.get('GOOGLE_CLIENT_ID')
+          const clientSecret = dataSource.google_client_secret_encrypted ? await decrypt(dataSource.google_client_secret_encrypted) : Deno.env.get('GOOGLE_CLIENT_SECRET')
+          
+          if (refreshToken && clientId && clientSecret) {
+            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                client_id: clientId,
+                client_secret: clientSecret,
+                refresh_token: refreshToken,
+                grant_type: 'refresh_token'
+              })
+            })
+            
+            if (tokenResponse.ok) {
+              const tokenData = await tokenResponse.json()
+              accessToken = tokenData.access_token
+            }
+          }
+        } catch (e) {
+          console.error(`[${traceId}] Failed to refresh token:`, e)
+        }
+      }
+      
+      if (!accessToken) {
+        return new Response(JSON.stringify({ 
+          ok: false,
+          error: { code: 'NO_CREDENTIALS', message: 'Credenciais do Google Sheets não configuradas ou expiradas' },
+          trace_id: traceId
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+      
+      // Fetch data from Google Sheets
+      const spreadsheetId = dataSource.google_spreadsheet_id
+      const sheetName = relationName
+      
+      const sheetsUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName)}?majorDimension=ROWS`
+      
+      console.log(`[${traceId}] Fetching Google Sheet: ${sheetName} from ${spreadsheetId}`)
+      
+      const sheetsResponse = await fetch(sheetsUrl, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      })
+      
+      if (!sheetsResponse.ok) {
+        const errorText = await sheetsResponse.text()
+        console.error(`[${traceId}] Google Sheets error ${sheetsResponse.status}:`, errorText)
+        return new Response(JSON.stringify({ 
+          ok: false,
+          error: { code: 'FETCH_ERROR', message: `Erro ao acessar planilha: ${sheetsResponse.status}` },
+          trace_id: traceId
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+      
+      const sheetsData = await sheetsResponse.json()
+      const rows = sheetsData.values || []
+      
+      if (rows.length < 1) {
+        return new Response(JSON.stringify({ 
+          ok: true,
+          data: [],
+          rows_returned: 0,
+          binding: {
+            view_name: sheetName,
+            data_source_name: dataSource.name,
+            type: 'google_sheets'
+          },
+          trace_id: traceId
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+      
+      // Convert to objects using first row as headers
+      const headers = rows[0]
+      const dataRows = rows.slice(1, limit + 1).map((row: string[]) => {
+        const obj: Record<string, any> = {}
+        headers.forEach((h: string, i: number) => {
+          obj[h] = row[i] ?? null
+        })
+        return obj
+      })
+      
+      console.log(`[${traceId}] Fetched ${dataRows.length} rows from Google Sheet ${sheetName}`)
+      
+      return new Response(JSON.stringify({ 
+        ok: true,
+        data: dataRows,
+        rows_returned: dataRows.length,
+        binding: {
+          view_name: sheetName,
+          data_source_name: dataSource.name,
+          type: 'google_sheets'
+        },
+        trace_id: traceId
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
+    // Get credentials for Supabase
     const remoteKey = await getDataSourceKey(dataSource)
     if (!remoteKey) {
       return new Response(JSON.stringify({ 
