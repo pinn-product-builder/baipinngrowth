@@ -136,7 +136,9 @@ export default function DataSources() {
     spreadsheetId: '',
     spreadsheetName: '',
     selectedSheets: [] as string[],
-    syncMode: 'direct_query' as 'direct_query' | 'etl_to_supabase'
+    syncMode: 'direct_query' as 'direct_query' | 'etl_to_supabase',
+    googleClientId: '',
+    googleClientSecret: ''
   });
   
   // Google OAuth state
@@ -337,7 +339,9 @@ export default function DataSources() {
       spreadsheetId: '',
       spreadsheetName: '',
       selectedSheets: [],
-      syncMode: 'direct_query'
+      syncMode: 'direct_query',
+      googleClientId: '',
+      googleClientSecret: ''
     });
     setEditingDataSource(null);
     setAvailableViews([]);
@@ -555,6 +559,15 @@ export default function DataSources() {
 
   // Google OAuth flow
   const startGoogleOAuth = async () => {
+    if (!sheetsFormData.googleClientId.trim() || !sheetsFormData.googleClientSecret.trim()) {
+      toast({ 
+        title: 'Credenciais obrigatórias', 
+        description: 'Preencha o Client ID e Client Secret do Google antes de conectar.', 
+        variant: 'destructive' 
+      });
+      return;
+    }
+    
     try {
       const redirectUri = `${window.location.origin}/admin/data-sources`;
       const state = btoa(JSON.stringify({ tenantId: sheetsFormData.tenantId, name: sheetsFormData.name }));
@@ -563,7 +576,9 @@ export default function DataSources() {
         body: { 
           action: 'get_oauth_url', 
           redirect_uri: redirectUri,
-          state 
+          state,
+          google_client_id: sheetsFormData.googleClientId.trim(),
+          google_client_secret: sheetsFormData.googleClientSecret.trim()
         }
       });
 
@@ -607,7 +622,13 @@ export default function DataSources() {
   const handleGoogleOAuthCallback = async (code: string, redirectUri: string) => {
     try {
       const response = await supabase.functions.invoke('google-sheets-connect', {
-        body: { action: 'exchange_code', code, redirect_uri: redirectUri }
+        body: { 
+          action: 'exchange_code', 
+          code, 
+          redirect_uri: redirectUri,
+          google_client_id: sheetsFormData.googleClientId.trim(),
+          google_client_secret: sheetsFormData.googleClientSecret.trim()
+        }
       });
 
       if (response.error || !response.data?.ok) {
@@ -706,6 +727,27 @@ export default function DataSources() {
 
     setIsSubmitting(true);
     try {
+      // First, encrypt the Google OAuth credentials via edge function
+      let clientIdEncrypted = null;
+      let clientSecretEncrypted = null;
+      
+      if (sheetsFormData.googleClientId.trim() && sheetsFormData.googleClientSecret.trim()) {
+        const encryptResponse = await supabase.functions.invoke('google-sheets-connect', {
+          body: { 
+            action: 'encrypt_credentials',
+            google_client_id: sheetsFormData.googleClientId.trim(),
+            google_client_secret: sheetsFormData.googleClientSecret.trim()
+          }
+        });
+        
+        if (encryptResponse.error || !encryptResponse.data?.ok) {
+          throw new Error(encryptResponse.data?.error?.message || 'Erro ao criptografar credenciais');
+        }
+        
+        clientIdEncrypted = encryptResponse.data.client_id_encrypted;
+        clientSecretEncrypted = encryptResponse.data.client_secret_encrypted;
+      }
+      
       // Create one data source for the spreadsheet
       const payload = {
         tenant_id: sheetsFormData.tenantId,
@@ -719,7 +761,9 @@ export default function DataSources() {
         google_refresh_token_encrypted: googleRefreshTokenEncrypted || null,
         google_token_expires_at: googleTokenExpires?.toISOString() || null,
         google_email: googleEmail,
-        sync_mode: sheetsFormData.syncMode
+        sync_mode: sheetsFormData.syncMode,
+        google_client_id_encrypted: clientIdEncrypted,
+        google_client_secret_encrypted: clientSecretEncrypted
       };
 
       const { data, error } = await supabase
@@ -991,20 +1035,66 @@ export default function DataSources() {
                       </div>
 
                       {googleOAuthStep === 'connect' && (
-                        <div className="flex flex-col items-center gap-4 py-6 border rounded-lg bg-muted/30">
-                          <FileSpreadsheet className="h-12 w-12 text-muted-foreground" />
-                          <p className="text-sm text-muted-foreground">Conecte sua conta Google para acessar planilhas</p>
-                          <Button 
-                            type="button" 
-                            onClick={startGoogleOAuth}
-                            disabled={!sheetsFormData.tenantId}
-                          >
-                            <ExternalLink className="mr-2 h-4 w-4" />
-                            Conectar Conta Google
-                          </Button>
-                          {!sheetsFormData.tenantId && (
-                            <p className="text-xs text-destructive">Selecione um tenant primeiro</p>
-                          )}
+                        <div className="space-y-4">
+                          {/* Google API Credentials */}
+                          <div className="p-4 border rounded-lg bg-muted/30 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <Label className="text-base font-medium">Credenciais Google OAuth</Label>
+                              <a 
+                                href="https://console.cloud.google.com/apis/credentials" 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-sm text-primary hover:underline flex items-center gap-1"
+                              >
+                                <ExternalLink className="h-3 w-3" />
+                                Criar no Google Cloud Console
+                              </a>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Acesse o Google Cloud Console → APIs & Services → Credentials → Create OAuth Client ID (tipo Web Application).
+                              Adicione <code className="bg-background px-1 rounded">{window.location.origin}/admin/data-sources</code> em "Authorized redirect URIs".
+                            </p>
+                            <div className="grid grid-cols-1 gap-4">
+                              <div className="space-y-2">
+                                <Label htmlFor="googleClientId">Client ID</Label>
+                                <Input
+                                  id="googleClientId"
+                                  value={sheetsFormData.googleClientId}
+                                  onChange={(e) => setSheetsFormData({ ...sheetsFormData, googleClientId: e.target.value })}
+                                  placeholder="xxxxx.apps.googleusercontent.com"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label htmlFor="googleClientSecret">Client Secret</Label>
+                                <Input
+                                  id="googleClientSecret"
+                                  type="password"
+                                  value={sheetsFormData.googleClientSecret}
+                                  onChange={(e) => setSheetsFormData({ ...sheetsFormData, googleClientSecret: e.target.value })}
+                                  placeholder="GOCSPX-..."
+                                />
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div className="flex flex-col items-center gap-4 py-6 border rounded-lg bg-muted/30">
+                            <FileSpreadsheet className="h-12 w-12 text-muted-foreground" />
+                            <p className="text-sm text-muted-foreground">Conecte sua conta Google para acessar planilhas</p>
+                            <Button 
+                              type="button" 
+                              onClick={startGoogleOAuth}
+                              disabled={!sheetsFormData.tenantId || !sheetsFormData.googleClientId.trim() || !sheetsFormData.googleClientSecret.trim()}
+                            >
+                              <ExternalLink className="mr-2 h-4 w-4" />
+                              Conectar Conta Google
+                            </Button>
+                            {!sheetsFormData.tenantId && (
+                              <p className="text-xs text-destructive">Selecione um tenant primeiro</p>
+                            )}
+                            {sheetsFormData.tenantId && (!sheetsFormData.googleClientId.trim() || !sheetsFormData.googleClientSecret.trim()) && (
+                              <p className="text-xs text-destructive">Preencha as credenciais OAuth antes de conectar</p>
+                            )}
+                          </div>
                         </div>
                       )}
 
