@@ -20,33 +20,20 @@ function successResponse(data: Record<string, any>) {
   return jsonResponse({ ok: true, ...data })
 }
 
-// Encryption helpers
+// Encryption helpers - MUST match google-sheets-connect encryption format
 async function getEncryptionKey(): Promise<CryptoKey> {
-  const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
-  if (!masterKey) throw new Error('MASTER_ENCRYPTION_KEY not configured')
-  
-  const encoder = new TextEncoder()
-  return await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(masterKey.padEnd(32, '0').slice(0, 32)),
-    { name: 'AES-GCM' },
-    false,
-    ['decrypt']
-  )
+  const keyB64 = Deno.env.get('MASTER_ENCRYPTION_KEY')
+  if (!keyB64) throw new Error('MASTER_ENCRYPTION_KEY not set')
+  const raw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0))
+  return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['decrypt'])
 }
 
 async function decrypt(ciphertext: string): Promise<string> {
   const key = await getEncryptionKey()
   const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
   const iv = combined.slice(0, 12)
-  const encrypted = combined.slice(12)
-  
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    encrypted
-  )
-  
+  const data = combined.slice(12)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
   return new TextDecoder().decode(decrypted)
 }
 
@@ -1033,58 +1020,154 @@ Deno.serve(async (req) => {
       return errorResponse('NO_DATASOURCE', 'Data source não encontrado', undefined, traceId)
     }
 
-    let apiKey: string | null = null
+    let sampleRows: any[] = []
 
-    if (dataSource.service_role_key_encrypted) {
-      try {
-        apiKey = await decrypt(dataSource.service_role_key_encrypted)
-      } catch (e) {
-        console.error(`[${traceId}] Failed to decrypt service_role_key`)
-      }
-    }
-
-    if (!apiKey && dataSource.anon_key_encrypted) {
-      try {
-        apiKey = await decrypt(dataSource.anon_key_encrypted)
-      } catch (e) {
-        console.error(`[${traceId}] Failed to decrypt anon_key`)
-      }
-    }
-
-    // Fallback to Afonsina keys
-    if (!apiKey) {
-      const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
-      const afonsinaKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
+    // Handle Google Sheets data source
+    if (dataSource.type === 'google_sheets') {
+      console.log(`[${traceId}] Google Sheets data source detected`)
       
-      if (afonsinaUrl && dataSource.project_url === afonsinaUrl && afonsinaKey) {
-        apiKey = afonsinaKey
+      let accessToken: string | null = null
+      
+      if (dataSource.google_access_token_encrypted) {
+        try {
+          accessToken = await decrypt(dataSource.google_access_token_encrypted)
+        } catch (e) {
+          console.error(`[${traceId}] Failed to decrypt access token:`, e)
+        }
       }
-    }
 
-    if (!apiKey) {
-      return errorResponse('NO_CREDENTIALS', 'Credenciais não configuradas', undefined, traceId)
-    }
+      // Try to refresh token if needed
+      if (!accessToken && dataSource.google_refresh_token_encrypted) {
+        try {
+          const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
+          const clientId = dataSource.google_client_id_encrypted 
+            ? await decrypt(dataSource.google_client_id_encrypted) 
+            : null
+          const clientSecret = dataSource.google_client_secret_encrypted 
+            ? await decrypt(dataSource.google_client_secret_encrypted) 
+            : null
+          
+          if (clientId && clientSecret && refreshToken) {
+            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                client_id: clientId,
+                client_secret: clientSecret,
+                refresh_token: refreshToken,
+                grant_type: 'refresh_token'
+              })
+            })
 
-    // Fetch sample data
-    const objectName = dataset.object_name
-    const sampleUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*&limit=${sample_limit}`
-    
-    console.log(`[${traceId}] Fetching sample from ${objectName}, limit ${sample_limit}`)
-    
-    const sampleResponse = await fetch(sampleUrl, {
-      headers: {
-        'apikey': apiKey,
-        'Authorization': `Bearer ${apiKey}`,
-        'Accept': 'application/json'
+            if (tokenResponse.ok) {
+              const tokenData = await tokenResponse.json()
+              accessToken = tokenData.access_token
+              console.log(`[${traceId}] Successfully refreshed access token`)
+            }
+          }
+        } catch (e) {
+          console.error(`[${traceId}] Failed to refresh token:`, e)
+        }
       }
-    })
 
-    if (!sampleResponse.ok) {
-      const errorText = await sampleResponse.text()
-      return errorResponse('FETCH_ERROR', 'Erro ao buscar dados', errorText, traceId)
+      if (!accessToken) {
+        return errorResponse('NO_CREDENTIALS', 'Token OAuth do Google não configurado ou expirado', undefined, traceId)
+      }
+
+      // Fetch data from Google Sheets
+      const spreadsheetId = dataSource.google_spreadsheet_id
+      const sheetName = dataset.object_name || 'Sheet1'
+      
+      const sheetsUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName)}?majorDimension=ROWS`
+      
+      console.log(`[${traceId}] Fetching from Google Sheets: ${sheetName}`)
+      
+      const sheetsResponse = await fetch(sheetsUrl, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      })
+
+      if (!sheetsResponse.ok) {
+        const errorText = await sheetsResponse.text()
+        console.error(`[${traceId}] Sheets API error:`, errorText)
+        return errorResponse('SHEETS_ERROR', 'Erro ao buscar dados do Google Sheets', errorText, traceId)
+      }
+
+      const sheetsData = await sheetsResponse.json()
+      const rows = sheetsData.values || []
+      
+      if (rows.length < 2) {
+        return errorResponse('NO_DATA', 'Planilha vazia ou sem dados suficientes', undefined, traceId)
+      }
+
+      // First row is headers
+      const headers = rows[0].map((h: any) => String(h).trim() || `col_${rows[0].indexOf(h)}`)
+      const dataRows = rows.slice(1, sample_limit + 1)
+      
+      // Convert to objects
+      sampleRows = dataRows.map((row: any[]) => {
+        const obj: Record<string, any> = {}
+        headers.forEach((h: string, i: number) => {
+          obj[h] = row[i] ?? null
+        })
+        return obj
+      })
+      
+      console.log(`[${traceId}] Got ${sampleRows.length} rows from Google Sheets with ${headers.length} columns`)
+    } else {
+      // Handle Supabase data source
+      let apiKey: string | null = null
+
+      if (dataSource.service_role_key_encrypted) {
+        try {
+          apiKey = await decrypt(dataSource.service_role_key_encrypted)
+        } catch (e) {
+          console.error(`[${traceId}] Failed to decrypt service_role_key`)
+        }
+      }
+
+      if (!apiKey && dataSource.anon_key_encrypted) {
+        try {
+          apiKey = await decrypt(dataSource.anon_key_encrypted)
+        } catch (e) {
+          console.error(`[${traceId}] Failed to decrypt anon_key`)
+        }
+      }
+
+      // Fallback to Afonsina keys
+      if (!apiKey) {
+        const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
+        const afonsinaKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
+        
+        if (afonsinaUrl && dataSource.project_url === afonsinaUrl && afonsinaKey) {
+          apiKey = afonsinaKey
+        }
+      }
+
+      if (!apiKey) {
+        return errorResponse('NO_CREDENTIALS', 'Credenciais não configuradas', undefined, traceId)
+      }
+
+      // Fetch sample data
+      const objectName = dataset.object_name
+      const sampleUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*&limit=${sample_limit}`
+      
+      console.log(`[${traceId}] Fetching sample from ${objectName}, limit ${sample_limit}`)
+      
+      const sampleResponse = await fetch(sampleUrl, {
+        headers: {
+          'apikey': apiKey,
+          'Authorization': `Bearer ${apiKey}`,
+          'Accept': 'application/json'
+        }
+      })
+
+      if (!sampleResponse.ok) {
+        const errorText = await sampleResponse.text()
+        return errorResponse('FETCH_ERROR', 'Erro ao buscar dados', errorText, traceId)
+      }
+
+      sampleRows = await sampleResponse.json()
     }
-
-    const sampleRows = await sampleResponse.json()
 
     if (!Array.isArray(sampleRows)) {
       return errorResponse('INVALID_DATA', 'Resposta inválida do data source', undefined, traceId)
@@ -1092,7 +1175,7 @@ Deno.serve(async (req) => {
 
     // P0 HOTFIX: If we got rows, we MUST be able to infer columns
     if (sampleRows.length === 0) {
-      console.warn(`[${traceId}] P0 WARNING: Empty sample rows from ${objectName}`)
+      console.warn(`[${traceId}] P0 WARNING: Empty sample rows from dataset ${dataset_id}`)
       return errorResponse('NO_DATA', 'Dataset vazio - nenhuma linha retornada. Verifique se a view/tabela possui dados.', undefined, traceId)
     }
 
