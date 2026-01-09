@@ -20,33 +20,20 @@ function successResponse(data: Record<string, any>) {
   return jsonResponse({ ok: true, ...data })
 }
 
-// Encryption helpers
+// Encryption helpers - MUST match google-sheets-connect format
 async function getEncryptionKey(): Promise<CryptoKey> {
-  const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
-  if (!masterKey) throw new Error('MASTER_ENCRYPTION_KEY not configured')
-  
-  const encoder = new TextEncoder()
-  return await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(masterKey.padEnd(32, '0').slice(0, 32)),
-    { name: 'AES-GCM' },
-    false,
-    ['decrypt']
-  )
+  const keyB64 = Deno.env.get('MASTER_ENCRYPTION_KEY')
+  if (!keyB64) throw new Error('MASTER_ENCRYPTION_KEY not configured')
+  const raw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0))
+  return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['decrypt'])
 }
 
 async function decrypt(ciphertext: string): Promise<string> {
   const key = await getEncryptionKey()
   const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
   const iv = combined.slice(0, 12)
-  const encrypted = combined.slice(12)
-  
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    encrypted
-  )
-  
+  const data = combined.slice(12)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
   return new TextDecoder().decode(decrypted)
 }
 
@@ -466,74 +453,196 @@ Deno.serve(async (req) => {
       return errorResponse('NOT_FOUND', 'Data source não encontrado')
     }
 
-    // Get credentials
-    let apiKey: string | null = null
+    // Detect data source type
+    const isGoogleSheets = dataSource.type === 'google_sheets' || 
+      Boolean(dataSource.google_spreadsheet_id) || 
+      Boolean(dataSource.google_access_token_encrypted)
 
-    if (dataSource.anon_key_encrypted) {
-      try {
-        apiKey = await decrypt(dataSource.anon_key_encrypted)
-      } catch (e) {
-        console.error('Failed to decrypt anon_key')
-      }
-    }
-
-    if (!apiKey && dataSource.service_role_key_encrypted) {
-      try {
-        apiKey = await decrypt(dataSource.service_role_key_encrypted)
-      } catch (e) {
-        console.error('Failed to decrypt service_role_key')
-      }
-    }
-
-    // Fallback to Afonsina keys
-    if (!apiKey) {
-      const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
-      const afonsinaKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
-      
-      if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
-        apiKey = afonsinaKey || null
-      }
-    }
-
-    if (!apiKey) {
-      return errorResponse('NO_CREDENTIALS', 'Credenciais não configuradas para este data source')
-    }
-
-    console.log(`Introspecting ${relationType} ${schemaName}.${objectName}...`)
-
-    // Fetch view SQL definition (if view and requested)
+    let sampleData: any[] = []
+    let columnMetadata: any[] = []
     let sqlDefinition: string | null = null
-    if (include_sql && relationType === 'view') {
-      sqlDefinition = await fetchViewDefinition(dataSource.project_url, apiKey, schemaName, objectName)
-      if (sqlDefinition) {
-        console.log('View SQL definition retrieved')
+
+    if (isGoogleSheets) {
+      // =====================================================
+      // GOOGLE SHEETS DATA SOURCE
+      // =====================================================
+      console.log(`[introspect-dataset] Google Sheets data source detected`)
+
+      let accessToken: string | null = null
+      
+      if (dataSource.google_access_token_encrypted) {
+        try {
+          accessToken = await decrypt(dataSource.google_access_token_encrypted)
+        } catch (e) {
+          console.error('[introspect-dataset] Failed to decrypt access token:', e)
+        }
       }
-    }
 
-    // Fetch column metadata from information_schema
-    const columnMetadata = await fetchColumnMetadata(dataSource.project_url, apiKey, schemaName, objectName)
-    console.log(`Found ${columnMetadata.length} columns from information_schema`)
+      // Check if token is expired and refresh if needed
+      const tokenExpiresAt = dataSource.google_token_expires_at ? new Date(dataSource.google_token_expires_at) : null
+      const isExpired = tokenExpiresAt && tokenExpiresAt <= new Date()
 
-    // Fetch sample data (200 rows)
-    const restUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*&limit=200`
-    
-    console.log('Fetching sample data:', restUrl)
+      if ((!accessToken || isExpired) && dataSource.google_refresh_token_encrypted) {
+        console.log('[introspect-dataset] Refreshing Google access token...')
+        try {
+          const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
+          const clientId = dataSource.google_client_id_encrypted 
+            ? await decrypt(dataSource.google_client_id_encrypted) 
+            : Deno.env.get('GOOGLE_CLIENT_ID')
+          const clientSecret = dataSource.google_client_secret_encrypted 
+            ? await decrypt(dataSource.google_client_secret_encrypted) 
+            : Deno.env.get('GOOGLE_CLIENT_SECRET')
 
-    const response = await fetch(restUrl, {
-      headers: {
-        'apikey': apiKey,
-        'Authorization': `Bearer ${apiKey}`,
-        'Accept': 'application/json'
+          if (clientId && clientSecret && refreshToken) {
+            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                client_id: clientId,
+                client_secret: clientSecret,
+                refresh_token: refreshToken,
+                grant_type: 'refresh_token'
+              })
+            })
+
+            if (tokenResponse.ok) {
+              const tokenData = await tokenResponse.json()
+              accessToken = tokenData.access_token
+              console.log('[introspect-dataset] Token refreshed successfully')
+            } else {
+              console.error('[introspect-dataset] Token refresh failed:', await tokenResponse.text())
+            }
+          }
+        } catch (e) {
+          console.error('[introspect-dataset] Error refreshing token:', e)
+        }
       }
-    })
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error('Fetch error:', response.status, errorText)
-      return errorResponse('FETCH_ERROR', `Erro ao acessar ${objectName}`, errorText.slice(0, 200))
+      if (!accessToken) {
+        return errorResponse('NO_CREDENTIALS', 'Credenciais do Google Sheets não configuradas ou expiradas')
+      }
+
+      // Fetch from Google Sheets
+      const spreadsheetId = dataSource.google_spreadsheet_id
+      const sheetName = objectName || dataSource.google_sheet_name || 'Sheet1'
+      
+      if (!spreadsheetId) {
+        return errorResponse('VALIDATION_ERROR', 'Spreadsheet ID não configurado')
+      }
+
+      const sheetsUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName)}?majorDimension=ROWS`
+      
+      console.log(`[introspect-dataset] Fetching from Google Sheets: ${sheetName}`)
+      
+      const sheetsResponse = await fetch(sheetsUrl, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      })
+
+      if (!sheetsResponse.ok) {
+        const errorText = await sheetsResponse.text()
+        console.error('[introspect-dataset] Google Sheets API error:', errorText)
+        return errorResponse('FETCH_ERROR', 'Erro ao acessar Google Sheets', errorText.slice(0, 200))
+      }
+
+      const sheetsData = await sheetsResponse.json()
+      const values = sheetsData.values || []
+
+      if (values.length < 2) {
+        return successResponse({
+          columns: [],
+          row_count: 0,
+          primary_time_column: null,
+          grain_hint: 'day',
+          sql_definition: null,
+          message: 'Dataset vazio - não há dados para analisar'
+        })
+      }
+
+      // Convert to objects: first row is headers
+      const headers = values[0].map((h: any) => String(h).trim())
+      sampleData = values.slice(1, 201).map((row: any[]) => {
+        const obj: Record<string, any> = {}
+        headers.forEach((header: string, i: number) => {
+          obj[header] = row[i] !== undefined ? row[i] : null
+        })
+        return obj
+      })
+
+      console.log(`[introspect-dataset] Got ${sampleData.length} rows from Google Sheets with ${headers.length} columns`)
+
+    } else {
+      // =====================================================
+      // SUPABASE DATA SOURCE
+      // =====================================================
+      
+      // Get credentials
+      let apiKey: string | null = null
+
+      if (dataSource.anon_key_encrypted) {
+        try {
+          apiKey = await decrypt(dataSource.anon_key_encrypted)
+        } catch (e) {
+          console.error('Failed to decrypt anon_key')
+        }
+      }
+
+      if (!apiKey && dataSource.service_role_key_encrypted) {
+        try {
+          apiKey = await decrypt(dataSource.service_role_key_encrypted)
+        } catch (e) {
+          console.error('Failed to decrypt service_role_key')
+        }
+      }
+
+      // Fallback to Afonsina keys
+      if (!apiKey) {
+        const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
+        const afonsinaKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
+        
+        if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
+          apiKey = afonsinaKey || null
+        }
+      }
+
+      if (!apiKey) {
+        return errorResponse('NO_CREDENTIALS', 'Credenciais não configuradas para este data source')
+      }
+
+      console.log(`Introspecting ${relationType} ${schemaName}.${objectName}...`)
+
+      // Fetch view SQL definition (if view and requested)
+      if (include_sql && relationType === 'view') {
+        sqlDefinition = await fetchViewDefinition(dataSource.project_url, apiKey, schemaName, objectName)
+        if (sqlDefinition) {
+          console.log('View SQL definition retrieved')
+        }
+      }
+
+      // Fetch column metadata from information_schema
+      columnMetadata = await fetchColumnMetadata(dataSource.project_url, apiKey, schemaName, objectName)
+      console.log(`Found ${columnMetadata.length} columns from information_schema`)
+
+      // Fetch sample data (200 rows)
+      const restUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*&limit=200`
+      
+      console.log('Fetching sample data:', restUrl)
+
+      const response = await fetch(restUrl, {
+        headers: {
+          'apikey': apiKey,
+          'Authorization': `Bearer ${apiKey}`,
+          'Accept': 'application/json'
+        }
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Fetch error:', response.status, errorText)
+        return errorResponse('FETCH_ERROR', `Erro ao acessar ${objectName}`, errorText.slice(0, 200))
+      }
+
+      sampleData = await response.json()
     }
-
-    const sampleData = await response.json()
 
     if (!sampleData || sampleData.length === 0) {
       return successResponse({
