@@ -988,9 +988,12 @@ Deno.serve(async (req) => {
 
     console.log(`[${traceId}] Built semantic model v2: ${semanticModel.columns.length} columns, confidence ${Math.round(semanticModel.overall_confidence * 100)}%`)
 
+    // P0 HOTFIX: Include sample_rows in response for fallback column inference
+    // (useful when semantic_model.columns is empty but we have raw data)
     return successResponse({
       semantic_model: semanticModel,
       sample_count: sampleRows.length,
+      sample_rows: sampleRows.slice(0, 20), // Limit to 20 for response size
       trace_id: traceId
     })
 
