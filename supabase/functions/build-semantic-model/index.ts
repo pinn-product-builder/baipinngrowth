@@ -1028,16 +1028,24 @@ Deno.serve(async (req) => {
       
       let accessToken: string | null = null
       
-      if (dataSource.google_access_token_encrypted) {
+      // Check if token is expired based on stored expiry time
+      const tokenExpired = dataSource.google_token_expires_at 
+        ? new Date(dataSource.google_token_expires_at) <= new Date() 
+        : true // Assume expired if no expiry time
+      
+      // Try to decrypt stored access token if not expired
+      if (!tokenExpired && dataSource.google_access_token_encrypted) {
         try {
           accessToken = await decrypt(dataSource.google_access_token_encrypted)
+          console.log(`[${traceId}] Using stored access token (expires: ${dataSource.google_token_expires_at})`)
         } catch (e) {
           console.error(`[${traceId}] Failed to decrypt access token:`, e)
         }
       }
 
-      // Try to refresh token if needed
+      // Always try to refresh if no valid token or token is expired
       if (!accessToken && dataSource.google_refresh_token_encrypted) {
+        console.log(`[${traceId}] Attempting to refresh Google OAuth token...`)
         try {
           const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
           const clientId = dataSource.google_client_id_encrypted 
@@ -1048,6 +1056,8 @@ Deno.serve(async (req) => {
             : null
           
           if (clientId && clientSecret && refreshToken) {
+            console.log(`[${traceId}] Refreshing token with client ID: ${clientId.substring(0, 20)}...`)
+            
             const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
               method: 'POST',
               headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1062,8 +1072,45 @@ Deno.serve(async (req) => {
             if (tokenResponse.ok) {
               const tokenData = await tokenResponse.json()
               accessToken = tokenData.access_token
-              console.log(`[${traceId}] Successfully refreshed access token`)
+              const expiresIn = tokenData.expires_in || 3600
+              const newExpiresAt = new Date(Date.now() + expiresIn * 1000).toISOString()
+              
+              console.log(`[${traceId}] Successfully refreshed access token, expires in ${expiresIn}s`)
+              
+              // Save the new access token to the database for future use
+              try {
+                const keyForEncrypt = await getEncryptionKey()
+                const encoder = new TextEncoder()
+                const iv = crypto.getRandomValues(new Uint8Array(12))
+                const encrypted = await crypto.subtle.encrypt(
+                  { name: 'AES-GCM', iv },
+                  keyForEncrypt,
+                  encoder.encode(accessToken!)
+                )
+                const combined = new Uint8Array(iv.length + new Uint8Array(encrypted).length)
+                combined.set(iv)
+                combined.set(new Uint8Array(encrypted), iv.length)
+                const encryptedToken = btoa(String.fromCharCode(...combined))
+                
+                await adminClient
+                  .from('tenant_data_sources')
+                  .update({
+                    google_access_token_encrypted: encryptedToken,
+                    google_token_expires_at: newExpiresAt
+                  })
+                  .eq('id', dataSource.id)
+                
+                console.log(`[${traceId}] Saved refreshed token to database`)
+              } catch (saveErr) {
+                console.error(`[${traceId}] Failed to save refreshed token:`, saveErr)
+                // Continue - we still have the token in memory
+              }
+            } else {
+              const errorText = await tokenResponse.text()
+              console.error(`[${traceId}] Token refresh failed:`, errorText)
             }
+          } else {
+            console.error(`[${traceId}] Missing credentials for token refresh - clientId: ${!!clientId}, clientSecret: ${!!clientSecret}, refreshToken: ${!!refreshToken}`)
           }
         } catch (e) {
           console.error(`[${traceId}] Failed to refresh token:`, e)
@@ -1071,7 +1118,7 @@ Deno.serve(async (req) => {
       }
 
       if (!accessToken) {
-        return errorResponse('NO_CREDENTIALS', 'Token OAuth do Google não configurado ou expirado', undefined, traceId)
+        return errorResponse('NO_CREDENTIALS', 'Credenciais do Google Sheets não configuradas ou expiradas. Por favor, reconecte a fonte de dados.', undefined, traceId)
       }
 
       // Fetch data from Google Sheets
