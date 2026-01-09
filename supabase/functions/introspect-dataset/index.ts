@@ -20,16 +20,39 @@ function successResponse(data: Record<string, any>) {
   return jsonResponse({ ok: true, ...data })
 }
 
-// Encryption helpers - MUST match google-sheets-connect format
-async function getEncryptionKey(): Promise<CryptoKey> {
+// Encryption helpers - Google Sheets format (Base64 key)
+async function getEncryptionKeyGoogleFormat(): Promise<CryptoKey> {
   const keyB64 = Deno.env.get('MASTER_ENCRYPTION_KEY')
   if (!keyB64) throw new Error('MASTER_ENCRYPTION_KEY not configured')
   const raw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0))
   return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['decrypt'])
 }
 
-async function decrypt(ciphertext: string): Promise<string> {
-  const key = await getEncryptionKey()
+// Encryption helpers - Supabase datasource format (raw text padded)
+async function getEncryptionKeySupabaseFormat(): Promise<CryptoKey> {
+  const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
+  if (!masterKey) throw new Error('MASTER_ENCRYPTION_KEY not configured')
+  const encoder = new TextEncoder()
+  return await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(masterKey.padEnd(32, '0').slice(0, 32)),
+    { name: 'AES-GCM' },
+    false,
+    ['decrypt']
+  )
+}
+
+async function decryptGoogleFormat(ciphertext: string): Promise<string> {
+  const key = await getEncryptionKeyGoogleFormat()
+  const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
+  const iv = combined.slice(0, 12)
+  const data = combined.slice(12)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
+  return new TextDecoder().decode(decrypted)
+}
+
+async function decryptSupabaseFormat(ciphertext: string): Promise<string> {
+  const key = await getEncryptionKeySupabaseFormat()
   const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
   const iv = combined.slice(0, 12)
   const data = combined.slice(12)
@@ -472,7 +495,7 @@ Deno.serve(async (req) => {
       
       if (dataSource.google_access_token_encrypted) {
         try {
-          accessToken = await decrypt(dataSource.google_access_token_encrypted)
+          accessToken = await decryptGoogleFormat(dataSource.google_access_token_encrypted)
         } catch (e) {
           console.error('[introspect-dataset] Failed to decrypt access token:', e)
         }
@@ -485,12 +508,12 @@ Deno.serve(async (req) => {
       if ((!accessToken || isExpired) && dataSource.google_refresh_token_encrypted) {
         console.log('[introspect-dataset] Refreshing Google access token...')
         try {
-          const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
+          const refreshToken = await decryptGoogleFormat(dataSource.google_refresh_token_encrypted)
           const clientId = dataSource.google_client_id_encrypted 
-            ? await decrypt(dataSource.google_client_id_encrypted) 
+            ? await decryptGoogleFormat(dataSource.google_client_id_encrypted) 
             : Deno.env.get('GOOGLE_CLIENT_ID')
           const clientSecret = dataSource.google_client_secret_encrypted 
-            ? await decrypt(dataSource.google_client_secret_encrypted) 
+            ? await decryptGoogleFormat(dataSource.google_client_secret_encrypted) 
             : Deno.env.get('GOOGLE_CLIENT_SECRET')
 
           if (clientId && clientSecret && refreshToken) {
@@ -580,7 +603,7 @@ Deno.serve(async (req) => {
 
       if (dataSource.anon_key_encrypted) {
         try {
-          apiKey = await decrypt(dataSource.anon_key_encrypted)
+          apiKey = await decryptSupabaseFormat(dataSource.anon_key_encrypted)
         } catch (e) {
           console.error('Failed to decrypt anon_key')
         }
@@ -588,7 +611,7 @@ Deno.serve(async (req) => {
 
       if (!apiKey && dataSource.service_role_key_encrypted) {
         try {
-          apiKey = await decrypt(dataSource.service_role_key_encrypted)
+          apiKey = await decryptSupabaseFormat(dataSource.service_role_key_encrypted)
         } catch (e) {
           console.error('Failed to decrypt service_role_key')
         }
