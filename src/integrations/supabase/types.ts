@@ -1602,6 +1602,8 @@ export type Database = {
           bearer_token: string | null
           created_at: string
           google_access_token_encrypted: string | null
+          google_client_id_encrypted: string | null
+          google_client_secret_encrypted: string | null
           google_email: string | null
           google_refresh_token_encrypted: string | null
           google_sheet_name: string | null
@@ -1629,6 +1631,8 @@ export type Database = {
           bearer_token?: string | null
           created_at?: string
           google_access_token_encrypted?: string | null
+          google_client_id_encrypted?: string | null
+          google_client_secret_encrypted?: string | null
           google_email?: string | null
           google_refresh_token_encrypted?: string | null
           google_sheet_name?: string | null
@@ -1656,6 +1660,8 @@ export type Database = {
           bearer_token?: string | null
           created_at?: string
           google_access_token_encrypted?: string | null
+          google_client_id_encrypted?: string | null
+          google_client_secret_encrypted?: string | null
           google_email?: string | null
           google_refresh_token_encrypted?: string | null
           google_sheet_name?: string | null

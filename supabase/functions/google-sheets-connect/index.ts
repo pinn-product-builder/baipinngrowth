@@ -53,13 +53,14 @@ async function decrypt(ciphertext: string): Promise<string> {
   return new TextDecoder().decode(decrypted)
 }
 
-// Token refresh helper
-async function refreshAccessToken(refreshToken: string): Promise<{ access_token: string; expires_in: number } | null> {
-  const clientId = Deno.env.get('GOOGLE_CLIENT_ID')
-  const clientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET')
-  
+// Token refresh helper - now accepts credentials as parameters
+async function refreshAccessToken(
+  refreshToken: string, 
+  clientId: string, 
+  clientSecret: string
+): Promise<{ access_token: string; expires_in: number } | null> {
   if (!clientId || !clientSecret) {
-    console.error('Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET')
+    console.error('Missing clientId or clientSecret for token refresh')
     return null
   }
 
@@ -127,9 +128,10 @@ Deno.serve(async (req) => {
 
     // ACTION: Get OAuth URL
     if (action === 'get_oauth_url') {
-      const clientId = Deno.env.get('GOOGLE_CLIENT_ID')
+      // Accept client ID from request body (per-connection credentials)
+      const clientId = body.google_client_id || Deno.env.get('GOOGLE_CLIENT_ID')
       if (!clientId) {
-        return errorResponse('CONFIG_ERROR', 'GOOGLE_CLIENT_ID não configurado. Configure nas variáveis de ambiente.')
+        return errorResponse('CONFIG_ERROR', 'GOOGLE_CLIENT_ID não fornecido. Preencha o Client ID no formulário.')
       }
 
       const { redirect_uri, state } = body
@@ -165,10 +167,11 @@ Deno.serve(async (req) => {
         return errorResponse('VALIDATION_ERROR', 'code e redirect_uri são obrigatórios')
       }
 
-      const clientId = Deno.env.get('GOOGLE_CLIENT_ID')
-      const clientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET')
+      // Accept credentials from request body (per-connection credentials)
+      const clientId = body.google_client_id || Deno.env.get('GOOGLE_CLIENT_ID')
+      const clientSecret = body.google_client_secret || Deno.env.get('GOOGLE_CLIENT_SECRET')
       if (!clientId || !clientSecret) {
-        return errorResponse('CONFIG_ERROR', 'Credenciais Google não configuradas')
+        return errorResponse('CONFIG_ERROR', 'Credenciais Google não fornecidas. Preencha Client ID e Client Secret.')
       }
 
       const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
@@ -214,6 +217,23 @@ Deno.serve(async (req) => {
       })
     }
 
+    // ACTION: Encrypt credentials (for storing client_id and client_secret)
+    if (action === 'encrypt_credentials') {
+      const { google_client_id, google_client_secret } = body
+      
+      if (!google_client_id || !google_client_secret) {
+        return errorResponse('VALIDATION_ERROR', 'google_client_id e google_client_secret são obrigatórios')
+      }
+
+      const clientIdEncrypted = await encrypt(google_client_id)
+      const clientSecretEncrypted = await encrypt(google_client_secret)
+
+      return successResponse({
+        client_id_encrypted: clientIdEncrypted,
+        client_secret_encrypted: clientSecretEncrypted,
+      })
+    }
+
     // ACTION: List spreadsheets
     if (action === 'list_spreadsheets') {
       const { data_source_id, access_token_encrypted } = body
@@ -221,10 +241,10 @@ Deno.serve(async (req) => {
       let accessToken: string
 
       if (data_source_id) {
-        // Get stored token
+        // Get stored token and credentials
         const { data: ds, error: dsError } = await adminClient
           .from('tenant_data_sources')
-          .select('google_access_token_encrypted, google_refresh_token_encrypted, google_token_expires_at')
+          .select('google_access_token_encrypted, google_refresh_token_encrypted, google_token_expires_at, google_client_id_encrypted, google_client_secret_encrypted')
           .eq('id', data_source_id)
           .single()
 
@@ -239,9 +259,19 @@ Deno.serve(async (req) => {
         // Check if token expired
         const expiresAt = ds.google_token_expires_at ? new Date(ds.google_token_expires_at) : null
         if (expiresAt && expiresAt < new Date() && ds.google_refresh_token_encrypted) {
+          // Get credentials for refresh
+          let clientId = Deno.env.get('GOOGLE_CLIENT_ID') || ''
+          let clientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET') || ''
+          
+          // Use stored credentials if available
+          if (ds.google_client_id_encrypted && ds.google_client_secret_encrypted) {
+            clientId = await decrypt(ds.google_client_id_encrypted)
+            clientSecret = await decrypt(ds.google_client_secret_encrypted)
+          }
+          
           // Refresh token
           const refreshToken = await decrypt(ds.google_refresh_token_encrypted)
-          const newTokens = await refreshAccessToken(refreshToken)
+          const newTokens = await refreshAccessToken(refreshToken, clientId, clientSecret)
           
           if (newTokens) {
             accessToken = newTokens.access_token
