@@ -34,7 +34,7 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useAuditLog } from '@/hooks/useAuditLog';
-import { Database, Plus, Search, MoreHorizontal, Pencil, Power, CheckCircle, XCircle, Loader2, Trash2, Key, RefreshCw, Lock, Unlock, Globe, Webhook, AlertCircle } from 'lucide-react';
+import { Database, Plus, Search, MoreHorizontal, Pencil, Power, CheckCircle, XCircle, Loader2, Trash2, Key, RefreshCw, Lock, Unlock, Globe, Webhook, AlertCircle, FileSpreadsheet, ExternalLink, Mail, Table as TableIcon } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,7 +77,21 @@ interface ViewInfo {
 }
 
 type TestStatus = 'idle' | 'testing' | 'success' | 'error';
-type DataSourceType = 'supabase' | 'proxy_webhook';
+type DataSourceType = 'supabase' | 'proxy_webhook' | 'google_sheets';
+
+interface GoogleSpreadsheet {
+  id: string;
+  name: string;
+  modifiedTime?: string;
+}
+
+interface GoogleSheet {
+  sheetId: number;
+  title: string;
+  index: number;
+  rowCount?: number;
+  columnCount?: number;
+}
 
 export default function DataSources() {
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
@@ -114,6 +128,28 @@ export default function DataSources() {
     anonKey: '',
     serviceRoleKey: ''
   });
+  
+  // Form data for Google Sheets
+  const [sheetsFormData, setSheetsFormData] = useState({
+    name: '',
+    tenantId: '',
+    spreadsheetId: '',
+    spreadsheetName: '',
+    selectedSheets: [] as string[],
+    syncMode: 'direct_query' as 'direct_query' | 'etl_to_supabase'
+  });
+  
+  // Google OAuth state
+  const [googleOAuthStep, setGoogleOAuthStep] = useState<'connect' | 'select_spreadsheet' | 'select_sheets' | 'done'>('connect');
+  const [googleAccessTokenEncrypted, setGoogleAccessTokenEncrypted] = useState<string>('');
+  const [googleRefreshTokenEncrypted, setGoogleRefreshTokenEncrypted] = useState<string>('');
+  const [googleEmail, setGoogleEmail] = useState<string>('');
+  const [googleTokenExpires, setGoogleTokenExpires] = useState<Date | null>(null);
+  const [spreadsheets, setSpreadsheets] = useState<GoogleSpreadsheet[]>([]);
+  const [sheets, setSheets] = useState<GoogleSheet[]>([]);
+  const [isLoadingSpreadsheets, setIsLoadingSpreadsheets] = useState(false);
+  const [isLoadingSheets, setIsLoadingSheets] = useState(false);
+  const [spreadsheetSearch, setSpreadsheetSearch] = useState('');
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSavingKeys, setIsSavingKeys] = useState(false);
@@ -295,10 +331,27 @@ export default function DataSources() {
       bearerToken: '',
       allowedViews: []
     });
+    setSheetsFormData({
+      name: '',
+      tenantId: '',
+      spreadsheetId: '',
+      spreadsheetName: '',
+      selectedSheets: [],
+      syncMode: 'direct_query'
+    });
     setEditingDataSource(null);
     setAvailableViews([]);
     setAvailableTables([]);
     setSelectedType('proxy_webhook');
+    // Reset Google OAuth state
+    setGoogleOAuthStep('connect');
+    setGoogleAccessTokenEncrypted('');
+    setGoogleRefreshTokenEncrypted('');
+    setGoogleEmail('');
+    setGoogleTokenExpires(null);
+    setSpreadsheets([]);
+    setSheets([]);
+    setSpreadsheetSearch('');
   };
 
   const openEditDialog = (ds: DataSource) => {
@@ -452,8 +505,262 @@ export default function DataSources() {
   const testConnection = (ds: DataSource) => {
     if (ds.type === 'proxy_webhook') {
       testProxyConnection(ds);
+    } else if (ds.type === 'google_sheets') {
+      testGoogleSheetsConnection(ds);
     } else {
       testSupabaseConnection(ds);
+    }
+  };
+
+  // Test Google Sheets connection
+  const testGoogleSheetsConnection = async (ds: DataSource) => {
+    setTestStatus(prev => ({ ...prev, [ds.id]: 'testing' }));
+    setTestResults(prev => ({ ...prev, [ds.id]: '' }));
+
+    try {
+      const response = await supabase.functions.invoke('google-sheets-connect', {
+        body: { action: 'test_connection', data_source_id: ds.id }
+      });
+
+      if (response.error) {
+        throw new Error(response.error.message || 'Erro ao chamar função');
+      }
+
+      const result = response.data;
+      
+      if (result.ok) {
+        setTestStatus(prev => ({ ...prev, [ds.id]: 'success' }));
+        setTestResults(prev => ({ ...prev, [ds.id]: result.message }));
+        toast({ title: 'Conexão OK', description: result.message });
+      } else {
+        const errorMsg = result.error?.message || 'Erro desconhecido';
+        setTestStatus(prev => ({ ...prev, [ds.id]: 'error' }));
+        setTestResults(prev => ({ ...prev, [ds.id]: errorMsg }));
+        toast({ 
+          title: `Falha: ${result.error?.code || 'ERRO'}`, 
+          description: errorMsg, 
+          variant: 'destructive' 
+        });
+      }
+    } catch (error: any) {
+      setTestStatus(prev => ({ ...prev, [ds.id]: 'error' }));
+      setTestResults(prev => ({ ...prev, [ds.id]: error.message }));
+      toast({ title: 'Erro de conexão', description: error.message, variant: 'destructive' });
+    }
+
+    setTimeout(() => {
+      setTestStatus(prev => ({ ...prev, [ds.id]: 'idle' }));
+    }, 5000);
+  };
+
+  // Google OAuth flow
+  const startGoogleOAuth = async () => {
+    try {
+      const redirectUri = `${window.location.origin}/admin/data-sources`;
+      const state = btoa(JSON.stringify({ tenantId: sheetsFormData.tenantId, name: sheetsFormData.name }));
+      
+      const response = await supabase.functions.invoke('google-sheets-connect', {
+        body: { 
+          action: 'get_oauth_url', 
+          redirect_uri: redirectUri,
+          state 
+        }
+      });
+
+      if (response.error || !response.data?.ok) {
+        const errMsg = response.data?.error?.message || response.error?.message || 'Erro ao obter URL OAuth';
+        toast({ title: 'Erro', description: errMsg, variant: 'destructive' });
+        return;
+      }
+
+      // Open OAuth in popup
+      const popup = window.open(response.data.oauth_url, 'google_oauth', 'width=600,height=700');
+      
+      // Listen for the callback
+      const checkPopup = setInterval(() => {
+        try {
+          if (popup?.closed) {
+            clearInterval(checkPopup);
+            return;
+          }
+          
+          const popupUrl = popup?.location?.href;
+          if (popupUrl && popupUrl.includes('code=')) {
+            clearInterval(checkPopup);
+            popup?.close();
+            
+            const url = new URL(popupUrl);
+            const code = url.searchParams.get('code');
+            if (code) {
+              handleGoogleOAuthCallback(code, redirectUri);
+            }
+          }
+        } catch {
+          // Cross-origin error expected until redirect happens
+        }
+      }, 500);
+    } catch (error: any) {
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    }
+  };
+
+  const handleGoogleOAuthCallback = async (code: string, redirectUri: string) => {
+    try {
+      const response = await supabase.functions.invoke('google-sheets-connect', {
+        body: { action: 'exchange_code', code, redirect_uri: redirectUri }
+      });
+
+      if (response.error || !response.data?.ok) {
+        const errMsg = response.data?.error?.message || response.error?.message || 'Erro ao trocar código OAuth';
+        toast({ title: 'Erro OAuth', description: errMsg, variant: 'destructive' });
+        return;
+      }
+
+      const { access_token_encrypted, refresh_token_encrypted, email, expires_in } = response.data;
+      
+      setGoogleAccessTokenEncrypted(access_token_encrypted);
+      setGoogleRefreshTokenEncrypted(refresh_token_encrypted || '');
+      setGoogleEmail(email || '');
+      setGoogleTokenExpires(expires_in ? new Date(Date.now() + expires_in * 1000) : null);
+      setGoogleOAuthStep('select_spreadsheet');
+      
+      toast({ title: 'Conectado!', description: `Conta Google conectada: ${email}` });
+      
+      // Load spreadsheets
+      loadSpreadsheets(access_token_encrypted);
+    } catch (error: any) {
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    }
+  };
+
+  const loadSpreadsheets = async (accessTokenEncrypted?: string) => {
+    setIsLoadingSpreadsheets(true);
+    try {
+      const response = await supabase.functions.invoke('google-sheets-connect', {
+        body: { 
+          action: 'list_spreadsheets', 
+          access_token_encrypted: accessTokenEncrypted || googleAccessTokenEncrypted 
+        }
+      });
+
+      if (response.error || !response.data?.ok) {
+        throw new Error(response.data?.error?.message || 'Erro ao listar planilhas');
+      }
+
+      setSpreadsheets(response.data.spreadsheets || []);
+    } catch (error: any) {
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    } finally {
+      setIsLoadingSpreadsheets(false);
+    }
+  };
+
+  const selectSpreadsheet = async (spreadsheet: GoogleSpreadsheet) => {
+    setSheetsFormData(prev => ({
+      ...prev,
+      spreadsheetId: spreadsheet.id,
+      spreadsheetName: spreadsheet.name,
+      name: prev.name || spreadsheet.name
+    }));
+    
+    // Load sheets for this spreadsheet
+    setIsLoadingSheets(true);
+    try {
+      const response = await supabase.functions.invoke('google-sheets-connect', {
+        body: { 
+          action: 'list_sheets', 
+          spreadsheet_id: spreadsheet.id,
+          access_token_encrypted: googleAccessTokenEncrypted 
+        }
+      });
+
+      if (response.error || !response.data?.ok) {
+        throw new Error(response.data?.error?.message || 'Erro ao listar abas');
+      }
+
+      setSheets(response.data.sheets || []);
+      setGoogleOAuthStep('select_sheets');
+    } catch (error: any) {
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    } finally {
+      setIsLoadingSheets(false);
+    }
+  };
+
+  const toggleSheetSelection = (sheetTitle: string) => {
+    setSheetsFormData(prev => ({
+      ...prev,
+      selectedSheets: prev.selectedSheets.includes(sheetTitle)
+        ? prev.selectedSheets.filter(s => s !== sheetTitle)
+        : [...prev.selectedSheets, sheetTitle]
+    }));
+  };
+
+  const handleSubmitGoogleSheets = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sheetsFormData.name.trim() || !sheetsFormData.tenantId || !sheetsFormData.spreadsheetId) return;
+    if (sheetsFormData.selectedSheets.length === 0) {
+      toast({ title: 'Erro', description: 'Selecione pelo menos uma aba.', variant: 'destructive' });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // Create one data source for the spreadsheet
+      const payload = {
+        tenant_id: sheetsFormData.tenantId,
+        name: sheetsFormData.name,
+        type: 'google_sheets',
+        project_ref: sheetsFormData.spreadsheetId,
+        project_url: `https://docs.google.com/spreadsheets/d/${sheetsFormData.spreadsheetId}`,
+        allowed_views: sheetsFormData.selectedSheets,
+        google_spreadsheet_id: sheetsFormData.spreadsheetId,
+        google_access_token_encrypted: googleAccessTokenEncrypted,
+        google_refresh_token_encrypted: googleRefreshTokenEncrypted || null,
+        google_token_expires_at: googleTokenExpires?.toISOString() || null,
+        google_email: googleEmail,
+        sync_mode: sheetsFormData.syncMode
+      };
+
+      const { data, error } = await supabase
+        .from('tenant_data_sources')
+        .insert(payload)
+        .select()
+        .single();
+
+      if (error) throw error;
+      
+      await logCreate('data_source', data.id, sheetsFormData.name, { 
+        type: 'google_sheets', 
+        spreadsheet_id: sheetsFormData.spreadsheetId,
+        sheets: sheetsFormData.selectedSheets 
+      });
+      
+      // Create datasets for each selected sheet
+      for (const sheetName of sheetsFormData.selectedSheets) {
+        await supabase.from('datasets').insert({
+          tenant_id: sheetsFormData.tenantId,
+          datasource_id: data.id,
+          name: `${sheetsFormData.name} - ${sheetName}`,
+          kind: 'sheet',
+          object_name: `${sheetsFormData.spreadsheetId}:${sheetName}`,
+          schema_name: 'google_sheets',
+          is_active: true
+        });
+      }
+      
+      toast({ 
+        title: 'Google Sheets conectado!', 
+        description: `${sheetsFormData.selectedSheets.length} aba(s) adicionadas como datasets.` 
+      });
+      
+      setIsDialogOpen(false);
+      resetForm();
+      fetchData();
+    } catch (error: any) {
+      toast({ title: 'Erro', description: error.message, variant: 'destructive' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -629,16 +936,172 @@ export default function DataSources() {
               </DialogHeader>
               
               <Tabs value={selectedType} onValueChange={(v) => setSelectedType(v as DataSourceType)} className="w-full">
-                <TabsList className="grid w-full grid-cols-2">
+                <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="proxy_webhook" className="flex items-center gap-2">
                     <Webhook className="h-4 w-4" />
-                    Proxy / Webhook (n8n)
+                    Proxy / Webhook
+                  </TabsTrigger>
+                  <TabsTrigger value="google_sheets" className="flex items-center gap-2">
+                    <FileSpreadsheet className="h-4 w-4" />
+                    Google Sheets
                   </TabsTrigger>
                   <TabsTrigger value="supabase" className="flex items-center gap-2">
                     <Database className="h-4 w-4" />
-                    Supabase (Direto)
+                    Supabase
                   </TabsTrigger>
                 </TabsList>
+                
+                {/* Google Sheets Tab */}
+                <TabsContent value="google_sheets">
+                  <form onSubmit={handleSubmitGoogleSheets}>
+                    <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
+                      <Alert>
+                        <FileSpreadsheet className="h-4 w-4" />
+                        <AlertTitle>Google Sheets</AlertTitle>
+                        <AlertDescription>
+                          Conecte uma planilha do Google e crie datasets a partir das abas.
+                        </AlertDescription>
+                      </Alert>
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label>Tenant</Label>
+                          <Select 
+                            value={sheetsFormData.tenantId} 
+                            onValueChange={(v) => setSheetsFormData({ ...sheetsFormData, tenantId: v })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Selecione o tenant" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {tenants.map((t) => (
+                                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Nome do Data Source</Label>
+                          <Input
+                            value={sheetsFormData.name}
+                            onChange={(e) => setSheetsFormData({ ...sheetsFormData, name: e.target.value })}
+                            placeholder="Ex: Planilha CRM"
+                          />
+                        </div>
+                      </div>
+
+                      {googleOAuthStep === 'connect' && (
+                        <div className="flex flex-col items-center gap-4 py-6 border rounded-lg bg-muted/30">
+                          <FileSpreadsheet className="h-12 w-12 text-muted-foreground" />
+                          <p className="text-sm text-muted-foreground">Conecte sua conta Google para acessar planilhas</p>
+                          <Button 
+                            type="button" 
+                            onClick={startGoogleOAuth}
+                            disabled={!sheetsFormData.tenantId}
+                          >
+                            <ExternalLink className="mr-2 h-4 w-4" />
+                            Conectar Conta Google
+                          </Button>
+                          {!sheetsFormData.tenantId && (
+                            <p className="text-xs text-destructive">Selecione um tenant primeiro</p>
+                          )}
+                        </div>
+                      )}
+
+                      {googleOAuthStep === 'select_spreadsheet' && (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2 text-sm text-green-600">
+                            <Mail className="h-4 w-4" />
+                            Conectado como: {googleEmail}
+                          </div>
+                          <Label>Selecione uma planilha</Label>
+                          <Input
+                            placeholder="Buscar planilha..."
+                            value={spreadsheetSearch}
+                            onChange={(e) => setSpreadsheetSearch(e.target.value)}
+                          />
+                          <ScrollArea className="h-48 border rounded-lg">
+                            {isLoadingSpreadsheets ? (
+                              <div className="flex items-center justify-center py-8">
+                                <Loader2 className="h-6 w-6 animate-spin" />
+                              </div>
+                            ) : (
+                              <div className="p-2 space-y-1">
+                                {spreadsheets
+                                  .filter(s => s.name.toLowerCase().includes(spreadsheetSearch.toLowerCase()))
+                                  .map(s => (
+                                    <button
+                                      key={s.id}
+                                      type="button"
+                                      onClick={() => selectSpreadsheet(s)}
+                                      className="w-full flex items-center gap-2 p-2 rounded hover:bg-accent text-left"
+                                    >
+                                      <FileSpreadsheet className="h-4 w-4 text-green-600" />
+                                      <span className="truncate">{s.name}</span>
+                                    </button>
+                                  ))}
+                              </div>
+                            )}
+                          </ScrollArea>
+                        </div>
+                      )}
+
+                      {googleOAuthStep === 'select_sheets' && (
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">{sheetsFormData.spreadsheetName}</Badge>
+                            <Button type="button" variant="ghost" size="sm" onClick={() => setGoogleOAuthStep('select_spreadsheet')}>
+                              Trocar
+                            </Button>
+                          </div>
+                          <Label>Selecione as abas para criar datasets</Label>
+                          <ScrollArea className="h-40 border rounded-lg p-2">
+                            {isLoadingSheets ? (
+                              <div className="flex items-center justify-center py-8">
+                                <Loader2 className="h-6 w-6 animate-spin" />
+                              </div>
+                            ) : (
+                              <div className="space-y-1">
+                                {sheets.map(sheet => (
+                                  <div key={sheet.sheetId} className="flex items-center gap-2">
+                                    <Checkbox
+                                      id={`sheet-${sheet.sheetId}`}
+                                      checked={sheetsFormData.selectedSheets.includes(sheet.title)}
+                                      onCheckedChange={() => toggleSheetSelection(sheet.title)}
+                                    />
+                                    <label htmlFor={`sheet-${sheet.sheetId}`} className="flex items-center gap-2 cursor-pointer">
+                                      <TableIcon className="h-4 w-4 text-muted-foreground" />
+                                      {sheet.title}
+                                      <span className="text-xs text-muted-foreground">
+                                        ({sheet.rowCount} linhas)
+                                      </span>
+                                    </label>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </ScrollArea>
+                          {sheetsFormData.selectedSheets.length > 0 && (
+                            <p className="text-sm text-muted-foreground">
+                              {sheetsFormData.selectedSheets.length} aba(s) selecionada(s)
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <DialogFooter>
+                      <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                        Cancelar
+                      </Button>
+                      <Button 
+                        type="submit" 
+                        disabled={isSubmitting || googleOAuthStep !== 'select_sheets' || sheetsFormData.selectedSheets.length === 0}
+                      >
+                        {isSubmitting ? 'Salvando...' : 'Criar Data Source'}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </TabsContent>
                 
                 {/* Proxy/Webhook Tab */}
                 <TabsContent value="proxy_webhook">
@@ -1081,9 +1544,11 @@ export default function DataSources() {
                     <p className="font-medium">{ds.name}</p>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={ds.type === 'proxy_webhook' ? 'default' : 'secondary'} className="text-xs">
+                    <Badge variant={ds.type === 'proxy_webhook' ? 'default' : ds.type === 'google_sheets' ? 'outline' : 'secondary'} className="text-xs">
                       {ds.type === 'proxy_webhook' ? (
                         <><Webhook className="mr-1 h-3 w-3" /> Proxy</>
+                      ) : ds.type === 'google_sheets' ? (
+                        <><FileSpreadsheet className="mr-1 h-3 w-3" /> Sheets</>
                       ) : (
                         <><Database className="mr-1 h-3 w-3" /> Supabase</>
                       )}

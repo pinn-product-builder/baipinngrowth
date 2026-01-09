@@ -1601,13 +1601,21 @@ export type Database = {
           base_url: string | null
           bearer_token: string | null
           created_at: string
+          google_access_token_encrypted: string | null
+          google_email: string | null
+          google_refresh_token_encrypted: string | null
+          google_sheet_name: string | null
+          google_spreadsheet_id: string | null
+          google_token_expires_at: string | null
           id: string
           is_active: boolean
+          last_sync_at: string | null
           name: string
           project_ref: string
           project_url: string
           service_role_key_encrypted: string | null
           service_role_key_present: boolean
+          sync_mode: string | null
           tenant_id: string
           type: string
           updated_at: string
@@ -1620,13 +1628,21 @@ export type Database = {
           base_url?: string | null
           bearer_token?: string | null
           created_at?: string
+          google_access_token_encrypted?: string | null
+          google_email?: string | null
+          google_refresh_token_encrypted?: string | null
+          google_sheet_name?: string | null
+          google_spreadsheet_id?: string | null
+          google_token_expires_at?: string | null
           id?: string
           is_active?: boolean
+          last_sync_at?: string | null
           name: string
           project_ref: string
           project_url: string
           service_role_key_encrypted?: string | null
           service_role_key_present?: boolean
+          sync_mode?: string | null
           tenant_id: string
           type?: string
           updated_at?: string
@@ -1639,13 +1655,21 @@ export type Database = {
           base_url?: string | null
           bearer_token?: string | null
           created_at?: string
+          google_access_token_encrypted?: string | null
+          google_email?: string | null
+          google_refresh_token_encrypted?: string | null
+          google_sheet_name?: string | null
+          google_spreadsheet_id?: string | null
+          google_token_expires_at?: string | null
           id?: string
           is_active?: boolean
+          last_sync_at?: string | null
           name?: string
           project_ref?: string
           project_url?: string
           service_role_key_encrypted?: string | null
           service_role_key_present?: boolean
+          sync_mode?: string | null
           tenant_id?: string
           type?: string
           updated_at?: string
