@@ -694,32 +694,155 @@ export default function DashboardAutoBuilder({
       );
 
       if (semanticError || !semanticResult?.ok) {
-        throw new Error(semanticResult?.error || 'Erro na introspecção do dataset');
+        throw new Error(semanticResult?.error?.message || semanticResult?.error || 'Erro na introspecção do dataset');
       }
 
       const semanticModel = semanticResult.semantic_model;
+      
+      // P0 HOTFIX: Debug logging to diagnose columns = 0 issue
+      console.log('[handleIntrospect] semanticResult:', {
+        ok: semanticResult.ok,
+        hasSemanticModel: !!semanticModel,
+        columnsCount: semanticModel?.columns?.length ?? 0,
+        timeColumn: semanticModel?.time_column,
+        idPrimary: semanticModel?.id_primary,
+        sampleRowsCount: semanticResult.sample_rows?.length ?? 0
+      });
+      
+      // P0 HOTFIX: If semantic_model.columns is empty BUT sample_rows has data,
+      // infer columns from the rows
+      let profiles: ColumnProfile[] = [];
+      
+      if (semanticModel?.columns?.length > 0) {
+        // Normal case: use columns from semantic model
+        profiles = semanticModel.columns.map((col: any) => ({
+          name: col.name,
+          db_type: col.db_type || col.type || 'text',
+          display_label: col.display_label || col.name,
+          semantic_type: col.semantic_role,
+          role_hint: col.role_hint,
+          stats: {
+            null_rate: col.stats?.null_rate ?? col.null_rate ?? 0,
+            distinct_count: col.stats?.distinct_count ?? col.distinct_count ?? 0,
+            date_parseable_rate: col.stats?.date_parseable_rate ?? col.date_parse_rate ?? 0,
+            numeric_rate: col.stats?.numeric_rate ?? 0,
+            boolean_like_rate: col.stats?.boolean_rate ?? col.boolean_like_rate ?? 0,
+            sample_values: col.stats?.sample_values ?? col.sample_values ?? []
+          },
+          ai_suggested_role: undefined,
+          ai_confidence: undefined,
+          ai_reason: undefined
+        }));
+      } else {
+        // P0 HOTFIX: Fallback - infer columns from sample rows
+        const sampleRows = semanticResult.sample_rows || semanticResult.rows || [];
+        console.warn('[handleIntrospect] P0 HOTFIX: semantic_model.columns is empty, inferring from rows', {
+          sampleRowsLength: sampleRows.length,
+          firstRowType: sampleRows[0] ? typeof sampleRows[0] : 'undefined',
+          firstRowKeys: sampleRows[0] ? Object.keys(sampleRows[0]) : []
+        });
+        
+        if (sampleRows.length > 0 && typeof sampleRows[0] === 'object' && sampleRows[0] !== null) {
+          // Get union of all keys from first 20 rows (to catch sparse columns)
+          const allKeys = new Set<string>();
+          for (let i = 0; i < Math.min(sampleRows.length, 20); i++) {
+            const row = sampleRows[i];
+            if (row && typeof row === 'object') {
+              Object.keys(row).forEach(k => allKeys.add(k));
+            }
+          }
+          
+          const columnNames = Array.from(allKeys);
+          console.log('[handleIntrospect] Inferred columns from rows:', columnNames.length, columnNames.slice(0, 10));
+          
+          // Build profiles from inferred columns
+          profiles = columnNames.map(colName => {
+            // Sample values from rows
+            const sampleValues = sampleRows
+              .slice(0, 10)
+              .map((row: any) => row[colName])
+              .filter((v: any) => v !== null && v !== undefined);
+            
+            // Detect type from values
+            const nonNull = sampleValues.filter((v: any) => v !== null && v !== undefined && v !== '');
+            const numericCount = nonNull.filter((v: any) => {
+              if (typeof v === 'number') return true;
+              if (typeof v === 'string') {
+                const cleaned = v.replace(/[R$€£¥\s,]/g, '').replace(',', '.');
+                return !isNaN(parseFloat(cleaned));
+              }
+              return false;
+            }).length;
+            const dateCount = nonNull.filter((v: any) => {
+              if (typeof v !== 'string') return false;
+              return /^\d{4}-\d{2}-\d{2}/.test(v) || /^\d{2}\/\d{2}\/\d{4}/.test(v);
+            }).length;
+            const booleanCount = nonNull.filter((v: any) => {
+              if (typeof v === 'boolean') return true;
+              if (typeof v === 'number') return v === 0 || v === 1;
+              const s = String(v).toLowerCase().trim();
+              return ['1', '0', 'true', 'false', 'sim', 'não', 'yes', 'no', 's', 'n'].includes(s);
+            }).length;
+            
+            const numericRate = nonNull.length > 0 ? numericCount / nonNull.length : 0;
+            const dateRate = nonNull.length > 0 ? dateCount / nonNull.length : 0;
+            const booleanRate = nonNull.length > 0 ? booleanCount / nonNull.length : 0;
+            
+            // Infer semantic type from column name
+            const lowerName = colName.toLowerCase();
+            let semanticType: string | undefined;
+            let roleHint: string | undefined;
+            
+            if (/^(created_at|updated_at|dia|data|date|timestamp)/.test(lowerName)) {
+              semanticType = 'time';
+              roleHint = 'time';
+            } else if (/^(lead_id|leadid|id|uuid)$/.test(lowerName) || lowerName.endsWith('_id')) {
+              semanticType = lowerName.includes('lead') ? 'id_primary' : 'id_secondary';
+              roleHint = 'id';
+            } else if (/^(st_|flag_|is_|has_)/.test(lowerName) || booleanRate > 0.8) {
+              semanticType = 'stage_flag';
+              roleHint = 'stage';
+            } else if (/^(vendedor|vendedora|unidade|origem|canal|modalidade|professor)/.test(lowerName)) {
+              semanticType = 'dimension';
+              roleHint = 'filter';
+            } else if (numericRate > 0.8) {
+              semanticType = lowerName.includes('custo') || lowerName.includes('valor') ? 'currency' : 'metric';
+              roleHint = 'metric';
+            }
+            
+            return {
+              name: colName,
+              db_type: dateRate > 0.5 ? 'timestamp' : numericRate > 0.8 ? 'numeric' : 'text',
+              display_label: colName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+              semantic_type: semanticType,
+              role_hint: roleHint,
+              stats: {
+                null_rate: sampleRows.filter((r: any) => r[colName] == null).length / sampleRows.length,
+                distinct_count: new Set(sampleValues).size,
+                date_parseable_rate: dateRate,
+                numeric_rate: numericRate,
+                boolean_like_rate: booleanRate,
+                sample_values: sampleValues.slice(0, 5)
+              },
+              ai_suggested_role: undefined,
+              ai_confidence: undefined,
+              ai_reason: undefined
+            };
+          });
+        }
+      }
+      
+      // Final check: if still no profiles, show error
+      if (profiles.length === 0) {
+        console.error('[handleIntrospect] CRITICAL: No columns detected!', {
+          semanticModelColumns: semanticModel?.columns?.length ?? 0,
+          sampleRows: semanticResult.sample_rows?.length ?? 0,
+          resultKeys: Object.keys(semanticResult)
+        });
+        throw new Error(`Nenhuma coluna detectada. Verifique se o dataset retorna dados. (semantic_model.columns: ${semanticModel?.columns?.length ?? 0})`);
+      }
+      
       setDatasetProfile(semanticResult);
-
-      // Convert semantic model columns to ColumnProfile format for ColumnMappingStep
-      const profiles: ColumnProfile[] = (semanticModel.columns || []).map((col: any) => ({
-        name: col.name,
-        db_type: col.db_type || col.type || 'text',
-        display_label: col.display_label || col.name,
-        semantic_type: col.semantic_role,
-        role_hint: col.role_hint,
-        stats: {
-          null_rate: col.stats?.null_rate ?? col.null_rate ?? 0,
-          distinct_count: col.stats?.distinct_count ?? col.distinct_count ?? 0,
-          date_parseable_rate: col.stats?.date_parseable_rate ?? col.date_parse_rate ?? 0,
-          numeric_rate: col.stats?.numeric_rate ?? 0,
-          boolean_like_rate: col.stats?.boolean_rate ?? col.boolean_like_rate ?? 0,
-          sample_values: col.stats?.sample_values ?? col.sample_values ?? []
-        },
-        ai_suggested_role: undefined, // Will be inferred by ColumnMappingStep
-        ai_confidence: undefined,
-        ai_reason: undefined
-      }));
-
       setColumnProfiles(profiles);
 
       // Load existing mappings from database if available
