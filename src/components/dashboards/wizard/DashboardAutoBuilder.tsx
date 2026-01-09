@@ -674,7 +674,184 @@ export default function DashboardAutoBuilder({
     ));
   };
 
-  const handleGenerate = async () => {
+  // Step: Introspect dataset and go to mapping step (MANDATORY before generate)
+  const handleIntrospect = async () => {
+    if (!selectedDatasetId) return;
+
+    setIsIntrospecting(true);
+    setStep('introspect');
+    setProgressSteps([
+      { id: 'introspect', label: 'Analisando colunas do dataset...', status: 'running' },
+    ]);
+
+    try {
+      const dataset = datasets.find(d => d.id === selectedDatasetId);
+      
+      // Step 1: Build semantic model (introspect dataset)
+      const { data: semanticResult, error: semanticError } = await supabase.functions.invoke(
+        'build-semantic-model',
+        { body: { dataset_id: selectedDatasetId } }
+      );
+
+      if (semanticError || !semanticResult?.ok) {
+        throw new Error(semanticResult?.error || 'Erro na introspecção do dataset');
+      }
+
+      const semanticModel = semanticResult.semantic_model;
+      setDatasetProfile(semanticResult);
+
+      // Convert semantic model columns to ColumnProfile format for ColumnMappingStep
+      const profiles: ColumnProfile[] = (semanticModel.columns || []).map((col: any) => ({
+        name: col.name,
+        db_type: col.db_type || col.type || 'text',
+        display_label: col.display_label || col.name,
+        semantic_type: col.semantic_role,
+        role_hint: col.role_hint,
+        stats: {
+          null_rate: col.stats?.null_rate ?? col.null_rate ?? 0,
+          distinct_count: col.stats?.distinct_count ?? col.distinct_count ?? 0,
+          date_parseable_rate: col.stats?.date_parseable_rate ?? col.date_parse_rate ?? 0,
+          numeric_rate: col.stats?.numeric_rate ?? 0,
+          boolean_like_rate: col.stats?.boolean_rate ?? col.boolean_like_rate ?? 0,
+          sample_values: col.stats?.sample_values ?? col.sample_values ?? []
+        },
+        ai_suggested_role: undefined, // Will be inferred by ColumnMappingStep
+        ai_confidence: undefined,
+        ai_reason: undefined
+      }));
+
+      setColumnProfiles(profiles);
+
+      // Load existing mappings from database if available
+      const { data: existingMapping } = await supabase
+        .from('dataset_column_mappings')
+        .select('mapping_json')
+        .eq('dataset_id', selectedDatasetId)
+        .order('version', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (existingMapping?.mapping_json && Array.isArray(existingMapping.mapping_json)) {
+        setColumnMappings(existingMapping.mapping_json as unknown as ColumnMapping[]);
+      } else {
+        // Initialize mappings will happen in ColumnMappingStep
+        setColumnMappings([]);
+      }
+
+      // Pre-populate legacy datasetMapping for compatibility
+      setDatasetMapping(prev => ({
+        ...prev,
+        time_column: semanticModel.time_column || null,
+        funnel_stages: semanticModel.columns
+          .filter((c: any) => c.semantic_role === 'stage_flag')
+          .map((c: any) => c.name),
+        dimension_columns: semanticModel.columns
+          .filter((c: any) => c.semantic_role === 'dimension')
+          .map((c: any) => c.name),
+        id_column: semanticModel.id_column || null
+      }));
+
+      // Detect CRM if not already
+      if (!crmDetection) {
+        const columnNames = semanticModel.columns.map((c: any) => c.name);
+        const detection = detectCrmFunnelDataset(columnNames, dataset?.name || '');
+        setCrmDetection(detection);
+        if (detection.isCrm && detection.confidence >= 70) {
+          setGenerationMode('html');
+          setCrmMode(true);
+        }
+      }
+
+      updateProgress('introspect', 'done');
+      
+      // MANDATORY: Go to mapping step
+      setStep('mapping');
+      toast({
+        title: 'Introspecção concluída!',
+        description: `${profiles.length} colunas detectadas. Revise o mapeamento antes de gerar.`
+      });
+
+    } catch (err: any) {
+      updateProgress('introspect', 'error');
+      toast({
+        title: 'Erro na introspecção',
+        description: err.message,
+        variant: 'destructive'
+      });
+      setStep('select');
+    } finally {
+      setIsIntrospecting(false);
+    }
+  };
+
+  // Handle column mappings change from ColumnMappingStep
+  const handleMappingsChange = (newMappings: ColumnMapping[]) => {
+    setColumnMappings(newMappings);
+  };
+
+  // Save mapping and proceed to generate
+  const handleConfirmMappingAndGenerate = async () => {
+    if (!selectedDatasetId || columnMappings.length === 0) return;
+
+    // Save column mapping to database
+    try {
+      const dataset = datasets.find(d => d.id === selectedDatasetId);
+      const { data: datasetData } = await supabase
+        .from('datasets')
+        .select('tenant_id')
+        .eq('id', selectedDatasetId)
+        .single();
+
+      if (datasetData) {
+        // Check if mapping exists
+        const { data: existingMapping } = await supabase
+          .from('dataset_column_mappings')
+          .select('id, version')
+          .eq('dataset_id', selectedDatasetId)
+          .order('version', { ascending: false })
+          .limit(1)
+          .single();
+
+        const newVersion = (existingMapping?.version || 0) + 1;
+
+        if (existingMapping) {
+          // Update existing
+          await supabase
+            .from('dataset_column_mappings')
+            .update({ 
+              mapping_json: columnMappings as any,
+              version: newVersion,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', existingMapping.id);
+        } else {
+          // Insert new
+          await supabase
+            .from('dataset_column_mappings')
+            .insert({
+              tenant_id: datasetData.tenant_id,
+              dataset_id: selectedDatasetId,
+              mapping_json: columnMappings as any,
+              version: 1
+            });
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to save column mapping:', err);
+      // Continue anyway - mapping is in memory
+    }
+
+    // Proceed to generate with mapping
+    handleGenerateWithMapping();
+  };
+
+  // Reset mappings to AI suggestions
+  const handleResetToAI = () => {
+    // Clear mappings to let ColumnMappingStep re-infer
+    setColumnMappings([]);
+  };
+
+  const handleGenerateWithMapping = async () => {
     if (!selectedDatasetId) return;
 
     const dataset = datasets.find(d => d.id === selectedDatasetId);
@@ -682,14 +859,11 @@ export default function DashboardAutoBuilder({
     // Different progress steps for HTML vs React mode
     if (generationMode === 'html') {
       setProgressSteps([
-        { id: 'columns', label: 'Lendo colunas...', status: 'pending' },
         { id: 'html', label: 'Gerando dashboard HTML CRM...', status: 'pending' },
         { id: 'validate', label: 'Validando...', status: 'pending' },
       ]);
     } else {
       setProgressSteps([
-        { id: 'columns', label: 'Lendo colunas...', status: 'pending' },
-        { id: 'semantic', label: 'Construindo modelo semântico...', status: 'pending' },
         { id: 'plan', label: 'Gerando plano de dashboard...', status: 'pending' },
         { id: 'validate', label: 'Validando...', status: 'pending' },
       ]);
@@ -699,20 +873,8 @@ export default function DashboardAutoBuilder({
     setIsGenerating(true);
 
     try {
-      // Step 1: Check columns / introspect if needed
-      updateProgress('columns', 'running');
-      
-      if (dataset && (!dataset._column_count || dataset._column_count === 0)) {
-        const { data: introspectResult, error: introspectError } = await supabase.functions.invoke(
-          'introspect-dataset',
-          { body: { dataset_id: selectedDatasetId, save_columns: true } }
-        );
-
-        if (introspectError || !introspectResult?.ok) {
-          throw new Error(introspectResult?.error?.message || 'Erro na introspecção');
-        }
-      }
-      updateProgress('columns', 'done');
+      // Introspection already done in handleIntrospect step
+      // datasetProfile and columnMappings are already set
 
       // HTML CRM Mode - generate HTML dashboard directly
       if (generationMode === 'html') {
@@ -778,46 +940,43 @@ export default function DashboardAutoBuilder({
         return;
       }
 
-      // React Mode - continue with semantic pipeline
-      // Step 2: Build Semantic Model (new pipeline)
-      updateProgress('semantic', 'running');
+      // React Mode - use already loaded datasetProfile from handleIntrospect
+      const semanticModel = datasetProfile?.semantic_model;
       
-      const { data: semanticResult, error: semanticError } = await supabase.functions.invoke(
-        'build-semantic-model',
-        { body: { dataset_id: selectedDatasetId } }
-      );
-
-      if (semanticError) {
-        console.error('Semantic model error:', semanticError);
-        throw new Error('Erro ao construir modelo semântico');
+      if (!semanticModel) {
+        throw new Error('Modelo semântico não disponível. Volte ao passo de mapeamento.');
       }
       
-      if (!semanticResult?.ok) {
-        throw new Error(semanticResult?.error || 'Erro no modelo semântico');
-      }
-      
-      const semanticModel = semanticResult.semantic_model;
-      setDatasetProfile(semanticResult); // Store for mapping step
-      
-      // Pre-populate mapping from semantic model
-      setDatasetMapping(prev => ({
-        ...prev,
-        time_column: semanticModel.time_column || null,
-        funnel_stages: semanticModel.columns
-          .filter((c: any) => c.semantic_role === 'stage_flag')
-          .map((c: any) => c.name),
-        dimension_columns: semanticModel.columns
-          .filter((c: any) => c.semantic_role === 'dimension')
-          .map((c: any) => c.name),
-        id_column: semanticModel.id_column || null
-      }));
-      
-      updateProgress('semantic', 'done');
+      // Build enhanced semantic model from columnMappings
+      const enhancedSemanticModel = {
+        ...semanticModel,
+        // Override with user-confirmed mappings
+        time_column: columnMappings.find(m => m.role === 'time')?.column_name || semanticModel.time_column,
+        id_column: columnMappings.find(m => m.role === 'id_primary')?.column_name || semanticModel.id_column,
+        columns: semanticModel.columns.map((col: any) => {
+          const mapping = columnMappings.find(m => m.column_name === col.name);
+          if (mapping) {
+            return {
+              ...col,
+              semantic_role: mapping.role === 'funnel_stage' ? 'stage_flag' : 
+                             mapping.role === 'dimension' ? 'dimension' :
+                             mapping.role === 'time' ? 'time' :
+                             mapping.role === 'id_primary' ? 'id' :
+                             mapping.role === 'ignored' ? 'ignored' :
+                             mapping.role.startsWith('metric') ? 'metric' : col.semantic_role,
+              display_label: mapping.display_label || col.display_label,
+              is_hidden: mapping.role === 'ignored' || mapping.role === 'id_secondary',
+              funnel_order: mapping.funnel_order,
+              filter_type: mapping.filter_type
+            };
+          }
+          return col;
+        })
+      };
 
-      // Step 3: Generate Dashboard Plan (new pipeline)
+      // Step: Generate Dashboard Plan using confirmed mappings
       updateProgress('plan', 'running');
       
-      // Combine prompts for custom requirements
       const userIntent = specificRequirements.trim() || 'Dashboard executivo com visão de funil e tendências';
 
       const { data: planResult, error: planError } = await supabase.functions.invoke(
@@ -825,7 +984,8 @@ export default function DashboardAutoBuilder({
         { 
           body: { 
             dataset_id: selectedDatasetId,
-            semantic_model: semanticModel,
+            semantic_model: enhancedSemanticModel,
+            column_mapping: columnMappings,
             user_prompt: userIntent,
             use_llm: true,
             crm_mode: crmMode
@@ -841,7 +1001,7 @@ export default function DashboardAutoBuilder({
       
       // Convert dashboard plan to spec format
       const dashboardPlan = planResult.dashboard_plan;
-      let generatedSpec = convertPlanToSpec(dashboardPlan, semanticModel);
+      let generatedSpec = convertPlanToSpec(dashboardPlan, enhancedSemanticModel);
       
       // Check if spec is empty and apply fallback
       const isEmptySpec = 
@@ -850,13 +1010,13 @@ export default function DashboardAutoBuilder({
         (!generatedSpec.funnel || !generatedSpec.funnel.stages || generatedSpec.funnel.stages.length < 2);
       
       if (isEmptySpec) {
-        console.warn('[handleGenerate] Empty spec detected after conversion, applying fallback...');
-        generatedSpec = generateFallbackSpec(semanticModel);
+        console.warn('[handleGenerateWithMapping] Empty spec, applying fallback...');
+        generatedSpec = generateFallbackSpec(enhancedSemanticModel);
       }
       
       updateProgress('plan', 'done');
 
-      // Step 4: Validation
+      // Step: Validation
       updateProgress('validate', 'running');
       
       setGeneratedSpec(generatedSpec);
@@ -866,18 +1026,11 @@ export default function DashboardAutoBuilder({
       const warnings = [...(dashboardPlan.warnings || [])];
       const errors: string[] = [];
       
-      // Add diagnostics about what was generated
       if (generatedSpec._fallback) {
         warnings.push(`Fallback aplicado: ${generatedSpec._fallback_reason || 'spec original estava vazio'}`);
       }
       if (!generatedSpec.kpis?.length) {
         errors.push('Nenhum KPI gerado - verifique se há colunas numéricas ou etapas de funil');
-      }
-      if (!generatedSpec.funnel?.stages?.length && semanticModel.funnel?.detected) {
-        errors.push('Funil detectado no dataset mas não mapeado no spec');
-      }
-      if (!generatedSpec.time?.column && semanticModel.time_column) {
-        warnings.push('Coluna de tempo detectada mas não usada no spec');
       }
       
       setValidation({ 
@@ -886,18 +1039,19 @@ export default function DashboardAutoBuilder({
         warnings 
       });
       
-      // Build diagnostics from semantic model
+      // Build diagnostics from enhanced semantic model
       const diagInfo: DiagnosticInfo = {
-        columns_detected: semanticModel.columns.map((c: any) => ({
+        columns_detected: enhancedSemanticModel.columns.map((c: any) => ({
           name: c.name,
           semantic: c.semantic_role,
           label: c.display_label || c.name
         })),
-        time_column: semanticModel.time_column,
+        time_column: enhancedSemanticModel.time_column,
         time_parseable_rate: semanticModel.stats?.time_parse_rate,
-        funnel_candidates: semanticModel.columns
-          .filter((c: any) => c.semantic_role === 'stage_flag')
-          .map((c: any) => c.name),
+        funnel_candidates: columnMappings
+          .filter(m => m.role === 'funnel_stage')
+          .sort((a, b) => (a.funnel_order || 0) - (b.funnel_order || 0))
+          .map(m => m.column_name),
         warnings,
         errors,
         assumptions: dashboardPlan.assumptions || []
@@ -906,31 +1060,14 @@ export default function DashboardAutoBuilder({
 
       updateProgress('validate', 'done');
       
-      // Check if mapping step is needed
-      const warningsCount = dashboardPlan.warnings?.length || 0;
-      const noTimeColumn = !semanticModel.time_column;
-      const funnelStepsRemoved = (dashboardPlan.warnings || []).some((w: string) => 
-        w.includes('Etapa de funil removida') || w.includes('Funil removido')
-      );
-      
-      const needsMappingStep = warningsCount > 5 || noTimeColumn || funnelStepsRemoved;
-      setNeedsMapping(needsMappingStep);
-      
-      if (needsMappingStep) {
-        setStep('mapping');
-        toast({
-          title: 'Mapeamento necessário',
-          description: 'Ajuste o mapeamento das colunas para melhorar o dashboard'
-        });
-      } else {
-        setStep('preview');
-        toast({
-          title: 'Plano gerado!',
-          description: planResult.source === 'llm' 
-            ? 'Dashboard gerado com IA' 
-            : 'Dashboard gerado automaticamente'
-        });
-      }
+      // Always go to preview after mapping is confirmed
+      setStep('preview');
+      toast({
+        title: 'Dashboard gerado!',
+        description: planResult.source === 'llm' 
+          ? 'Dashboard gerado com IA usando seu mapeamento' 
+          : 'Dashboard gerado automaticamente com mapeamento confirmado'
+      });
 
     } catch (err: any) {
       const failedStep = progressSteps.find(s => s.status === 'running');
@@ -1625,174 +1762,70 @@ export default function DashboardAutoBuilder({
             </div>
           )}
 
-          {/* Step 2.5: Mapping (Conditional) */}
+          {/* Step 2: Introspection Progress */}
+          {step === 'introspect' && (
+            <div className="flex flex-col items-center justify-center py-12">
+              <div className="relative mb-6">
+                <Columns className="h-12 w-12 text-primary animate-pulse" />
+                <Loader2 className="h-16 w-16 absolute -top-2 -left-2 animate-spin text-primary/30" />
+              </div>
+              
+              <p className="font-medium mb-6">Analisando dataset...</p>
+              
+              <div className="space-y-3 w-full max-w-sm">
+                {progressSteps.map((ps) => (
+                  <div key={ps.id} className="flex items-center gap-3">
+                    {ps.status === 'pending' && (
+                      <div className="w-5 h-5 rounded-full border-2 border-muted" />
+                    )}
+                    {ps.status === 'running' && (
+                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    )}
+                    {ps.status === 'done' && (
+                      <CheckCircle2 className="h-5 w-5 text-green-500" />
+                    )}
+                    {ps.status === 'error' && (
+                      <XCircle className="h-5 w-5 text-destructive" />
+                    )}
+                    <span className={`text-sm ${
+                      ps.status === 'running' ? 'text-primary font-medium' : 
+                      ps.status === 'done' ? 'text-muted-foreground' : 
+                      ps.status === 'error' ? 'text-destructive' : ''
+                    }`}>
+                      {ps.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Column Mapping (MANDATORY) */}
           {step === 'mapping' && (
-            <div className="space-y-4 py-4">
-              <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
-                <p className="text-sm font-medium text-yellow-600 dark:text-yellow-500 flex items-center gap-2">
-                  <Settings2 className="h-4 w-4" />
-                  Mapeamento Assistido
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  O dataset precisa de ajustes manuais para gerar um dashboard mais preciso.
-                  Configure as colunas abaixo e clique em "Regerar Dashboard".
-                </p>
-              </div>
-
-              {/* Time Column */}
-              <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <Clock className="h-4 w-4" />
-                  Coluna de Tempo
-                </Label>
-                <Select
-                  value={datasetMapping.time_column || 'none'}
-                  onValueChange={(v) => setDatasetMapping(prev => ({
-                    ...prev,
-                    time_column: v === 'none' ? null : v
-                  }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione a coluna de data/tempo" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Nenhuma (sem gráficos temporais)</SelectItem>
-                    {(availableTimeColumns.length > 0 ? availableTimeColumns : availableColumns).map((col: string) => (
-                      <SelectItem key={col} value={col}>{col}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Usada para tendências e filtros por período
-                </p>
-              </div>
-
-              {/* ID Column */}
-              <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <Database className="h-4 w-4" />
-                  Coluna de ID (lead_id, etc.)
-                </Label>
-                <Select
-                  value={datasetMapping.id_column || 'none'}
-                  onValueChange={(v) => setDatasetMapping(prev => ({
-                    ...prev,
-                    id_column: v === 'none' ? null : v
-                  }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione a coluna de ID" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Nenhuma</SelectItem>
-                    {availableColumns.map((col: string) => (
-                      <SelectItem key={col} value={col}>{col}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Dimension Columns */}
-              <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <Filter className="h-4 w-4" />
-                  Dimensões (filtros)
-                </Label>
-                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 border rounded-lg bg-muted/30">
-                  {(availableDimensionColumns.length > 0 ? availableDimensionColumns : availableColumns).map((col: string) => (
-                    <label key={col} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                      <Checkbox
-                        checked={datasetMapping.dimension_columns.includes(col)}
-                        onCheckedChange={(checked) => {
-                          setDatasetMapping(prev => ({
-                            ...prev,
-                            dimension_columns: checked
-                              ? [...prev.dimension_columns, col]
-                              : prev.dimension_columns.filter(c => c !== col)
-                          }));
-                        }}
-                      />
-                      {col}
-                    </label>
-                  ))}
+            <div className="py-4">
+              {columnProfiles.length > 0 ? (
+                <ColumnMappingStep
+                  columns={columnProfiles}
+                  initialMappings={columnMappings}
+                  onMappingsChange={handleMappingsChange}
+                  onConfirm={handleConfirmMappingAndGenerate}
+                  onResetToAI={handleResetToAI}
+                  isLoading={isGenerating}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12">
+                  <AlertTriangle className="h-12 w-12 text-yellow-500 mb-4" />
+                  <p className="text-sm text-muted-foreground">
+                    Nenhuma coluna detectada. Verifique se o dataset tem dados.
+                  </p>
+                  <Button 
+                    variant="outline" 
+                    className="mt-4"
+                    onClick={() => setStep('select')}
+                  >
+                    Voltar
+                  </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Ex: unidade, vendedora, origem, modalidade
-                </p>
-              </div>
-
-              {/* Funnel Stages */}
-              <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <BarChart3 className="h-4 w-4" />
-                  Etapas do Funil
-                </Label>
-                <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 border rounded-lg bg-muted/30">
-                  {(availableFunnelColumns.length > 0 ? availableFunnelColumns : availableColumns).map((col: string) => (
-                    <label key={col} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                      <Checkbox
-                        checked={datasetMapping.funnel_stages.includes(col)}
-                        onCheckedChange={(checked) => {
-                          setDatasetMapping(prev => ({
-                            ...prev,
-                            funnel_stages: checked
-                              ? [...prev.funnel_stages, col]
-                              : prev.funnel_stages.filter(c => c !== col)
-                          }));
-                        }}
-                      />
-                      {col}
-                    </label>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Marque na ordem: entrada → qualificado → exp → venda
-                </p>
-              </div>
-
-              {/* Truthy Rule */}
-              <div className="space-y-2">
-                <Label>Regra "truthy" para colunas de funil</Label>
-                <Select
-                  value={datasetMapping.truthy_rule}
-                  onValueChange={(v: 'default' | 'custom') => setDatasetMapping(prev => ({
-                    ...prev,
-                    truthy_rule: v
-                  }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">Padrão (1, true, sim, x, ok)</SelectItem>
-                    <SelectItem value="custom">Personalizado</SelectItem>
-                  </SelectContent>
-                </Select>
-                {datasetMapping.truthy_rule === 'custom' && (
-                  <Input
-                    placeholder="Valores truthy separados por vírgula (ex: sim, 1, ativo)"
-                    onChange={(e) => setDatasetMapping(prev => ({
-                      ...prev,
-                      custom_truthy_values: e.target.value.split(',').map(v => v.trim()).filter(Boolean)
-                    }))}
-                  />
-                )}
-              </div>
-
-              {/* Current Warnings */}
-              {validation && validation.warnings.length > 0 && (
-                <Collapsible>
-                  <CollapsibleTrigger className="flex items-center gap-2 text-sm text-yellow-600 hover:underline">
-                    <AlertTriangle className="h-3 w-3" />
-                    {validation.warnings.length} avisos da geração anterior
-                    <ChevronDown className="h-3 w-3" />
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="mt-2 p-2 bg-yellow-500/5 rounded-lg border border-yellow-500/20">
-                    <ul className="text-xs text-yellow-600/80 list-disc list-inside space-y-1">
-                      {validation.warnings.map((w, i) => <li key={i}>{w}</li>)}
-                    </ul>
-                  </CollapsibleContent>
-                </Collapsible>
               )}
             </div>
           )}
@@ -2346,32 +2379,42 @@ export default function DashboardAutoBuilder({
                 Cancelar
               </Button>
               <Button 
-                onClick={handleGenerate}
-                disabled={!selectedDatasetId || !dashboardName.trim()}
+                onClick={handleIntrospect}
+                disabled={!selectedDatasetId || !dashboardName.trim() || isIntrospecting}
               >
-                <Sparkles className="h-4 w-4 mr-2" />
-                Auto-Gerar
+                {isIntrospecting ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Columns className="h-4 w-4 mr-2" />
+                )}
+                Mapear Colunas
               </Button>
             </>
           )}
           
-          {step === 'generate' && (
-            <Button variant="outline" onClick={() => setStep('select')} disabled={isGenerating}>
+          {step === 'introspect' && (
+            <Button variant="outline" onClick={() => setStep('select')} disabled={isIntrospecting}>
               Cancelar
+            </Button>
+          )}
+          
+          {step === 'generate' && (
+            <Button variant="outline" onClick={() => setStep('mapping')} disabled={isGenerating}>
+              Voltar
             </Button>
           )}
 
           {step === 'mapping' && (
             <>
-              <Button variant="outline" onClick={() => setStep('preview')}>
-                Pular Mapeamento
+              <Button variant="outline" onClick={() => setStep('select')}>
+                Voltar
               </Button>
               <Button 
-                onClick={handleRegenerateWithMapping}
-                disabled={isGenerating}
+                onClick={handleConfirmMappingAndGenerate}
+                disabled={isGenerating || columnProfiles.length === 0}
               >
                 <Sparkles className="h-4 w-4 mr-2" />
-                Regerar Dashboard
+                Confirmar e Gerar
               </Button>
             </>
           )}
