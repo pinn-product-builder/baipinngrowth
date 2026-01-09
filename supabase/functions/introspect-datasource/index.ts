@@ -173,6 +173,124 @@ Deno.serve(async (req) => {
       return errorResponse('NOT_FOUND', 'Data source não encontrado')
     }
 
+    // Handle Google Sheets data sources
+    if (dataSource.type === 'google_sheets') {
+      console.log('Introspecting Google Sheets data source')
+      
+      // For Google Sheets, the "table" is the spreadsheet and the sheets are our objects
+      // We need to fetch sheet names from the spreadsheet
+      const spreadsheetId = dataSource.google_spreadsheet_id
+      
+      if (!spreadsheetId) {
+        return errorResponse(
+          'NO_SPREADSHEET',
+          'Planilha não configurada',
+          'Este data source não tem uma planilha Google associada.'
+        )
+      }
+
+      // Get OAuth tokens
+      let accessToken: string | null = null
+      
+      if (dataSource.google_access_token_encrypted) {
+        try {
+          accessToken = await decrypt(dataSource.google_access_token_encrypted)
+        } catch (e) {
+          console.error('Failed to decrypt access token:', e)
+        }
+      }
+
+      if (!accessToken) {
+        // Try to refresh the token if we have a refresh token
+        if (dataSource.google_refresh_token_encrypted) {
+          try {
+            const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
+            const clientId = dataSource.google_client_id_encrypted 
+              ? await decrypt(dataSource.google_client_id_encrypted) 
+              : null
+            const clientSecret = dataSource.google_client_secret_encrypted 
+              ? await decrypt(dataSource.google_client_secret_encrypted) 
+              : null
+            
+            if (clientId && clientSecret && refreshToken) {
+              // Refresh the access token
+              const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({
+                  client_id: clientId,
+                  client_secret: clientSecret,
+                  refresh_token: refreshToken,
+                  grant_type: 'refresh_token'
+                })
+              })
+
+              if (tokenResponse.ok) {
+                const tokenData = await tokenResponse.json()
+                accessToken = tokenData.access_token
+                console.log('Successfully refreshed access token')
+              } else {
+                const errText = await tokenResponse.text()
+                console.error('Token refresh failed:', errText)
+              }
+            }
+          } catch (e) {
+            console.error('Failed to refresh token:', e)
+          }
+        }
+      }
+
+      if (!accessToken) {
+        return errorResponse(
+          'NO_CREDENTIALS',
+          'Credenciais OAuth não configuradas',
+          'O token de acesso do Google expirou ou não está disponível. Reconecte a planilha.'
+        )
+      }
+
+      // Fetch sheet names from the spreadsheet
+      try {
+        const sheetsUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties`
+        
+        const sheetsResponse = await fetchWithTimeout(sheetsUrl, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        })
+
+        if (!sheetsResponse.ok) {
+          const errText = await sheetsResponse.text()
+          console.error('Sheets API error:', errText)
+          
+          if (sheetsResponse.status === 401 || sheetsResponse.status === 403) {
+            return errorResponse('TOKEN_EXPIRED', 'Token de acesso expirado', 'Reconecte a planilha Google.')
+          }
+          
+          return errorResponse('SHEETS_ERROR', 'Erro ao buscar planilha', errText.slice(0, 200))
+        }
+
+        const sheetsData = await sheetsResponse.json()
+        
+        // Each sheet in the spreadsheet becomes a "table" in our data model
+        const tables: ViewInfo[] = (sheetsData.sheets || []).map((sheet: any) => ({
+          name: sheet.properties?.title || 'Sheet1',
+          schema: 'google_sheets',
+          type: 'table' as const
+        }))
+
+        console.log(`Found ${tables.length} sheets in spreadsheet`)
+
+        return successResponse({
+          views: [],
+          tables,
+          schema: 'google_sheets',
+          total: tables.length
+        })
+      } catch (fetchError: any) {
+        console.error('Sheets fetch error:', fetchError)
+        return errorResponse('NETWORK_ERROR', 'Erro ao conectar com Google Sheets', fetchError.message)
+      }
+    }
+
+    // Handle Supabase data sources
     // Determine which key to use
     let apiKey: string | null = null
 
