@@ -1,0 +1,88 @@
+project_id = "uiljecxfzlebocjenkmn"
+
+[functions.check-admin-exists]
+verify_jwt = false
+
+[functions.bootstrap-admin]
+verify_jwt = false
+
+[functions.send-invite]
+verify_jwt = false
+
+[functions.accept-invite]
+verify_jwt = false
+
+[functions.verify-invite]
+verify_jwt = false
+
+[functions.dashboard-data]
+verify_jwt = false
+
+[functions.test-data-source]
+verify_jwt = false
+
+[functions.detect-template]
+verify_jwt = false
+
+[functions.dashboard-proxy]
+verify_jwt = false
+
+[functions.send-scheduled-report]
+verify_jwt = false
+
+[functions.manage-datasource-keys]
+verify_jwt = false
+
+[functions.introspect-datasource]
+verify_jwt = false
+
+[functions.generate-insights]
+verify_jwt = false
+
+[functions.ai-analyst]
+verify_jwt = false
+
+[functions.auto-insights]
+verify_jwt = false
+
+[functions.ai-settings]
+verify_jwt = false
+
+[functions.ai-test-connection]
+verify_jwt = false
+
+[functions.dashboard-context-v2]
+verify_jwt = false
+
+[functions.introspect-dataset]
+verify_jwt = false
+
+[functions.suggest-template]
+verify_jwt = false
+
+[functions.generate-dashboard-spec]
+verify_jwt = false
+
+[functions.derive-crm-funnel]
+verify_jwt = false
+
+[functions.dataset-profile]
+verify_jwt = false
+
+[functions.build-semantic-model]
+verify_jwt = false
+
+[functions.generate-dashboard-plan]
+verify_jwt = false
+
+[functions.dashboard-data-v2]
+verify_jwt = false
+
+[functions.dataset-preview]
+verify_jwt = false
+
+[functions.generate-dashboard-planner]
+verify_jwt = false
+
+[functions.generate-dashboard-coder]
+verify_jwt = false
