@@ -24,35 +24,22 @@ function errorResponse(code: string, message: string, details?: string) {
 }
 
 // =====================================================
-// ENCRYPTION HELPERS
+// ENCRYPTION HELPERS - MUST match google-sheets-connect format
 // =====================================================
 
 async function getEncryptionKey(): Promise<CryptoKey> {
-  const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
-  if (!masterKey) throw new Error('MASTER_ENCRYPTION_KEY not configured')
-  
-  const encoder = new TextEncoder()
-  return await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(masterKey.padEnd(32, '0').slice(0, 32)),
-    { name: 'AES-GCM' },
-    false,
-    ['decrypt']
-  )
+  const keyB64 = Deno.env.get('MASTER_ENCRYPTION_KEY')
+  if (!keyB64) throw new Error('MASTER_ENCRYPTION_KEY not configured')
+  const raw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0))
+  return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['decrypt'])
 }
 
 async function decrypt(ciphertext: string): Promise<string> {
   const key = await getEncryptionKey()
   const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
   const iv = combined.slice(0, 12)
-  const encrypted = combined.slice(12)
-  
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    encrypted
-  )
-  
+  const data = combined.slice(12)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
   return new TextDecoder().decode(decrypted)
 }
 
@@ -1177,59 +1164,183 @@ Deno.serve(async (req) => {
       dataSource = ds
     }
 
-    if (!dataSource || !targetObjectName) {
-      return errorResponse('VALIDATION_ERROR', 'Dados insuficientes para gerar dashboard')
+    if (!dataSource) {
+      return errorResponse('VALIDATION_ERROR', 'Data source não encontrado')
     }
 
-    // Get credentials
-    let apiKey: string | null = null
-    if (dataSource.anon_key_encrypted) {
-      try {
-        apiKey = await decrypt(dataSource.anon_key_encrypted)
-      } catch (e) {
-        console.error('Failed to decrypt anon_key')
+    // Detect data source type
+    const isGoogleSheets = dataSource.type === 'google_sheets' || 
+      Boolean(dataSource.google_spreadsheet_id) || 
+      Boolean(dataSource.google_access_token_encrypted)
+
+    let rawRows: any[] = []
+
+    if (isGoogleSheets) {
+      // =====================================================
+      // GOOGLE SHEETS DATA SOURCE
+      // =====================================================
+      console.log(`[generate-crm-html] Google Sheets data source detected`)
+
+      let accessToken: string | null = null
+      
+      // Try to get access token
+      if (dataSource.google_access_token_encrypted) {
+        try {
+          accessToken = await decrypt(dataSource.google_access_token_encrypted)
+        } catch (e) {
+          console.error('[generate-crm-html] Failed to decrypt access token:', e)
+        }
       }
-    }
-    if (!apiKey && dataSource.service_role_key_encrypted) {
-      try {
-        apiKey = await decrypt(dataSource.service_role_key_encrypted)
-      } catch (e) {
-        console.error('Failed to decrypt service_role_key')
+
+      // Check if token is expired and refresh if needed
+      const tokenExpiresAt = dataSource.google_token_expires_at ? new Date(dataSource.google_token_expires_at) : null
+      const isExpired = tokenExpiresAt && tokenExpiresAt <= new Date()
+
+      if ((!accessToken || isExpired) && dataSource.google_refresh_token_encrypted) {
+        console.log('[generate-crm-html] Refreshing Google access token...')
+        try {
+          const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
+          const clientId = dataSource.google_client_id_encrypted 
+            ? await decrypt(dataSource.google_client_id_encrypted) 
+            : Deno.env.get('GOOGLE_CLIENT_ID')
+          const clientSecret = dataSource.google_client_secret_encrypted 
+            ? await decrypt(dataSource.google_client_secret_encrypted) 
+            : Deno.env.get('GOOGLE_CLIENT_SECRET')
+
+          if (clientId && clientSecret && refreshToken) {
+            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                client_id: clientId,
+                client_secret: clientSecret,
+                refresh_token: refreshToken,
+                grant_type: 'refresh_token'
+              })
+            })
+
+            if (tokenResponse.ok) {
+              const tokenData = await tokenResponse.json()
+              accessToken = tokenData.access_token
+              console.log('[generate-crm-html] Token refreshed successfully')
+            } else {
+              console.error('[generate-crm-html] Token refresh failed:', await tokenResponse.text())
+            }
+          }
+        } catch (e) {
+          console.error('[generate-crm-html] Error refreshing token:', e)
+        }
       }
-    }
 
-    // Fallback to Afonsina keys
-    if (!apiKey) {
-      const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
-      const afonsinaKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
-      if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
-        apiKey = afonsinaKey || null
+      if (!accessToken) {
+        return errorResponse('NO_CREDENTIALS', 'Credenciais do Google Sheets não configuradas ou expiradas')
       }
-    }
 
-    if (!apiKey) {
-      return errorResponse('NO_CREDENTIALS', 'Credenciais não configuradas')
-    }
-
-    console.log(`Generating CRM HTML for ${targetObjectName} (limit=${limit})...`)
-
-    // Fetch raw data with higher limit
-    const fetchUrl = `${dataSource.project_url}/rest/v1/${targetObjectName}?select=*&limit=${limit}`
-    
-    const response = await fetch(fetchUrl, {
-      headers: {
-        'apikey': apiKey,
-        'Authorization': `Bearer ${apiKey}`,
-        'Accept': 'application/json'
+      // Fetch from Google Sheets
+      const spreadsheetId = dataSource.google_spreadsheet_id
+      const sheetName = targetObjectName || dataSource.google_sheet_name || 'Sheet1'
+      
+      if (!spreadsheetId) {
+        return errorResponse('VALIDATION_ERROR', 'Spreadsheet ID não configurado')
       }
-    })
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      return errorResponse('FETCH_ERROR', `Erro ao acessar ${targetObjectName}`, errorText.slice(0, 200))
+      const sheetsUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName)}?majorDimension=ROWS`
+      
+      console.log(`[generate-crm-html] Fetching from Google Sheets: ${sheetName}`)
+      
+      const sheetsResponse = await fetch(sheetsUrl, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      })
+
+      if (!sheetsResponse.ok) {
+        const errorText = await sheetsResponse.text()
+        console.error('[generate-crm-html] Google Sheets API error:', errorText)
+        return errorResponse('FETCH_ERROR', 'Erro ao acessar Google Sheets', errorText.slice(0, 200))
+      }
+
+      const sheetsData = await sheetsResponse.json()
+      const values = sheetsData.values || []
+
+      if (values.length < 2) {
+        return jsonResponse({
+          ok: true,
+          html: null,
+          message: 'Nenhum dado encontrado',
+          stats: { rows: 0 }
+        })
+      }
+
+      // Convert to objects: first row is headers
+      const headers = values[0].map((h: any) => String(h).trim())
+      rawRows = values.slice(1).map((row: any[]) => {
+        const obj: Record<string, any> = {}
+        headers.forEach((header: string, i: number) => {
+          obj[header] = row[i] !== undefined ? row[i] : null
+        })
+        return obj
+      })
+
+      console.log(`[generate-crm-html] Got ${rawRows.length} rows from Google Sheets with ${headers.length} columns`)
+
+    } else {
+      // =====================================================
+      // SUPABASE DATA SOURCE
+      // =====================================================
+      
+      // Get credentials
+      let apiKey: string | null = null
+      if (dataSource.anon_key_encrypted) {
+        try {
+          apiKey = await decrypt(dataSource.anon_key_encrypted)
+        } catch (e) {
+          console.error('Failed to decrypt anon_key')
+        }
+      }
+      if (!apiKey && dataSource.service_role_key_encrypted) {
+        try {
+          apiKey = await decrypt(dataSource.service_role_key_encrypted)
+        } catch (e) {
+          console.error('Failed to decrypt service_role_key')
+        }
+      }
+
+      // Fallback to Afonsina keys
+      if (!apiKey) {
+        const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
+        const afonsinaKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
+        if (afonsinaUrl && dataSource.project_url === afonsinaUrl) {
+          apiKey = afonsinaKey || null
+        }
+      }
+
+      if (!apiKey) {
+        return errorResponse('NO_CREDENTIALS', 'Credenciais não configuradas')
+      }
+
+      if (!targetObjectName) {
+        return errorResponse('VALIDATION_ERROR', 'Nome do objeto não especificado')
+      }
+
+      console.log(`[generate-crm-html] Generating for ${targetObjectName} (limit=${limit})...`)
+
+      // Fetch raw data with higher limit
+      const fetchUrl = `${dataSource.project_url}/rest/v1/${targetObjectName}?select=*&limit=${limit}`
+      
+      const response = await fetch(fetchUrl, {
+        headers: {
+          'apikey': apiKey,
+          'Authorization': `Bearer ${apiKey}`,
+          'Accept': 'application/json'
+        }
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        return errorResponse('FETCH_ERROR', `Erro ao acessar ${targetObjectName}`, errorText.slice(0, 200))
+      }
+
+      rawRows = await response.json()
     }
-
-    const rawRows = await response.json()
     
     if (!rawRows || rawRows.length === 0) {
       return jsonResponse({
