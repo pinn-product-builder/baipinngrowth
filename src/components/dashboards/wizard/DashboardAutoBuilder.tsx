@@ -44,6 +44,8 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import ColumnMappingStep, { ColumnMapping, ColumnProfile, ColumnRole } from './ColumnMappingStep';
+import PromptStep from './steps/PromptStep';
+import type { DashboardPrompt as DashboardPromptType, DashboardPlan } from './types';
 
 interface Dataset {
   id: string;
@@ -111,8 +113,9 @@ interface DatasetMapping {
   custom_truthy_values?: string[];
 }
 
-type WizardStep = 'select' | 'introspect' | 'mapping' | 'generate' | 'preview' | 'save';
-type GenerationMode = 'react' | 'html';
+// Updated wizard steps: Dataset → Analyze → Mapping → Prompt (LLM1) → Generate (LLM2) → Preview → Save
+type WizardStep = 'select' | 'analyze' | 'mapping' | 'prompt' | 'generate' | 'preview' | 'save';
+type GenerationMode = 'react_lovable' | 'html_js';
 
 // CRM Funnel detection patterns for Kommo datasets
 const CRM_FUNNEL_DETECTION = {
@@ -548,9 +551,14 @@ export default function DashboardAutoBuilder({
   const [isTestingQuery, setIsTestingQuery] = useState(false);
   const [crmMode, setCrmMode] = useState(false);
   const [aggregationPreview, setAggregationPreview] = useState<AggregationPreview | null>(null);
-  const [generationMode, setGenerationMode] = useState<GenerationMode>('react');
+  const [generationMode, setGenerationMode] = useState<GenerationMode>('react_lovable');
   const [crmDetection, setCrmDetection] = useState<{ isCrm: boolean; confidence: number; reasons: string[] } | null>(null);
   const [isGeneratingHtml, setIsGeneratingHtml] = useState(false);
+  
+  // New state for LLM1 prompt step
+  const [llm1Prompt, setLlm1Prompt] = useState<DashboardPromptType | null>(null);
+  const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false);
+  
   const { toast } = useToast();
 
   // Load datasets on open
@@ -587,9 +595,11 @@ export default function DashboardAutoBuilder({
     setIsTestingQuery(false);
     setCrmMode(false);
     setAggregationPreview(null);
-    setGenerationMode('react');
+    setGenerationMode('react_lovable');
     setCrmDetection(null);
     setIsGeneratingHtml(false);
+    setLlm1Prompt(null);
+    setIsGeneratingPrompt(false);
   };
 
   const loadDatasets = async () => {
@@ -654,7 +664,7 @@ export default function DashboardAutoBuilder({
           
           // Auto-select HTML mode if high confidence CRM
           if (detection.isCrm && detection.confidence >= 70) {
-            setGenerationMode('html');
+            setGenerationMode('html_js');
             setCrmMode(true);
             toast({
               title: 'Dataset CRM Detectado!',
@@ -679,7 +689,7 @@ export default function DashboardAutoBuilder({
     if (!selectedDatasetId) return;
 
     setIsIntrospecting(true);
-    setStep('introspect');
+    setStep('analyze');
     setProgressSteps([
       { id: 'introspect', label: 'Analisando colunas do dataset...', status: 'running' },
     ]);
@@ -880,7 +890,7 @@ export default function DashboardAutoBuilder({
         const detection = detectCrmFunnelDataset(columnNames, dataset?.name || '');
         setCrmDetection(detection);
         if (detection.isCrm && detection.confidence >= 70) {
-          setGenerationMode('html');
+          setGenerationMode('html_js');
           setCrmMode(true);
         }
       }
@@ -912,8 +922,8 @@ export default function DashboardAutoBuilder({
     setColumnMappings(newMappings);
   };
 
-  // Save mapping and proceed to generate
-  const handleConfirmMappingAndGenerate = async () => {
+  // Save mapping and proceed to PROMPT step (not generate)
+  const handleConfirmMappingAndGoToPrompt = async () => {
     if (!selectedDatasetId || columnMappings.length === 0) return;
 
     // Save column mapping to database
@@ -964,7 +974,116 @@ export default function DashboardAutoBuilder({
       // Continue anyway - mapping is in memory
     }
 
-    // Proceed to generate with mapping
+    // NEW FLOW: Go to prompt step and generate prompt with LLM1
+    await handleGeneratePromptWithLLM1();
+  };
+
+  // NEW: Generate prompt using LLM1 (Planner)
+  const handleGeneratePromptWithLLM1 = async () => {
+    setIsGeneratingPrompt(true);
+    setStep('prompt');
+    
+    try {
+      const dataset = datasets.find(d => d.id === selectedDatasetId);
+      
+      // Build column mapping for LLM1
+      const mappingForLLM = columnMappings.map(m => ({
+        column_name: m.column_name,
+        role: m.role,
+        display_label: m.display_label,
+        funnel_order: m.funnel_order
+      }));
+
+      // Build dataset profile summary for LLM1
+      const profileSummary = {
+        dataset_id: selectedDatasetId,
+        dataset_name: dataset?.name || dashboardName,
+        columns: columnProfiles.map(c => ({
+          name: c.name,
+          db_type: c.db_type,
+          display_label: c.display_label,
+          semantic_type: c.semantic_type,
+          role_hint: c.role_hint,
+          stats: c.stats
+        })),
+        sample_rows: datasetProfile?.sample_rows?.slice(0, 10) || [],
+        stats: datasetProfile?.stats || {}
+      };
+
+      // Call LLM1 (planner-generate-prompt)
+      const { data: promptResult, error: promptError } = await supabase.functions.invoke(
+        'planner-generate-prompt',
+        { 
+          body: { 
+            dataset_profile: profileSummary,
+            column_mapping: mappingForLLM,
+            user_requirements: specificRequirements || '',
+            use_llm: true
+          } 
+        }
+      );
+
+      if (promptError || !promptResult?.ok) {
+        throw new Error(promptResult?.error || 'Erro ao gerar prompt com LLM1');
+      }
+
+      // Set the LLM1 generated prompt
+      const generatedPrompt: DashboardPromptType = {
+        prompt_final: promptResult.prompt_final || promptResult.dashboard_prompt_final || '',
+        user_requirements: specificRequirements || '',
+        dashboard_plan: promptResult.dashboard_plan || {
+          version: 1,
+          title: dashboardName,
+          tabs: [],
+          filters: [],
+          kpis: [],
+          charts: [],
+          time_column: null,
+          id_column: null,
+          confidence: 0.5
+        },
+        recommended_mode: promptResult.recommended_generation_mode || 'react_lovable',
+        why_recommended: promptResult.why_recommended || '',
+        assumptions: promptResult.assumptions || [],
+        warnings: promptResult.warnings || []
+      };
+
+      setLlm1Prompt(generatedPrompt);
+      
+      // Set recommended generation mode
+      if (generatedPrompt.recommended_mode) {
+        setGenerationMode(generatedPrompt.recommended_mode);
+      }
+
+      toast({
+        title: 'Prompt gerado!',
+        description: 'Revise o prompt e requisitos antes de gerar o dashboard.'
+      });
+
+    } catch (err: any) {
+      console.error('LLM1 prompt generation failed:', err);
+      toast({
+        title: 'Erro ao gerar prompt',
+        description: err.message,
+        variant: 'destructive'
+      });
+      // Go back to mapping if fails
+      setStep('mapping');
+    } finally {
+      setIsGeneratingPrompt(false);
+    }
+  };
+
+  // Handle user editing the prompt
+  const handlePromptEdit = (newPrompt: string) => {
+    if (llm1Prompt) {
+      setLlm1Prompt({ ...llm1Prompt, prompt_final: newPrompt });
+    }
+  };
+
+  // Handle approving prompt and proceeding to generate
+  const handleApprovePromptAndGenerate = () => {
+    // Proceed to LLM2 generation
     handleGenerateWithMapping();
   };
 
@@ -980,7 +1099,7 @@ export default function DashboardAutoBuilder({
     const dataset = datasets.find(d => d.id === selectedDatasetId);
     
     // Different progress steps for HTML vs React mode
-    if (generationMode === 'html') {
+    if (generationMode === 'html_js') {
       setProgressSteps([
         { id: 'html', label: 'Gerando dashboard HTML CRM...', status: 'pending' },
         { id: 'validate', label: 'Validando...', status: 'pending' },
@@ -1000,7 +1119,7 @@ export default function DashboardAutoBuilder({
       // datasetProfile and columnMappings are already set
 
       // HTML CRM Mode - generate HTML dashboard directly
-      if (generationMode === 'html') {
+      if (generationMode === 'html_js') {
         updateProgress('html', 'running');
         setIsGeneratingHtml(true);
         
@@ -1430,7 +1549,7 @@ export default function DashboardAutoBuilder({
       if (!datasetData) throw new Error('Dataset não encontrado');
 
       // Determine display type based on generation mode
-      const isHtmlMode = generationMode === 'html' || generatedSpec.mode === 'html_generated';
+      const isHtmlMode = generationMode === 'html_js' || generatedSpec.mode === 'html_generated';
       
       // Enrich spec with time column and test query info
       const enrichedSpec = {
@@ -1627,10 +1746,10 @@ export default function DashboardAutoBuilder({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Progress Steps */}
+        {/* Progress Steps - New flow: select → analyze → mapping → prompt → generate → preview → save */}
         <div className="flex items-center gap-2 px-2 py-3 border-b overflow-x-auto">
-          {(['select', 'introspect', 'mapping', 'generate', 'preview', 'save'] as WizardStep[]).map((s, i) => {
-            const allSteps: WizardStep[] = ['select', 'introspect', 'mapping', 'generate', 'preview', 'save'];
+          {(['select', 'analyze', 'mapping', 'prompt', 'generate', 'preview', 'save'] as WizardStep[]).map((s, i) => {
+            const allSteps: WizardStep[] = ['select', 'analyze', 'mapping', 'prompt', 'generate', 'preview', 'save'];
             const currentIdx = allSteps.indexOf(step);
             const stepIdx = allSteps.indexOf(s);
             
@@ -1651,8 +1770,9 @@ export default function DashboardAutoBuilder({
                 </div>
                 <span className={`text-sm whitespace-nowrap ${step === s ? 'font-medium' : 'text-muted-foreground'}`}>
                   {s === 'select' && 'Dataset'}
-                  {s === 'introspect' && 'Analisar'}
+                  {s === 'analyze' && 'Analisar'}
                   {s === 'mapping' && 'Mapeamento'}
+                  {s === 'prompt' && 'Prompt'}
                   {s === 'generate' && 'Gerar'}
                   {s === 'preview' && 'Preview'}
                   {s === 'save' && 'Salvar'}
@@ -1722,126 +1842,33 @@ export default function DashboardAutoBuilder({
 
               {selectedDataset && (
                 <div className="space-y-4 pt-4 border-t">
+                  {/* Step 1 ONLY: Dataset name - NO prompt, NO requirements, NO mode */}
                   <div className="space-y-2">
-                    <Label htmlFor="name">Nome do Dashboard</Label>
+                    <Label htmlFor="name">Nome do Dashboard (opcional)</Label>
                     <Input
                       id="name"
                       value={dashboardName}
                       onChange={e => setDashboardName(e.target.value)}
                       placeholder="Ex: Dashboard de Vendas"
                     />
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <Label htmlFor="prompt">Prompt do Dashboard (padrão)</Label>
-                    <Textarea
-                      id="prompt"
-                      value={dashboardPrompt}
-                      onChange={e => setDashboardPrompt(e.target.value)}
-                      placeholder="Instruções para o LLM..."
-                      rows={4}
-                      className="font-mono text-xs"
-                    />
                     <p className="text-xs text-muted-foreground">
-                      Prompt padrão que guia a IA na geração do dashboard. Pode ser editado.
+                      O prompt e modo de geração serão definidos após a análise e mapeamento do dataset.
                     </p>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="requirements">Requisitos específicos do Dashboard (opcional)</Label>
-                    <Textarea
-                      id="requirements"
-                      value={specificRequirements}
-                      onChange={e => setSpecificRequirements(e.target.value)}
-                      placeholder="Ex: Priorizar funil de experiência e taxa de comparecimento / Destacar vendas por vendedora..."
-                      rows={2}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Instruções adicionais específicas para este dashboard.
+                  {/* Info about next steps */}
+                  <div className="p-4 rounded-lg bg-muted/50 border">
+                    <p className="text-sm font-medium flex items-center gap-2">
+                      <Sparkles className="h-4 w-4 text-primary" />
+                      Próximos passos
                     </p>
+                    <ul className="mt-2 text-xs text-muted-foreground space-y-1 list-disc list-inside">
+                      <li>Analisar colunas do dataset automaticamente</li>
+                      <li>Revisar e confirmar o mapeamento de colunas</li>
+                      <li>IA irá gerar o prompt otimizado para seu dashboard</li>
+                      <li>Você poderá editar o prompt e escolher o modo de geração</li>
+                    </ul>
                   </div>
-
-                  {/* CRM Detection Banner */}
-                  {crmDetection && crmDetection.isCrm && (
-                    <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30">
-                      <p className="text-sm font-medium text-green-600 dark:text-green-400 flex items-center gap-2">
-                        <CheckCircle2 className="h-4 w-4" />
-                        Dataset CRM Detectado ({crmDetection.confidence}% confiança)
-                      </p>
-                      <ul className="mt-2 text-xs text-muted-foreground list-disc list-inside">
-                        {crmDetection.reasons.map((r, i) => <li key={i}>{r}</li>)}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Generation Mode Selector */}
-                  <div className="space-y-3 pt-2">
-                    <Label>Modo de Geração</Label>
-                    <RadioGroup 
-                      value={generationMode} 
-                      onValueChange={(v) => setGenerationMode(v as GenerationMode)}
-                      className="grid grid-cols-2 gap-3"
-                    >
-                      <Label 
-                        htmlFor="mode-react"
-                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                          generationMode === 'react' 
-                            ? 'border-primary bg-primary/5' 
-                            : 'hover:border-primary/50'
-                        }`}
-                      >
-                        <RadioGroupItem value="react" id="mode-react" />
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <Code className="h-4 w-4 text-primary" />
-                            <span className="font-medium">React (padrão)</span>
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            Dashboard dinâmico com spec JSON. Melhor para dados genéricos.
-                          </p>
-                        </div>
-                      </Label>
-                      
-                      <Label 
-                        htmlFor="mode-html"
-                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
-                          generationMode === 'html' 
-                            ? 'border-primary bg-primary/5' 
-                            : 'hover:border-primary/50'
-                        } ${crmDetection?.isCrm ? 'ring-2 ring-green-500/30' : ''}`}
-                      >
-                        <RadioGroupItem value="html" id="mode-html" />
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <FileCode className="h-4 w-4 text-primary" />
-                            <span className="font-medium">HTML CRM</span>
-                            {crmDetection?.isCrm && (
-                              <Badge variant="secondary" className="text-xs">Recomendado</Badge>
-                            )}
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            Dashboard completo com abas e filtros. Ideal para CRM/Kommo.
-                          </p>
-                        </div>
-                      </Label>
-                    </RadioGroup>
-                  </div>
-
-                  <div className="flex items-center space-x-2 pt-2">
-                    <Checkbox
-                      id="crm-mode"
-                      checked={crmMode}
-                      onCheckedChange={(checked) => setCrmMode(checked === true)}
-                    />
-                    <Label htmlFor="crm-mode" className="flex items-center gap-2 cursor-pointer">
-                      <Database className="h-4 w-4 text-muted-foreground" />
-                      <span>Modo CRM (flags em texto)</span>
-                    </Label>
-                  </div>
-                  <p className="text-xs text-muted-foreground pl-6">
-                    Ativa quando o dataset tem colunas de funil em texto (sim/não, 1/0, true/false). 
-                    Prioriza truthy_count e count_distinct(lead_id).
-                  </p>
                 </div>
               )}
             </div>
@@ -1885,8 +1912,8 @@ export default function DashboardAutoBuilder({
             </div>
           )}
 
-          {/* Step 2: Introspection Progress */}
-          {step === 'introspect' && (
+          {/* Step 2: Analysis Progress */}
+          {step === 'analyze' && (
             <div className="flex flex-col items-center justify-center py-12">
               <div className="relative mb-6">
                 <Columns className="h-12 w-12 text-primary animate-pulse" />
@@ -1931,7 +1958,7 @@ export default function DashboardAutoBuilder({
                   columns={columnProfiles}
                   initialMappings={columnMappings}
                   onMappingsChange={handleMappingsChange}
-                  onConfirm={handleConfirmMappingAndGenerate}
+                  onConfirm={handleConfirmMappingAndGoToPrompt}
                   onResetToAI={handleResetToAI}
                   isLoading={isGenerating}
                 />
@@ -1953,7 +1980,33 @@ export default function DashboardAutoBuilder({
             </div>
           )}
 
-          {/* Step 3: Preview */}
+          {/* Step 4: Prompt (LLM1) - NEW */}
+          {step === 'prompt' && (
+            <div className="py-4">
+              {isGeneratingPrompt ? (
+                <div className="flex flex-col items-center justify-center py-12">
+                  <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
+                  <p className="font-medium">Gerando prompt com IA...</p>
+                </div>
+              ) : (
+                <PromptStep
+                  dashboardPrompt={llm1Prompt}
+                  userRequirements={specificRequirements}
+                  generationMode={generationMode}
+                  onUserRequirementsChange={setSpecificRequirements}
+                  onGenerationModeChange={setGenerationMode}
+                  onPromptEdit={handlePromptEdit}
+                  onRegeneratePrompt={handleGeneratePromptWithLLM1}
+                  onConfirm={handleApprovePromptAndGenerate}
+                  onBack={() => setStep('mapping')}
+                  isLoading={isGenerating}
+                  isRegenerating={isGeneratingPrompt}
+                />
+              )}
+            </div>
+          )}
+
+          {/* Step 5: Preview */}
           {step === 'preview' && generatedSpec && (
             <div className="space-y-4 py-4">
               {/* Spec Generated Summary */}
@@ -2515,7 +2568,7 @@ export default function DashboardAutoBuilder({
             </>
           )}
           
-          {step === 'introspect' && (
+          {step === 'analyze' && (
             <Button variant="outline" onClick={() => setStep('select')} disabled={isIntrospecting}>
               Cancelar
             </Button>
@@ -2533,7 +2586,7 @@ export default function DashboardAutoBuilder({
                 Voltar
               </Button>
               <Button 
-                onClick={handleConfirmMappingAndGenerate}
+                onClick={handleConfirmMappingAndGoToPrompt}
                 disabled={isGenerating || columnProfiles.length === 0}
               >
                 <Sparkles className="h-4 w-4 mr-2" />
