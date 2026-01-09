@@ -27,6 +27,13 @@ interface FunnelStageData {
   value?: number;  // Alias for count
   rate?: number;
   label?: string;
+  column?: string; // Original column name from spec
+}
+
+interface SpecFunnelStage {
+  column: string;
+  label: string;
+  order?: number;
 }
 
 interface ExecutiveFunnelProps {
@@ -35,6 +42,8 @@ interface ExecutiveFunnelProps {
   comparisonEnabled?: boolean;
   className?: string;
   funnelStages?: FunnelStageData[];
+  /** Funnel stages from dashboard_spec - if provided, use these */
+  specFunnelStages?: SpecFunnelStage[];
 }
 
 const STAGE_ICONS: Record<string, React.ElementType> = {
@@ -74,15 +83,26 @@ export default function ExecutiveFunnel({
   comparisonEnabled = false,
   className,
   funnelStages: precomputedStages,
+  specFunnelStages,
 }: ExecutiveFunnelProps) {
-  // Get funnel stages - prefer precomputed from v2, otherwise derive from data
+  // Get funnel stages - PRIORITY ORDER:
+  // 1. specFunnelStages from dashboard_spec.funnel.stages
+  // 2. precomputedStages from dashboard-data-v2
+  // 3. Hardcoded FUNNEL_STAGES/FUNNEL_STAGES_V3
   const stages = useMemo(() => {
-    // If precomputed stages from dashboard-data-v2, use them
+    // PRIORITY 1: Use spec funnel stages if provided
+    if (specFunnelStages && specFunnelStages.length > 0) {
+      // Sort by order if available
+      const sorted = [...specFunnelStages].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      return sorted.map(s => s.column);
+    }
+    
+    // PRIORITY 2: If precomputed stages from dashboard-data-v2, use them
     if (precomputedStages && precomputedStages.length > 0) {
       return precomputedStages.map(s => s.stage);
     }
     
-    // Check if we have v3 data
+    // PRIORITY 3: Check if we have v3 data, then legacy
     const hasV3Data = FUNNEL_STAGES_V3.some(stage => 
       data[stage] !== undefined && isFinite(data[stage])
     );
@@ -92,7 +112,23 @@ export default function ExecutiveFunnel({
     return stageList.filter(stage => 
       data[stage] !== undefined && isFinite(data[stage])
     );
-  }, [data, precomputedStages]);
+  }, [data, precomputedStages, specFunnelStages]);
+
+  // Build stage labels map from spec
+  const stageLabels = useMemo(() => {
+    const labels: Record<string, string> = {};
+    if (specFunnelStages) {
+      specFunnelStages.forEach(s => {
+        labels[s.column] = s.label;
+      });
+    }
+    if (precomputedStages) {
+      precomputedStages.forEach(s => {
+        if (s.label) labels[s.stage] = s.label;
+      });
+    }
+    return labels;
+  }, [specFunnelStages, precomputedStages]);
   
   // Use precomputed data values if available (prefer 'count', fallback to 'value')
   const stageData = useMemo(() => {
@@ -291,7 +327,7 @@ export default function ExecutiveFunnel({
                     {/* Content */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-sm font-medium">{getColumnLabel(stage)}</span>
+                        <span className="text-sm font-medium">{stageLabels[stage] || getColumnLabel(stage)}</span>
                         <div className="flex items-center gap-2">
                           <span className="text-xl font-bold tabular-nums">
                             {formatColumnValue(value, stage)}
