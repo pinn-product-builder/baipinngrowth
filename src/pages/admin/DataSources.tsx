@@ -557,6 +557,25 @@ export default function DataSources() {
     }, 5000);
   };
 
+  // Fixed OAuth callback URL - MUST match Google Cloud Console configuration
+  const getGoogleOAuthRedirectUri = () => {
+    // Use production domain for OAuth callback
+    const origin = window.location.origin;
+    // Always use the current origin + fixed callback path
+    return `${origin}/admin/data-sources`;
+  };
+
+  const googleOAuthRedirectUri = getGoogleOAuthRedirectUri();
+
+  const copyRedirectUri = async () => {
+    try {
+      await navigator.clipboard.writeText(googleOAuthRedirectUri);
+      toast({ title: 'Copiado!', description: 'Redirect URI copiado para a área de transferência.' });
+    } catch {
+      toast({ title: 'Erro', description: 'Não foi possível copiar.', variant: 'destructive' });
+    }
+  };
+
   // Google OAuth flow
   const startGoogleOAuth = async () => {
     if (!sheetsFormData.googleClientId.trim() || !sheetsFormData.googleClientSecret.trim()) {
@@ -569,8 +588,15 @@ export default function DataSources() {
     }
     
     try {
-      const redirectUri = `${window.location.origin}/admin/data-sources`;
-      const state = btoa(JSON.stringify({ tenantId: sheetsFormData.tenantId, name: sheetsFormData.name }));
+      const redirectUri = googleOAuthRedirectUri;
+      const state = btoa(JSON.stringify({ 
+        tenantId: sheetsFormData.tenantId, 
+        name: sheetsFormData.name,
+        redirect_uri: redirectUri // Store for verification
+      }));
+      
+      console.log('[OAuth Debug] redirect_uri:', redirectUri);
+      console.log('[OAuth Debug] client_id:', sheetsFormData.googleClientId.substring(0, 20) + '...');
       
       const response = await supabase.functions.invoke('google-sheets-connect', {
         body: { 
@@ -584,9 +610,12 @@ export default function DataSources() {
 
       if (response.error || !response.data?.ok) {
         const errMsg = response.data?.error?.message || response.error?.message || 'Erro ao obter URL OAuth';
+        console.error('[OAuth Debug] Error:', errMsg, response.data?.error);
         toast({ title: 'Erro', description: errMsg, variant: 'destructive' });
         return;
       }
+
+      console.log('[OAuth Debug] OAuth URL generated successfully');
 
       // Open OAuth in popup
       const popup = window.open(response.data.oauth_url, 'google_oauth', 'width=600,height=700');
@@ -615,6 +644,7 @@ export default function DataSources() {
         }
       }, 500);
     } catch (error: any) {
+      console.error('[OAuth Debug] Exception:', error);
       toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     }
   };
@@ -1050,10 +1080,31 @@ export default function DataSources() {
                                 Criar no Google Cloud Console
                               </a>
                             </div>
-                            <p className="text-xs text-muted-foreground">
-                              Acesse o Google Cloud Console → APIs & Services → Credentials → Create OAuth Client ID (tipo Web Application).
-                              Adicione <code className="bg-background px-1 rounded">{window.location.origin}/admin/data-sources</code> em "Authorized redirect URIs".
-                            </p>
+                            
+                            {/* Fixed Redirect URI - user must copy exactly */}
+                            <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg space-y-2">
+                              <Label className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                                ⚠️ Redirect URI (copie exatamente este valor)
+                              </Label>
+                              <div className="flex items-center gap-2">
+                                <code className="flex-1 bg-background px-3 py-2 rounded border text-sm font-mono break-all">
+                                  {googleOAuthRedirectUri}
+                                </code>
+                                <Button 
+                                  type="button" 
+                                  size="sm" 
+                                  variant="outline"
+                                  onClick={copyRedirectUri}
+                                >
+                                  Copiar
+                                </Button>
+                              </div>
+                              <p className="text-xs text-amber-700 dark:text-amber-300">
+                                No Google Cloud Console → APIs & Services → Credentials → seu OAuth Client ID → 
+                                <strong> Authorized redirect URIs</strong> → adicione exatamente esta URL acima.
+                              </p>
+                            </div>
+                            
                             <div className="grid grid-cols-1 gap-4">
                               <div className="space-y-2">
                                 <Label htmlFor="googleClientId">Client ID</Label>
