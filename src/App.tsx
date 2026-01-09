@@ -30,6 +30,7 @@ import AIHealth from "@/pages/admin/AIHealth";
 import Datasets from "@/pages/admin/Datasets";
 import DatasetRelationships from "@/pages/admin/DatasetRelationships";
 import NotFound from "@/pages/NotFound";
+import OAuthCallback from "@/pages/OAuthCallback";
 
 const queryClient = new QueryClient();
 
@@ -43,6 +44,8 @@ const App = () => (
           <Routes>
             <Route path="/auth" element={<Auth />} />
             <Route path="/setup" element={<Setup />} />
+            {/* OAuth callback route - MUST match Google Cloud Console redirect URI */}
+            <Route path="/oauth/callback" element={<OAuthCallback />} />
             <Route path="/accept-invite" element={<AcceptInvite />} />
             <Route path="/change-password" element={
               <ProtectedRoute>

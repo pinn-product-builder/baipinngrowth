@@ -558,11 +558,11 @@ export default function DataSources() {
   };
 
   // Fixed OAuth callback URL - MUST match Google Cloud Console configuration
+  // IMPORTANT: This is a dedicated callback route, NOT a UI page
   const getGoogleOAuthRedirectUri = () => {
-    // Use production domain for OAuth callback
     const origin = window.location.origin;
-    // Always use the current origin + fixed callback path
-    return `${origin}/admin/data-sources`;
+    // Use the dedicated OAuth callback route (NOT the data sources page)
+    return `${origin}/oauth/callback`;
   };
 
   const googleOAuthRedirectUri = getGoogleOAuthRedirectUri();
@@ -575,6 +575,25 @@ export default function DataSources() {
       toast({ title: 'Erro', description: 'Não foi possível copiar.', variant: 'destructive' });
     }
   };
+
+  // Listen for OAuth callback messages from popup
+  useEffect(() => {
+    const handleOAuthMessage = (event: MessageEvent) => {
+      // Verify origin
+      if (event.origin !== window.location.origin) return;
+      
+      if (event.data?.type === 'GOOGLE_OAUTH_CALLBACK') {
+        console.log('[OAuth] Received callback message from popup');
+        const { code, state } = event.data;
+        if (code) {
+          handleGoogleOAuthCallback(code, googleOAuthRedirectUri);
+        }
+      }
+    };
+
+    window.addEventListener('message', handleOAuthMessage);
+    return () => window.removeEventListener('message', handleOAuthMessage);
+  }, [googleOAuthRedirectUri, sheetsFormData.googleClientId, sheetsFormData.googleClientSecret]);
 
   // Google OAuth flow
   const startGoogleOAuth = async () => {
@@ -592,9 +611,10 @@ export default function DataSources() {
       const state = btoa(JSON.stringify({ 
         tenantId: sheetsFormData.tenantId, 
         name: sheetsFormData.name,
-        redirect_uri: redirectUri // Store for verification
+        timestamp: Date.now()
       }));
       
+      console.log('[OAuth Debug] Starting OAuth flow');
       console.log('[OAuth Debug] redirect_uri:', redirectUri);
       console.log('[OAuth Debug] client_id:', sheetsFormData.googleClientId.substring(0, 20) + '...');
       
@@ -615,34 +635,22 @@ export default function DataSources() {
         return;
       }
 
-      console.log('[OAuth Debug] OAuth URL generated successfully');
+      console.log('[OAuth Debug] OAuth URL generated successfully, opening popup...');
 
-      // Open OAuth in popup
-      const popup = window.open(response.data.oauth_url, 'google_oauth', 'width=600,height=700');
+      // Open OAuth in popup - the callback page will send a postMessage back
+      const popup = window.open(
+        response.data.oauth_url, 
+        'google_oauth', 
+        'width=600,height=700,menubar=no,toolbar=no,location=no,status=no'
+      );
       
-      // Listen for the callback
-      const checkPopup = setInterval(() => {
-        try {
-          if (popup?.closed) {
-            clearInterval(checkPopup);
-            return;
-          }
-          
-          const popupUrl = popup?.location?.href;
-          if (popupUrl && popupUrl.includes('code=')) {
-            clearInterval(checkPopup);
-            popup?.close();
-            
-            const url = new URL(popupUrl);
-            const code = url.searchParams.get('code');
-            if (code) {
-              handleGoogleOAuthCallback(code, redirectUri);
-            }
-          }
-        } catch {
-          // Cross-origin error expected until redirect happens
-        }
-      }, 500);
+      if (!popup) {
+        toast({ 
+          title: 'Popup bloqueado', 
+          description: 'Por favor, permita popups para este site e tente novamente.', 
+          variant: 'destructive' 
+        });
+      }
     } catch (error: any) {
       console.error('[OAuth Debug] Exception:', error);
       toast({ title: 'Erro', description: error.message, variant: 'destructive' });
@@ -651,6 +659,9 @@ export default function DataSources() {
 
   const handleGoogleOAuthCallback = async (code: string, redirectUri: string) => {
     try {
+      console.log('[OAuth] Processing callback...');
+      console.log('[OAuth] redirect_uri:', redirectUri);
+      
       const response = await supabase.functions.invoke('google-sheets-connect', {
         body: { 
           action: 'exchange_code', 
@@ -662,12 +673,38 @@ export default function DataSources() {
       });
 
       if (response.error || !response.data?.ok) {
-        const errMsg = response.data?.error?.message || response.error?.message || 'Erro ao trocar código OAuth';
-        toast({ title: 'Erro OAuth', description: errMsg, variant: 'destructive' });
+        const errorData = response.data?.error;
+        const errMsg = errorData?.message || response.error?.message || 'Erro ao trocar código OAuth';
+        const errDetails = errorData?.details || '';
+        const debugInfo = errorData?.debug;
+        
+        console.error('[OAuth] Error:', errMsg);
+        console.error('[OAuth] Details:', errDetails);
+        if (debugInfo) {
+          console.error('[OAuth] Debug info:', debugInfo);
+        }
+        
+        // Show detailed error for redirect_uri_mismatch
+        if (errorData?.code === 'REDIRECT_URI_MISMATCH') {
+          toast({ 
+            title: 'Erro: Redirect URI não cadastrado', 
+            description: `O URI "${redirectUri}" precisa ser cadastrado no Google Cloud Console. Veja as instruções no formulário.`,
+            variant: 'destructive',
+            duration: 10000
+          });
+        } else {
+          toast({ 
+            title: 'Erro OAuth', 
+            description: errMsg, 
+            variant: 'destructive' 
+          });
+        }
         return;
       }
 
       const { access_token_encrypted, refresh_token_encrypted, email, expires_in } = response.data;
+      
+      console.log('[OAuth] Success! Email:', email);
       
       setGoogleAccessTokenEncrypted(access_token_encrypted);
       setGoogleRefreshTokenEncrypted(refresh_token_encrypted || '');
@@ -680,6 +717,7 @@ export default function DataSources() {
       // Load spreadsheets
       loadSpreadsheets(access_token_encrypted);
     } catch (error: any) {
+      console.error('[OAuth] Exception:', error);
       toast({ title: 'Erro', description: error.message, variant: 'destructive' });
     }
   };
@@ -1084,25 +1122,30 @@ export default function DataSources() {
                             {/* Fixed Redirect URI - user must copy exactly */}
                             <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg space-y-2">
                               <Label className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                                ⚠️ Redirect URI (copie exatamente este valor)
+                                ⚠️ Passo 1: Cadastrar Redirect URI no Google Cloud Console
                               </Label>
+                              <p className="text-xs text-amber-700 dark:text-amber-300 mb-2">
+                                Copie a URL abaixo e adicione em: <strong>APIs & Services → Credentials → seu OAuth Client ID → Authorized redirect URIs</strong>
+                              </p>
                               <div className="flex items-center gap-2">
-                                <code className="flex-1 bg-background px-3 py-2 rounded border text-sm font-mono break-all">
+                                <code className="flex-1 bg-background px-3 py-2 rounded border text-sm font-mono break-all select-all">
                                   {googleOAuthRedirectUri}
                                 </code>
                                 <Button 
                                   type="button" 
                                   size="sm" 
-                                  variant="outline"
+                                  variant="secondary"
                                   onClick={copyRedirectUri}
+                                  className="shrink-0"
                                 >
                                   Copiar
                                 </Button>
                               </div>
-                              <p className="text-xs text-amber-700 dark:text-amber-300">
-                                No Google Cloud Console → APIs & Services → Credentials → seu OAuth Client ID → 
-                                <strong> Authorized redirect URIs</strong> → adicione exatamente esta URL acima.
-                              </p>
+                              <div className="text-xs text-amber-700 dark:text-amber-300 space-y-1">
+                                <p>✅ Este é o callback OAuth dedicado (não é uma página da UI)</p>
+                                <p>✅ Copie <strong>exatamente</strong> como está, sem espaços ou barras extras</p>
+                                <p>✅ O Google só permite redirect para URIs cadastrados previamente</p>
+                              </div>
                             </div>
                             
                             <div className="grid grid-cols-1 gap-4">
