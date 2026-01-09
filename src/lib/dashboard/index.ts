@@ -18,8 +18,10 @@ export {
   generateTabs, 
   mapLegacyTabId,
   getDynamicTabLabel,
-  type TabGenerationResult,
 } from './tabGenerator';
+
+// Re-export TabGenerationResult from types (canonical definition)
+export type { TabGenerationResult } from './types';
 
 // Layout compilation
 export { 

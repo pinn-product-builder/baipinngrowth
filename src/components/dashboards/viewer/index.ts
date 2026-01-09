@@ -1,6 +1,8 @@
 export { default as ModernDashboardViewer } from './ModernDashboardViewer';
 export { default as DashboardFilterBar } from './DashboardFilterBar';
 export { default as DashboardTabs } from './DashboardTabs';
+export { default as AdaptiveDashboardTabs } from './AdaptiveDashboardTabs';
+export { default as MinimumGuaranteedView } from './MinimumGuaranteedView';
 export { default as KPICard } from './KPICard';
 export { default as AlertsInsights } from './AlertsInsights';
 export { default as DetailDrawer } from './DetailDrawer';

@@ -12,19 +12,8 @@ import {
   DiscardInfo 
 } from './types';
 
-/**
- * Result of tab generation
- */
-export interface TabGenerationResult {
-  /** Enabled tabs in order */
-  tabs: TabDefinition[];
-  /** Default tab ID */
-  defaultTab: DynamicTabId;
-  /** Tabs that were discarded with reasons */
-  discards: DiscardInfo[];
-  /** Warnings generated during analysis */
-  warnings: string[];
-}
+// TabGenerationResult is now defined in types.ts
+import type { TabGenerationResult } from './types';
 
 /**
  * Check if a tab's requirements are met
@@ -80,7 +69,7 @@ function checkTabRequirements(
  */
 export function generateTabs(capabilities: DatasetCapabilities): TabGenerationResult {
   const enabledTabs: TabDefinition[] = [];
-  const discards: DiscardInfo[] = [];
+  const discarded: DiscardInfo[] = [];
   const warnings: string[] = [];
   
   // Check each tab in the catalog
@@ -90,7 +79,7 @@ export function generateTabs(capabilities: DatasetCapabilities): TabGenerationRe
     if (check.met) {
       enabledTabs.push(tab);
     } else {
-      discards.push({
+      discarded.push({
         item: tab.label,
         type: 'tab',
         reason: check.reason || 'Requisitos não atendidos',
@@ -142,7 +131,7 @@ export function generateTabs(capabilities: DatasetCapabilities): TabGenerationRe
   return {
     tabs: enabledTabs,
     defaultTab,
-    discards,
+    discarded,
     warnings,
   };
 }
