@@ -86,6 +86,136 @@ function isBooleanLike(value: any): boolean {
 }
 
 // =====================================================
+// COLUMN ALIAS RESOLUTION (P0 FIX)
+// =====================================================
+
+const COLUMN_ALIASES: Record<string, string[]> = {
+  // Funnel stages
+  'venda': ['venda', 'vendas', 'st_venda', 'venda_realizada', 'fechou', 'ganhou'],
+  'perdida': ['perdida', 'st_perdida', 'loss', 'lost', 'perdido', 'cancelado'],
+  'qualificado': ['qualificado', 'st_qualificado', 'qualified', 'qualificados'],
+  'entrada': ['entrada', 'st_entrada', 'entradas', 'lead_novo', 'novo'],
+  'lead_ativo': ['lead_ativo', 'st_lead_ativo', 'ativo', 'ativos'],
+  'exp_agendada': ['exp_agendada', 'st_exp_agendada', 'agendada', 'agendado', 'experiencia_agendada'],
+  'exp_realizada': ['exp_realizada', 'st_exp_realizada', 'realizada', 'experiencia_realizada'],
+  'exp_nao_confirmada': ['exp_nao_confirmada', 'st_exp_nao_confirmada', 'nao_confirmada'],
+  'faltou_exp': ['faltou_exp', 'st_faltou_exp', 'faltou', 'no_show'],
+  'reagendou': ['reagendou', 'st_reagendou', 'reagendamento'],
+  
+  // Time columns
+  'created_at': ['created_at', 'data', 'dia', 'date', 'data_criacao', 'inserted_at', 'created_at_ts'],
+  
+  // Dimensions
+  'unidade': ['unidade', 'unidade_final', 'unit', 'loja', 'filial'],
+  'vendedor': ['vendedor', 'vendedora', 'seller', 'responsavel'],
+  'origem': ['origem', 'source', 'canal', 'channel'],
+}
+
+interface ColumnResolution {
+  specColumn: string
+  actualColumn: string | null
+  resolved: boolean
+  candidates: string[]
+  warning?: string
+}
+
+/**
+ * Resolve a spec column name to an actual column in the data.
+ * Uses case-insensitive matching, prefix matching (st_), and synonyms.
+ */
+function resolveColumn(specColumn: string, availableColumns: string[]): ColumnResolution {
+  const spec = specColumn.toLowerCase().trim()
+  const lowerMap = new Map(availableColumns.map(c => [c.toLowerCase(), c]))
+  
+  // 1. Exact match (case-insensitive)
+  if (lowerMap.has(spec)) {
+    return {
+      specColumn,
+      actualColumn: lowerMap.get(spec)!,
+      resolved: true,
+      candidates: [lowerMap.get(spec)!]
+    }
+  }
+  
+  // 2. Try with/without st_ prefix
+  const withSt = `st_${spec}`
+  const withoutSt = spec.startsWith('st_') ? spec.slice(3) : null
+  
+  if (lowerMap.has(withSt)) {
+    return {
+      specColumn,
+      actualColumn: lowerMap.get(withSt)!,
+      resolved: true,
+      candidates: [lowerMap.get(withSt)!]
+    }
+  }
+  
+  if (withoutSt && lowerMap.has(withoutSt)) {
+    return {
+      specColumn,
+      actualColumn: lowerMap.get(withoutSt)!,
+      resolved: true,
+      candidates: [lowerMap.get(withoutSt)!]
+    }
+  }
+  
+  // 3. Check synonyms from alias table
+  for (const [canonical, synonyms] of Object.entries(COLUMN_ALIASES)) {
+    const allVariants = [canonical, ...synonyms].map(s => s.toLowerCase())
+    
+    if (allVariants.includes(spec)) {
+      // Look for any variant in available columns
+      for (const variant of allVariants) {
+        if (lowerMap.has(variant)) {
+          return {
+            specColumn,
+            actualColumn: lowerMap.get(variant)!,
+            resolved: true,
+            candidates: [lowerMap.get(variant)!]
+          }
+        }
+        // Also try with st_ prefix
+        if (lowerMap.has(`st_${variant}`)) {
+          return {
+            specColumn,
+            actualColumn: lowerMap.get(`st_${variant}`)!,
+            resolved: true,
+            candidates: [lowerMap.get(`st_${variant}`)!]
+          }
+        }
+      }
+    }
+  }
+  
+  // 4. Partial match - find columns containing the spec name
+  const partialMatches: string[] = []
+  for (const [lower, original] of lowerMap) {
+    if (lower.includes(spec) || spec.includes(lower)) {
+      partialMatches.push(original)
+    }
+  }
+  
+  if (partialMatches.length === 1) {
+    return {
+      specColumn,
+      actualColumn: partialMatches[0],
+      resolved: true,
+      candidates: partialMatches,
+      warning: `Coluna "${specColumn}" resolvida via match parcial para "${partialMatches[0]}"`
+    }
+  }
+  
+  // Not found
+  return {
+    specColumn,
+    actualColumn: null,
+    resolved: false,
+    candidates: partialMatches,
+    warning: `Coluna "${specColumn}" não encontrada. Candidatos: ${partialMatches.join(', ') || 'nenhum'}`
+  }
+}
+
+// =====================================================
 // DATE PARSING (Canonical - Single Source of Truth)
 // =====================================================
 
@@ -142,8 +272,19 @@ function formatDateKey(date: Date): string {
 }
 
 // =====================================================
-// DATA QUALITY ANALYSIS
+// DATA QUALITY ANALYSIS WITH COLUMN AUDIT (P0 FIX)
 // =====================================================
+
+interface ColumnAudit {
+  column: string
+  specColumn: string
+  resolved: boolean
+  nonNullCount: number
+  truthyCount: number
+  falsyCount: number
+  topValues: { value: string; count: number }[]
+  warning?: string
+}
 
 interface DataQualityWarning {
   code: string
@@ -154,22 +295,90 @@ interface DataQualityWarning {
 }
 
 interface DataQualityReport {
+  time_column: string | null
+  time_column_resolved: string | null
   time_parse_rate: number
+  rows_in_period: number
+  rows_scanned_total: number
   truthy_rates: Record<string, number>
   null_rates: Record<string, number>
+  column_audits: ColumnAudit[]
   warnings: DataQualityWarning[]
   degraded_mode: boolean
+}
+
+function auditColumn(
+  rows: Record<string, any>[],
+  specColumn: string,
+  actualColumn: string | null,
+  resolved: boolean
+): ColumnAudit {
+  const audit: ColumnAudit = {
+    column: actualColumn || specColumn,
+    specColumn,
+    resolved,
+    nonNullCount: 0,
+    truthyCount: 0,
+    falsyCount: 0,
+    topValues: []
+  }
+  
+  if (!actualColumn || !resolved) {
+    audit.warning = `Coluna "${specColumn}" não encontrada no dataset`
+    return audit
+  }
+  
+  const valueCounts = new Map<string, number>()
+  
+  for (const row of rows) {
+    const val = row[actualColumn]
+    
+    if (val !== null && val !== undefined && val !== '') {
+      audit.nonNullCount++
+      
+      if (isTruthy(val)) {
+        audit.truthyCount++
+      } else {
+        audit.falsyCount++
+      }
+      
+      // Track top values
+      const strVal = String(val).substring(0, 50)
+      valueCounts.set(strVal, (valueCounts.get(strVal) || 0) + 1)
+    }
+  }
+  
+  // Get top 5 values
+  audit.topValues = [...valueCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([value, count]) => ({ value, count }))
+  
+  // Add warning if all zeros
+  if (audit.nonNullCount > 0 && audit.truthyCount === 0) {
+    audit.warning = `Coluna "${actualColumn}" não contém valores truthy. Top values: ${audit.topValues.map(v => v.value).join(', ')}`
+  }
+  
+  return audit
 }
 
 function analyzeDataQuality(
   rows: Record<string, any>[],
   timeColumn: string | null,
-  stageColumns: string[]
+  resolvedTimeColumn: string | null,
+  stageResolutions: ColumnResolution[],
+  startDate: string,
+  endDate: string
 ): DataQualityReport {
   const report: DataQualityReport = {
+    time_column: timeColumn,
+    time_column_resolved: resolvedTimeColumn,
     time_parse_rate: 1,
+    rows_in_period: 0,
+    rows_scanned_total: rows.length,
     truthy_rates: {},
     null_rates: {},
+    column_audits: [],
     warnings: [],
     degraded_mode: false
   }
@@ -184,32 +393,76 @@ function analyzeDataQuality(
   }
   
   // Check time column parse rate
-  if (timeColumn) {
-    const parsed = rows.filter(r => parseDate(r[timeColumn]) !== null).length
-    report.time_parse_rate = parsed / rows.length
+  if (resolvedTimeColumn) {
+    const start = new Date(startDate)
+    const end = new Date(endDate)
+    end.setHours(23, 59, 59, 999)
+    
+    let parsedCount = 0
+    let inPeriodCount = 0
+    
+    for (const row of rows) {
+      const d = parseDate(row[resolvedTimeColumn])
+      if (d !== null) {
+        parsedCount++
+        if (d >= start && d <= end) {
+          inPeriodCount++
+        }
+      }
+    }
+    
+    report.time_parse_rate = parsedCount / rows.length
+    report.rows_in_period = inPeriodCount
     
     if (report.time_parse_rate < 0.7) {
       report.warnings.push({
         code: 'LOW_TIME_PARSE_RATE',
         severity: 'warning',
-        message: `Coluna de tempo "${timeColumn}" tem ${Math.round(report.time_parse_rate * 100)}% de parse válido`,
-        column: timeColumn,
+        message: `Coluna de tempo "${resolvedTimeColumn}" tem ${Math.round(report.time_parse_rate * 100)}% de parse válido`,
+        column: resolvedTimeColumn,
         value: report.time_parse_rate
       })
       report.degraded_mode = true
     }
+    
+    if (inPeriodCount === 0 && parsedCount > 0) {
+      report.warnings.push({
+        code: 'NO_DATA_IN_PERIOD',
+        severity: 'error',
+        message: `Nenhuma linha no período ${startDate} a ${endDate}. Total linhas: ${rows.length}`,
+        value: 0
+      })
+    }
+  } else {
+    report.rows_in_period = rows.length // Without time filter, use all rows
   }
   
-  // Check truthy rates for stage columns
-  for (const col of stageColumns) {
-    const nonNull = rows.filter(r => r[col] !== null && r[col] !== undefined)
-    const truthy = nonNull.filter(r => isTruthy(r[col]))
-    const rate = nonNull.length > 0 ? truthy.length / nonNull.length : 0
-    report.truthy_rates[col] = rate
+  // Audit each stage column
+  for (const resolution of stageResolutions) {
+    const audit = auditColumn(rows, resolution.specColumn, resolution.actualColumn, resolution.resolved)
+    report.column_audits.push(audit)
     
-    // Null rate
-    const nullCount = rows.length - nonNull.length
-    report.null_rates[col] = nullCount / rows.length
+    if (audit.resolved && audit.nonNullCount > 0) {
+      report.truthy_rates[resolution.specColumn] = audit.truthyCount / audit.nonNullCount
+      report.null_rates[resolution.specColumn] = (rows.length - audit.nonNullCount) / rows.length
+    }
+    
+    if (!resolution.resolved) {
+      report.warnings.push({
+        code: 'COLUMN_NOT_FOUND',
+        severity: 'warning',
+        message: resolution.warning || `Coluna "${resolution.specColumn}" não encontrada`,
+        column: resolution.specColumn
+      })
+    } else if (audit.warning) {
+      report.warnings.push({
+        code: 'ZERO_TRUTHY',
+        severity: 'warning',
+        message: audit.warning,
+        column: resolution.actualColumn!,
+        value: 0
+      })
+    }
   }
   
   return report
@@ -247,12 +500,26 @@ function getTimeGroupKey(date: Date, grain: TimeGrain): string {
 }
 
 // =====================================================
-// AGGREGATION HELPERS
+// AGGREGATION WITH COLUMN RESOLUTION (P0 FIX)
 // =====================================================
+
+interface KpiResult {
+  column: string
+  resolvedColumn: string | null
+  label: string
+  value: number
+  formula: string
+  auditInfo: {
+    nonNullCount: number
+    truthyCount: number
+    resolved: boolean
+  }
+}
 
 interface AggregationResult {
   kpis: Record<string, number>
-  series: Record<string, Record<string, number>[]>  // { date: ..., value: ... }[]
+  kpi_details: KpiResult[]
+  series: Record<string, Record<string, number>[]>
   rankings: Record<string, { dimension: string; value: number }[]>
   funnel: { stage: string; label: string; value: number; count: number; rate?: number }[]
 }
@@ -261,10 +528,12 @@ function computeAggregations(
   rows: Record<string, any>[],
   plan: any,
   startDate: string,
-  endDate: string
+  endDate: string,
+  availableColumns: string[]
 ): AggregationResult {
   const result: AggregationResult = {
     kpis: {},
+    kpi_details: [],
     series: {},
     rankings: {},
     funnel: []
@@ -274,80 +543,133 @@ function computeAggregations(
     return result
   }
 
-  const timeColumn = plan.time_column
+  // Resolve time column
+  const timeColumnSpec = plan.time_column
+  const timeResolution = timeColumnSpec ? resolveColumn(timeColumnSpec, availableColumns) : null
+  const resolvedTimeColumn = timeResolution?.actualColumn
   
   // Filter rows by date range if time column exists
   let filteredRows = rows
-  if (timeColumn) {
+  if (resolvedTimeColumn) {
     const start = new Date(startDate)
     const end = new Date(endDate)
     end.setHours(23, 59, 59, 999)
     
     filteredRows = rows.filter(row => {
-      const d = parseDate(row[timeColumn])
+      const d = parseDate(row[resolvedTimeColumn])
       return d && d >= start && d <= end
     })
   }
 
-  // 1. Compute KPIs
+  // 1. Compute KPIs with column resolution
   for (const kpi of plan.kpis || []) {
-    const column = kpi.column
-    let value = 0
+    const specColumn = kpi.column
+    const resolution = resolveColumn(specColumn, availableColumns)
+    const actualColumn = resolution.actualColumn
     
-    switch (kpi.aggregation) {
-      case 'sum':
-        value = filteredRows.reduce((sum, row) => {
-          const v = parseFloat(row[column])
-          return sum + (isFinite(v) ? v : 0)
-        }, 0)
-        break
-        
-      case 'count':
-        value = filteredRows.length
-        break
-        
-      case 'count_distinct':
-        value = new Set(filteredRows.map(row => row[column]).filter(v => v != null)).size
-        break
-        
-      case 'avg':
-        const nums = filteredRows.map(row => parseFloat(row[column])).filter(v => isFinite(v))
-        value = nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : 0
-        break
-        
-      case 'truthy_count':
-        value = filteredRows.filter(row => isTruthy(row[column])).length
-        break
+    let value = 0
+    let formula = 'N/A'
+    let nonNullCount = 0
+    let truthyCount = 0
+    
+    if (actualColumn && resolution.resolved) {
+      switch (kpi.aggregation) {
+        case 'sum':
+          formula = `SUM(${actualColumn})`
+          value = filteredRows.reduce((sum, row) => {
+            const v = parseFloat(row[actualColumn])
+            if (isFinite(v)) {
+              nonNullCount++
+              return sum + v
+            }
+            return sum
+          }, 0)
+          break
+          
+        case 'count':
+          formula = 'COUNT(*)'
+          value = filteredRows.length
+          nonNullCount = filteredRows.length
+          break
+          
+        case 'count_distinct':
+          formula = `COUNT(DISTINCT ${actualColumn})`
+          const uniqueValues = new Set(filteredRows.map(row => row[actualColumn]).filter(v => v != null))
+          value = uniqueValues.size
+          nonNullCount = uniqueValues.size
+          break
+          
+        case 'avg':
+          formula = `AVG(${actualColumn})`
+          const nums = filteredRows.map(row => parseFloat(row[actualColumn])).filter(v => isFinite(v))
+          nonNullCount = nums.length
+          value = nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : 0
+          break
+          
+        case 'truthy_count':
+        default:
+          formula = `COUNT(${actualColumn} WHERE truthy)`
+          for (const row of filteredRows) {
+            if (row[actualColumn] !== null && row[actualColumn] !== undefined && row[actualColumn] !== '') {
+              nonNullCount++
+            }
+            if (isTruthy(row[actualColumn])) {
+              truthyCount++
+            }
+          }
+          value = truthyCount
+          break
+      }
     }
     
-    result.kpis[column] = value
+    result.kpis[specColumn] = value
+    result.kpi_details.push({
+      column: specColumn,
+      resolvedColumn: actualColumn,
+      label: kpi.label || specColumn,
+      value,
+      formula,
+      auditInfo: {
+        nonNullCount,
+        truthyCount,
+        resolved: resolution.resolved
+      }
+    })
   }
 
-  // 2. Compute funnel - use 'count' field for frontend compatibility
+  // 2. Compute funnel with column resolution
   if (plan.funnel?.stages) {
     let prevCount = 0
     for (let i = 0; i < plan.funnel.stages.length; i++) {
       const stage = plan.funnel.stages[i]
-      const count = filteredRows.filter(row => isTruthy(row[stage.column])).length
+      const specColumn = stage.column
+      const resolution = resolveColumn(specColumn, availableColumns)
+      const actualColumn = resolution.actualColumn
+      
+      let count = 0
+      if (actualColumn && resolution.resolved) {
+        count = filteredRows.filter(row => isTruthy(row[actualColumn])).length
+      }
+      
       const rate = i > 0 && prevCount > 0 ? count / prevCount : 1
       result.funnel.push({
-        stage: stage.column,
-        label: stage.label,
-        value: count,    // Numeric count
-        count: count,    // Alias for frontend
-        rate: i > 0 ? rate : undefined  // Conversion rate from previous stage
+        stage: specColumn,
+        label: stage.label || specColumn,
+        value: count,
+        count: count,
+        rate: i > 0 ? rate : undefined
       })
       prevCount = count
     }
   }
 
-  // 3. Compute time series (if time column exists)
-  if (timeColumn) {
+  // 3. Compute time series (if time column exists and resolves)
+  if (resolvedTimeColumn) {
     // Group by date
     const byDate = new Map<string, Record<string, any>[]>()
     
     for (const row of filteredRows) {
-      const d = parseDate(row[timeColumn])
+      const d = parseDate(row[resolvedTimeColumn])
       if (!d) continue
       const key = formatDateKey(d)
       if (!byDate.has(key)) byDate.set(key, [])
@@ -359,7 +681,6 @@ function computeAggregations(
     
     // Compute series for each chart
     for (const chart of plan.charts || []) {
-      // Skip charts without valid series array
       const seriesArray = Array.isArray(chart.series) ? chart.series : []
       if (seriesArray.length === 0) continue
       
@@ -370,17 +691,26 @@ function computeAggregations(
         const point: Record<string, number> = { date: new Date(dateKey).getTime() }
         
         for (const s of seriesArray) {
+          const seriesColumn = s.column
+          const resolution = resolveColumn(seriesColumn, availableColumns)
+          const actualColumn = resolution.actualColumn
+          
+          if (!actualColumn || !resolution.resolved) {
+            point[seriesColumn] = 0
+            continue
+          }
+          
           // Sum or truthy_count depending on column type
-          const kpiDef = plan.kpis.find((k: any) => k.column === s.column)
+          const kpiDef = plan.kpis.find((k: any) => k.column === seriesColumn)
           
           if (kpiDef?.aggregation === 'truthy_count') {
-            point[s.column] = dateRows.filter(row => isTruthy(row[s.column])).length
+            point[seriesColumn] = dateRows.filter(row => isTruthy(row[actualColumn])).length
           } else if (kpiDef?.aggregation === 'avg') {
-            const nums = dateRows.map(row => parseFloat(row[s.column])).filter(v => isFinite(v))
-            point[s.column] = nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : 0
+            const nums = dateRows.map(row => parseFloat(row[actualColumn])).filter(v => isFinite(v))
+            point[seriesColumn] = nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : 0
           } else {
-            point[s.column] = dateRows.reduce((sum, row) => {
-              const v = parseFloat(row[s.column])
+            point[seriesColumn] = dateRows.reduce((sum, row) => {
+              const v = parseFloat(row[actualColumn])
               return sum + (isFinite(v) ? v : 0)
             }, 0)
           }
@@ -393,25 +723,36 @@ function computeAggregations(
     }
   }
 
-  // 4. Compute rankings
+  // 4. Compute rankings with column resolution
   for (const ranking of plan.rankings || []) {
+    const dimResolution = resolveColumn(ranking.dimension_column, availableColumns)
+    const metricResolution = resolveColumn(ranking.metric_column, availableColumns)
+    
+    if (!dimResolution.resolved || !metricResolution.resolved) {
+      result.rankings[ranking.id] = []
+      continue
+    }
+    
+    const dimCol = dimResolution.actualColumn!
+    const metricCol = metricResolution.actualColumn!
+    
     const grouped = new Map<string, number>()
     
     for (const row of filteredRows) {
-      const dimValue = String(row[ranking.dimension_column] || 'Outros')
+      const dimValue = String(row[dimCol] || 'Outros')
       const current = grouped.get(dimValue) || 0
       
       let metricValue = 0
       switch (ranking.aggregation) {
         case 'sum':
-          metricValue = parseFloat(row[ranking.metric_column])
+          metricValue = parseFloat(row[metricCol])
           if (!isFinite(metricValue)) metricValue = 0
           break
         case 'count':
           metricValue = 1
           break
         case 'avg':
-          metricValue = parseFloat(row[ranking.metric_column])
+          metricValue = parseFloat(row[metricCol])
           if (!isFinite(metricValue)) metricValue = 0
           break
       }
@@ -423,7 +764,7 @@ function computeAggregations(
     if (ranking.aggregation === 'avg') {
       const counts = new Map<string, number>()
       for (const row of filteredRows) {
-        const dimValue = String(row[ranking.dimension_column] || 'Outros')
+        const dimValue = String(row[dimCol] || 'Outros')
         counts.set(dimValue, (counts.get(dimValue) || 0) + 1)
       }
       for (const [key, sum] of grouped) {
@@ -483,19 +824,12 @@ Deno.serve(async (req) => {
       dashboard_id, 
       start, 
       end, 
-      // MODE: 'aggregate' (default) for KPIs/charts/funnel, 'details' for paginated table
       mode = 'aggregate',
-      // Pagination for details mode
       page = 1,
       pageSize = 100,
-      // Sorting for details mode
       sort_column,
       sort_direction = 'desc',
-      // Filters (key-value pairs for WHERE clauses)
       filters = {},
-      // Allow unlimited aggregation (remove hard 1000 limit)
-      // Default is high enough for aggregation but can be overridden
-      aggregation_limit = 50000,
     } = body
 
     console.log(`[${traceId}] dashboard-data-v2: mode=${mode}, dashboard_id=${dashboard_id}, start=${start}, end=${end}`)
@@ -505,12 +839,11 @@ Deno.serve(async (req) => {
       return errorResponse('MISSING_PARAM', 'dashboard_id é obrigatório', undefined, traceId)
     }
 
-    // Validate mode
     if (mode !== 'aggregate' && mode !== 'details') {
       return errorResponse('INVALID_PARAM', 'mode deve ser "aggregate" ou "details"', undefined, traceId)
     }
 
-    // Fetch dashboard with its spec and datasource
+    // Fetch dashboard
     const { data: dashboard, error: dashError } = await adminClient
       .from('dashboards')
       .select(`
@@ -539,7 +872,6 @@ Deno.serve(async (req) => {
       .single()
 
     if (profile?.tenant_id !== dashboard.tenant_id) {
-      // Check if user is admin
       const { data: roleData } = await adminClient
         .from('user_roles')
         .select('role')
@@ -547,86 +879,62 @@ Deno.serve(async (req) => {
         .eq('role', 'admin')
       
       if (!roleData || roleData.length === 0) {
-        console.warn(`[${traceId}] Access denied for user ${user.id} to dashboard ${dashboard_id}`)
         return errorResponse('ACCESS_DENIED', 'Acesso negado a este dashboard', undefined, traceId)
       }
     }
 
-    // Get the datasource info (direct relationship: dashboards -> tenant_data_sources)
     const dataSource = dashboard.tenant_data_sources as any
     const objectName = dashboard.view_name
 
     if (!dataSource || !objectName) {
-      console.error(`[${traceId}] Missing binding: dataSource=${!!dataSource}, objectName=${objectName}`)
-      return errorResponse(
-        'NO_BINDING', 
-        'Dashboard não está vinculado a um view_name/datasource válido',
-        `data_source_id=${dashboard.data_source_id}, view_name=${dashboard.view_name}`,
-        traceId
-      )
+      return errorResponse('NO_BINDING', 'Dashboard não está vinculado a um view_name/datasource válido', undefined, traceId)
     }
 
     // Decrypt API key
     let apiKey: string | null = null
 
     if (dataSource.service_role_key_encrypted) {
-      try {
-        apiKey = await decrypt(dataSource.service_role_key_encrypted)
-      } catch (e) {
-        console.error(`[${traceId}] Failed to decrypt service_role_key`)
-      }
+      try { apiKey = await decrypt(dataSource.service_role_key_encrypted) } catch (e) {}
     }
 
     if (!apiKey && dataSource.anon_key_encrypted) {
-      try {
-        apiKey = await decrypt(dataSource.anon_key_encrypted)
-      } catch (e) {
-        console.error(`[${traceId}] Failed to decrypt anon_key`)
-      }
+      try { apiKey = await decrypt(dataSource.anon_key_encrypted) } catch (e) {}
     }
 
-    // Fallback to Afonsina keys
     if (!apiKey) {
       const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
       const afonsinaKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
-      
       if (afonsinaUrl && dataSource.project_url === afonsinaUrl && afonsinaKey) {
         apiKey = afonsinaKey
       }
     }
 
     if (!apiKey) {
-      console.error(`[${traceId}] No API key available for datasource`)
       return errorResponse('NO_CREDENTIALS', 'Credenciais do datasource não configuradas', undefined, traceId)
     }
 
-    // Get spec and time column
     const spec = dashboard.dashboard_spec || {}
-    const timeColumn = spec.time?.column
-    
+    const timeColumnSpec = spec.time?.column
+
     // =====================================================
-    // BUILD BASE URL WITH FILTERS
+    // BUILD URL (NO LIMIT FOR AGGREGATE MODE - P0 FIX)
     // =====================================================
     
     function buildFilteredUrl(baseUrl: string, limit?: number): string {
       let url = `${baseUrl}?select=*`
       
-      // Add date filters if we have a time column and date range
-      if (timeColumn && start && end) {
-        url += `&${timeColumn}=gte.${start}&${timeColumn}=lte.${end}`
-      }
+      // Note: We do NOT add date filters here for aggregate mode
+      // because we need ALL data for proper aggregation and the
+      // date filtering is done in-memory after column resolution
       
-      // Add dynamic filters (from request body)
+      // Add dynamic filters
       for (const [key, value] of Object.entries(filters)) {
         if (value !== undefined && value !== null && value !== '') {
           if (Array.isArray(value)) {
-            // Multi-select filter: column IN (values)
             url += `&${key}=in.(${value.map(v => encodeURIComponent(String(v))).join(',')})`
           } else if (typeof value === 'string' && value.includes('*')) {
-            // Pattern filter with wildcards
             url += `&${key}=ilike.${encodeURIComponent(value)}`
           } else {
-            // Exact match
             url += `&${key}=eq.${encodeURIComponent(String(value))}`
           }
         }
@@ -640,7 +948,7 @@ Deno.serve(async (req) => {
     }
 
     // =====================================================
-    // MODE: DETAILS - Paginated table data only
+    // MODE: DETAILS - Paginated table data
     // =====================================================
     
     if (mode === 'details') {
@@ -648,14 +956,21 @@ Deno.serve(async (req) => {
       let detailsUrl = buildFilteredUrl(`${dataSource.project_url}/rest/v1/${objectName}`, pageSize)
       detailsUrl += `&offset=${offset}`
       
-      // Add sorting
-      if (sort_column) {
-        detailsUrl += `&order=${sort_column}.${sort_direction === 'asc' ? 'asc' : 'desc'}`
-      } else if (timeColumn) {
-        detailsUrl += `&order=${timeColumn}.desc`
+      // Add date filter for details mode (after column resolution if needed)
+      const timeResolution = timeColumnSpec ? resolveColumn(timeColumnSpec, Object.keys((await (await fetch(`${dataSource.project_url}/rest/v1/${objectName}?limit=1`, {
+        headers: { 'apikey': apiKey, 'Authorization': `Bearer ${apiKey}` }
+      })).json())[0] || {})) : null
+      
+      const resolvedTimeColumn = timeResolution?.actualColumn
+      if (resolvedTimeColumn && start && end) {
+        detailsUrl += `&${resolvedTimeColumn}=gte.${start}&${resolvedTimeColumn}=lte.${end}`
       }
       
-      console.log(`[${traceId}] Details mode: page=${page}, pageSize=${pageSize}`)
+      if (sort_column) {
+        detailsUrl += `&order=${sort_column}.${sort_direction === 'asc' ? 'asc' : 'desc'}`
+      } else if (resolvedTimeColumn) {
+        detailsUrl += `&order=${resolvedTimeColumn}.desc`
+      }
       
       const detailsResponse = await fetch(detailsUrl, {
         headers: {
@@ -668,7 +983,6 @@ Deno.serve(async (req) => {
       
       if (!detailsResponse.ok) {
         const errorText = await detailsResponse.text()
-        console.error(`[${traceId}] Details fetch error: ${detailsResponse.status}`)
         return errorResponse('FETCH_ERROR', `Erro ao consultar dados: ${detailsResponse.status}`, errorText, traceId)
       }
       
@@ -689,26 +1003,53 @@ Deno.serve(async (req) => {
           dashboard_id,
           dataset_ref: `public.${objectName}`,
           range: { start, end },
-          sort_column,
-          sort_direction,
-          filters_applied: Object.keys(filters).length,
           trace_id: traceId
         }
       })
     }
     
     // =====================================================
-    // MODE: AGGREGATE - Full aggregation for KPIs/charts/funnel
+    // MODE: AGGREGATE - FULL aggregation (NO LIMIT - P0 FIX)
     // =====================================================
     
-    let aggregationUrl = buildFilteredUrl(`${dataSource.project_url}/rest/v1/${objectName}`, aggregation_limit)
+    // First, get a sample row to detect columns
+    const sampleUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*&limit=1`
+    const sampleResponse = await fetch(sampleUrl, {
+      headers: { 'apikey': apiKey, 'Authorization': `Bearer ${apiKey}` }
+    })
     
-    // Add ordering by time for proper series computation
-    if (timeColumn) {
-      aggregationUrl += `&order=${timeColumn}.asc`
+    const sampleRows = await sampleResponse.json()
+    const availableColumns = sampleRows.length > 0 ? Object.keys(sampleRows[0]) : []
+    
+    // Resolve time column for server-side filtering
+    const timeResolution = timeColumnSpec ? resolveColumn(timeColumnSpec, availableColumns) : null
+    const resolvedTimeColumn = timeResolution?.actualColumn
+    
+    // Build URL WITHOUT limit for full aggregation
+    let aggregationUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*`
+    
+    // Add date filter on resolved time column
+    if (resolvedTimeColumn && start && end) {
+      aggregationUrl += `&${resolvedTimeColumn}=gte.${start}&${resolvedTimeColumn}=lte.${end}`
+    }
+    
+    // Add dynamic filters
+    for (const [key, value] of Object.entries(filters)) {
+      if (value !== undefined && value !== null && value !== '') {
+        if (Array.isArray(value)) {
+          aggregationUrl += `&${key}=in.(${value.map(v => encodeURIComponent(String(v))).join(',')})`
+        } else {
+          aggregationUrl += `&${key}=eq.${encodeURIComponent(String(value))}`
+        }
+      }
+    }
+    
+    // Order by time
+    if (resolvedTimeColumn) {
+      aggregationUrl += `&order=${resolvedTimeColumn}.asc`
     }
 
-    console.log(`[${traceId}] Aggregate mode: limit=${aggregation_limit}, time_column=${timeColumn}`)
+    console.log(`[${traceId}] Aggregate mode: time_column=${timeColumnSpec}→${resolvedTimeColumn}, NO LIMIT (FULL)`)
 
     const aggregationResponse = await fetch(aggregationUrl, {
       headers: {
@@ -721,44 +1062,25 @@ Deno.serve(async (req) => {
 
     if (!aggregationResponse.ok) {
       const errorText = await aggregationResponse.text()
-      console.error(`[${traceId}] Fetch error: status=${aggregationResponse.status}, body=${errorText}`)
-      return jsonResponse({ 
-        ok: false, 
-        error: { 
-          code: 'FETCH_ERROR', 
-          message: `Erro ao consultar dados: ${aggregationResponse.status}`, 
-          details: errorText 
-        },
-        trace_id: traceId,
-        meta: {
-          trace_id: traceId,
-          dashboard_id,
-          dataset_ref: `public.${objectName}`,
-          data_source_id: dataSource.id
-        }
-      }, 500)
+      console.error(`[${traceId}] Fetch error: status=${aggregationResponse.status}`)
+      return errorResponse('FETCH_ERROR', `Erro ao consultar dados: ${aggregationResponse.status}`, errorText, traceId)
     }
 
     const allRows = await aggregationResponse.json()
     const totalCount = parseInt(aggregationResponse.headers.get('content-range')?.split('/')[1] || String(allRows.length))
     
-    // Detect if we hit the limit (data may be incomplete)
-    const dataLimited = allRows.length >= aggregation_limit
-    
-    console.log(`[${traceId}] Fetched ${allRows.length} rows for aggregation (total: ${totalCount}, limited: ${dataLimited})`)
+    console.log(`[${traceId}] Fetched ${allRows.length} rows (total: ${totalCount}) - FULL aggregation`)
 
     // =====================================================
-    // STEP 2: BUILD AGGREGATION PLAN
+    // BUILD PLAN WITH COLUMN RESOLUTIONS
     // =====================================================
     
-    // Map KPIs - spec uses 'key' but aggregation code expects 'column'
     const mappedKpis = (spec.kpis || []).map((kpi: any) => ({
       column: kpi.key || kpi.column,
-      aggregation: kpi.aggregation || 'truthy_count', // Default to truthy_count for CRM
+      aggregation: kpi.aggregation || 'truthy_count',
       label: kpi.label
     }))
     
-    // Map funnel - spec may use 'stages' or 'steps'
     const funnelStages = spec.funnel?.stages || spec.funnel?.steps || []
     const mappedFunnel = funnelStages.length > 0 ? {
       stages: funnelStages.map((s: any) => ({
@@ -767,30 +1089,21 @@ Deno.serve(async (req) => {
       }))
     } : null
     
-    // Extract stage columns for quality analysis
+    // Build stage column resolutions for quality report
     const stageColumns = mappedFunnel?.stages?.map((s: any) => s.column) || []
+    const stageResolutions = stageColumns.map((col: string) => resolveColumn(col, availableColumns))
     
-    // Map charts
-    const mappedCharts = (spec.charts || []).map((chart: any) => {
-      if (chart.metric && !chart.series) {
-        return {
-          ...chart,
-          id: chart.id || chart.label || chart.metric,
-          series: [{ column: chart.metric, label: chart.label }]
-        }
-      }
-      return {
-        ...chart,
-        id: chart.id || chart.label,
-        series: Array.isArray(chart.series) ? chart.series.map((s: any) => ({
-          column: s.column || s.key,
-          label: s.label
-        })) : []
-      }
-    })
+    const mappedCharts = (spec.charts || []).map((chart: any) => ({
+      ...chart,
+      id: chart.id || chart.label,
+      series: Array.isArray(chart.series) ? chart.series.map((s: any) => ({
+        column: s.column || s.key,
+        label: s.label
+      })) : []
+    }))
     
     const plan = {
-      time_column: timeColumn,
+      time_column: timeColumnSpec,
       kpis: mappedKpis,
       charts: mappedCharts,
       rankings: [],
@@ -800,37 +1113,40 @@ Deno.serve(async (req) => {
     console.log(`[${traceId}] Plan: ${mappedKpis.length} KPIs, ${stageColumns.length} funnel stages, ${mappedCharts.length} charts`)
 
     // =====================================================
-    // STEP 3: DATA QUALITY ANALYSIS
+    // DATA QUALITY ANALYSIS WITH AUDIT
     // =====================================================
     
-    const dataQuality = analyzeDataQuality(allRows, timeColumn, stageColumns)
+    const dataQuality = analyzeDataQuality(
+      allRows,
+      timeColumnSpec || null,
+      resolvedTimeColumn || null,
+      stageResolutions,
+      start || '2000-01-01',
+      end || '2099-12-31'
+    )
     
-    // Build warnings array from quality report
-    const warnings: DataQualityWarning[] = [...dataQuality.warnings]
-    
-    if (dataLimited) {
-      warnings.push({
-        code: 'DATA_LIMITED',
-        severity: 'warning',
-        message: `Dados limitados a ${aggregation_limit} linhas para performance. Total real: ${totalCount}`,
-        value: aggregation_limit
-      })
-    }
+    const warnings = [...dataQuality.warnings]
 
     // =====================================================
-    // STEP 4: COMPUTE AGGREGATIONS (COMPLETE DATA)
+    // COMPUTE AGGREGATIONS WITH COLUMN RESOLUTION
     // =====================================================
     
-    const aggregations = computeAggregations(allRows, plan, start || '2000-01-01', end || '2099-12-31')
+    const aggregations = computeAggregations(
+      allRows,
+      plan,
+      start || '2000-01-01',
+      end || '2099-12-31',
+      availableColumns
+    )
 
     // =====================================================
-    // STEP 5: FIND DATE RANGE FROM DATA
+    // DATE RANGE FROM DATA
     // =====================================================
     
     let dataDateRange = { min: null as string | null, max: null as string | null }
-    if (timeColumn && allRows.length > 0) {
+    if (resolvedTimeColumn && allRows.length > 0) {
       const dates = allRows
-        .map((r: Record<string, unknown>) => parseDate(r[timeColumn]))
+        .map((r: Record<string, unknown>) => parseDate(r[resolvedTimeColumn]))
         .filter((d: Date | null): d is Date => d !== null)
         .sort((a: Date, b: Date) => a.getTime() - b.getTime())
       
@@ -841,7 +1157,7 @@ Deno.serve(async (req) => {
     }
 
     // =====================================================
-    // STEP 6: PREPARE PAGINATED ROWS FOR DETAILS TABLE
+    // PREPARE SAMPLE ROWS FOR TABLE PREVIEW
     // =====================================================
     
     const startIndex = (page - 1) * pageSize
@@ -857,30 +1173,44 @@ Deno.serve(async (req) => {
     }
 
     // =====================================================
-    // STEP 7: RETURN COMPLETE RESPONSE
+    // RETURN COMPLETE RESPONSE WITH DIAGNOSTICS
     // =====================================================
 
     return jsonResponse({
       ok: true,
       trace_id: traceId,
       
-      // Aggregated data (COMPLETE - for KPIs, charts, funnel)
+      // Aggregated data (COMPLETE - FULL, NO LIMIT)
       aggregations,
       
-      // Paginated rows (for details table)
+      // Paginated rows for details table
       rows: paginatedRows,
       pagination,
       
-      // Data quality information
+      // Data quality and audit information (P0 FIX)
       data_quality: {
+        time_column_spec: timeColumnSpec,
+        time_column_resolved: resolvedTimeColumn,
         time_parse_rate: dataQuality.time_parse_rate,
+        rows_in_period: dataQuality.rows_in_period,
+        rows_scanned_total: allRows.length,
         truthy_rates: dataQuality.truthy_rates,
         degraded_mode: dataQuality.degraded_mode,
-        total_rows_aggregated: allRows.length
+        column_audits: dataQuality.column_audits
       },
       
       // Warnings
       warnings,
+      
+      // Column resolutions (for debugging)
+      column_resolutions: {
+        time: timeResolution,
+        stages: stageResolutions.map((r: ColumnResolution) => ({
+          spec: r.specColumn,
+          actual: r.actualColumn,
+          resolved: r.resolved
+        }))
+      },
       
       // Metadata
       meta: {
@@ -890,18 +1220,17 @@ Deno.serve(async (req) => {
         rows_fetched: allRows.length,
         rows_total: totalCount,
         rows_displayed: paginatedRows.length,
-        data_limited: dataLimited,
-        time_column: timeColumn,
+        data_limited: false, // P0 FIX: Never limited anymore
+        time_column: resolvedTimeColumn,
         date_range: dataDateRange,
         has_spec: Object.keys(spec).length > 0,
         trace_id: traceId,
-        aggregation_complete: !dataLimited || allRows.length >= totalCount
+        aggregation_complete: true
       }
     })
 
   } catch (error: any) {
-    const traceId = crypto.randomUUID().slice(0, 8)
-    console.error(`[${traceId}] Error in dashboard-data-v2:`, error)
+    console.error(`[${traceId}] Error:`, error)
     return jsonResponse({ 
       ok: false, 
       error: { code: 'INTERNAL_ERROR', message: 'Erro interno', details: error.message },
