@@ -843,7 +843,7 @@ Deno.serve(async (req) => {
       return errorResponse('INVALID_PARAM', 'mode deve ser "aggregate" ou "details"', undefined, traceId)
     }
 
-    // Fetch dashboard
+    // Fetch dashboard with all data source fields
     const { data: dashboard, error: dashError } = await adminClient
       .from('dashboards')
       .select(`
@@ -853,7 +853,10 @@ Deno.serve(async (req) => {
         dashboard_spec,
         detected_columns,
         tenant_data_sources(
-          id, project_url, anon_key_encrypted, service_role_key_encrypted
+          id, project_url, type, anon_key_encrypted, service_role_key_encrypted,
+          google_access_token_encrypted, google_refresh_token_encrypted,
+          google_client_id_encrypted, google_client_secret_encrypted,
+          google_spreadsheet_id, google_sheet_name, google_token_expires_at
         )
       `)
       .eq('id', dashboard_id)
@@ -890,27 +893,79 @@ Deno.serve(async (req) => {
       return errorResponse('NO_BINDING', 'Dashboard não está vinculado a um view_name/datasource válido', undefined, traceId)
     }
 
-    // Decrypt API key
+    // Check if this is a Google Sheets data source
+    const isGoogleSheets = dataSource.type === 'google_sheets'
     let apiKey: string | null = null
+    let googleAccessToken: string | null = null
 
-    if (dataSource.service_role_key_encrypted) {
-      try { apiKey = await decrypt(dataSource.service_role_key_encrypted) } catch (e) {}
-    }
-
-    if (!apiKey && dataSource.anon_key_encrypted) {
-      try { apiKey = await decrypt(dataSource.anon_key_encrypted) } catch (e) {}
-    }
-
-    if (!apiKey) {
-      const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
-      const afonsinaKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
-      if (afonsinaUrl && dataSource.project_url === afonsinaUrl && afonsinaKey) {
-        apiKey = afonsinaKey
+    if (isGoogleSheets) {
+      // Try to get Google Sheets access token
+      if (dataSource.google_access_token_encrypted) {
+        try { googleAccessToken = await decrypt(dataSource.google_access_token_encrypted) } catch (e) {
+          console.error(`[${traceId}] Failed to decrypt Google access token:`, e)
+        }
       }
-    }
+      
+      // Refresh token if needed
+      if (!googleAccessToken && dataSource.google_refresh_token_encrypted) {
+        try {
+          const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
+          const clientId = dataSource.google_client_id_encrypted 
+            ? await decrypt(dataSource.google_client_id_encrypted) 
+            : Deno.env.get('GOOGLE_CLIENT_ID')
+          const clientSecret = dataSource.google_client_secret_encrypted 
+            ? await decrypt(dataSource.google_client_secret_encrypted) 
+            : Deno.env.get('GOOGLE_CLIENT_SECRET')
+          
+          if (refreshToken && clientId && clientSecret) {
+            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                client_id: clientId,
+                client_secret: clientSecret,
+                refresh_token: refreshToken,
+                grant_type: 'refresh_token'
+              })
+            })
+            
+            if (tokenResponse.ok) {
+              const tokenData = await tokenResponse.json()
+              googleAccessToken = tokenData.access_token
+              console.log(`[${traceId}] Refreshed Google access token`)
+            } else {
+              console.error(`[${traceId}] Failed to refresh token:`, await tokenResponse.text())
+            }
+          }
+        } catch (e) {
+          console.error(`[${traceId}] Token refresh error:`, e)
+        }
+      }
+      
+      if (!googleAccessToken) {
+        return errorResponse('NO_CREDENTIALS', 'Credenciais do Google Sheets não configuradas ou expiradas', undefined, traceId)
+      }
+    } else {
+      // Supabase data source - get API key
+      if (dataSource.service_role_key_encrypted) {
+        try { apiKey = await decrypt(dataSource.service_role_key_encrypted) } catch (e) {}
+      }
 
-    if (!apiKey) {
-      return errorResponse('NO_CREDENTIALS', 'Credenciais do datasource não configuradas', undefined, traceId)
+      if (!apiKey && dataSource.anon_key_encrypted) {
+        try { apiKey = await decrypt(dataSource.anon_key_encrypted) } catch (e) {}
+      }
+
+      if (!apiKey) {
+        const afonsinaUrl = Deno.env.get('AFONSINA_SUPABASE_URL')
+        const afonsinaKey = Deno.env.get('AFONSINA_SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('AFONSINA_SUPABASE_ANON_KEY')
+        if (afonsinaUrl && dataSource.project_url === afonsinaUrl && afonsinaKey) {
+          apiKey = afonsinaKey
+        }
+      }
+
+      if (!apiKey) {
+        return errorResponse('NO_CREDENTIALS', 'Credenciais do datasource não configuradas', undefined, traceId)
+      }
     }
 
     const spec = dashboard.dashboard_spec || {}
@@ -948,46 +1003,133 @@ Deno.serve(async (req) => {
     }
 
     // =====================================================
-    // MODE: DETAILS - Paginated table data
+    // HELPER: Fetch data from Google Sheets
     // =====================================================
-    
-    if (mode === 'details') {
-      const offset = (page - 1) * pageSize
-      let detailsUrl = buildFilteredUrl(`${dataSource.project_url}/rest/v1/${objectName}`, pageSize)
-      detailsUrl += `&offset=${offset}`
+    async function fetchGoogleSheetsData(sheetName: string): Promise<Record<string, any>[]> {
+      const spreadsheetId = dataSource.google_spreadsheet_id
+      const sheetsUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName)}?majorDimension=ROWS`
       
-      // Add date filter for details mode (after column resolution if needed)
-      const timeResolution = timeColumnSpec ? resolveColumn(timeColumnSpec, Object.keys((await (await fetch(`${dataSource.project_url}/rest/v1/${objectName}?limit=1`, {
-        headers: { 'apikey': apiKey, 'Authorization': `Bearer ${apiKey}` }
-      })).json())[0] || {})) : null
+      console.log(`[${traceId}] Fetching Google Sheet: ${sheetName}`)
       
-      const resolvedTimeColumn = timeResolution?.actualColumn
-      if (resolvedTimeColumn && start && end) {
-        detailsUrl += `&${resolvedTimeColumn}=gte.${start}&${resolvedTimeColumn}=lte.${end}`
+      const sheetsResponse = await fetch(sheetsUrl, {
+        headers: { 'Authorization': `Bearer ${googleAccessToken}` }
+      })
+      
+      if (!sheetsResponse.ok) {
+        const errorText = await sheetsResponse.text()
+        console.error(`[${traceId}] Google Sheets error ${sheetsResponse.status}:`, errorText)
+        throw new Error(`Erro ao acessar planilha: ${sheetsResponse.status}`)
       }
       
-      if (sort_column) {
-        detailsUrl += `&order=${sort_column}.${sort_direction === 'asc' ? 'asc' : 'desc'}`
-      } else if (resolvedTimeColumn) {
-        detailsUrl += `&order=${resolvedTimeColumn}.desc`
+      const sheetsData = await sheetsResponse.json()
+      const rawRows = sheetsData.values || []
+      
+      if (rawRows.length < 1) {
+        return []
       }
       
-      const detailsResponse = await fetch(detailsUrl, {
+      // Convert to objects using first row as headers
+      const headers = rawRows[0]
+      return rawRows.slice(1).map((row: string[]) => {
+        const obj: Record<string, any> = {}
+        headers.forEach((h: string, i: number) => {
+          obj[h] = row[i] ?? null
+        })
+        return obj
+      })
+    }
+
+    // =====================================================
+    // HELPER: Fetch data from Supabase REST API
+    // =====================================================
+    async function fetchSupabaseData(url: string): Promise<{ rows: Record<string, any>[]; totalCount: number }> {
+      const response = await fetch(url, {
         headers: {
-          'apikey': apiKey,
-          'Authorization': `Bearer ${apiKey}`,
+          'apikey': apiKey!,
+          'Authorization': `Bearer ${apiKey!}`,
           'Accept': 'application/json',
           'Prefer': 'count=exact'
         }
       })
       
-      if (!detailsResponse.ok) {
-        const errorText = await detailsResponse.text()
-        return errorResponse('FETCH_ERROR', `Erro ao consultar dados: ${detailsResponse.status}`, errorText, traceId)
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error(`[${traceId}] Supabase error ${response.status}:`, errorText)
+        throw new Error(`Erro ao consultar dados: ${response.status}`)
       }
       
-      const rows = await detailsResponse.json()
-      const totalCount = parseInt(detailsResponse.headers.get('content-range')?.split('/')[1] || '0')
+      const rows = await response.json()
+      const totalCount = parseInt(response.headers.get('content-range')?.split('/')[1] || String(rows.length))
+      return { rows, totalCount }
+    }
+
+    // =====================================================
+    // MODE: DETAILS - Paginated table data
+    // =====================================================
+    
+    if (mode === 'details') {
+      let rows: Record<string, any>[] = []
+      let totalCount = 0
+      
+      if (isGoogleSheets) {
+        // Google Sheets doesn't support server-side pagination, fetch all and paginate in memory
+        const allRows = await fetchGoogleSheetsData(objectName)
+        const availableColumns = allRows.length > 0 ? Object.keys(allRows[0]) : []
+        const timeResolution = timeColumnSpec ? resolveColumn(timeColumnSpec, availableColumns) : null
+        const resolvedTimeColumn = timeResolution?.actualColumn
+        
+        // Filter by date if needed
+        let filteredRows = allRows
+        if (resolvedTimeColumn && start && end) {
+          const startDate = new Date(start)
+          const endDate = new Date(end)
+          endDate.setHours(23, 59, 59, 999)
+          filteredRows = allRows.filter(row => {
+            const d = parseDate(row[resolvedTimeColumn])
+            return d && d >= startDate && d <= endDate
+          })
+        }
+        
+        // Apply sorting
+        if (sort_column) {
+          filteredRows.sort((a, b) => {
+            const aVal = a[sort_column] ?? ''
+            const bVal = b[sort_column] ?? ''
+            const cmp = String(aVal).localeCompare(String(bVal))
+            return sort_direction === 'asc' ? cmp : -cmp
+          })
+        }
+        
+        totalCount = filteredRows.length
+        const offset = (page - 1) * pageSize
+        rows = filteredRows.slice(offset, offset + pageSize)
+      } else {
+        const offset = (page - 1) * pageSize
+        
+        // First get available columns
+        const sampleUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*&limit=1`
+        const { rows: sampleRows } = await fetchSupabaseData(sampleUrl)
+        const availableColumns = sampleRows.length > 0 ? Object.keys(sampleRows[0]) : []
+        const timeResolution = timeColumnSpec ? resolveColumn(timeColumnSpec, availableColumns) : null
+        const resolvedTimeColumn = timeResolution?.actualColumn
+        
+        let detailsUrl = buildFilteredUrl(`${dataSource.project_url}/rest/v1/${objectName}`, pageSize)
+        detailsUrl += `&offset=${offset}`
+        
+        if (resolvedTimeColumn && start && end) {
+          detailsUrl += `&${resolvedTimeColumn}=gte.${start}&${resolvedTimeColumn}=lte.${end}`
+        }
+        
+        if (sort_column) {
+          detailsUrl += `&order=${sort_column}.${sort_direction === 'asc' ? 'asc' : 'desc'}`
+        } else if (resolvedTimeColumn) {
+          detailsUrl += `&order=${resolvedTimeColumn}.desc`
+        }
+        
+        const result = await fetchSupabaseData(detailsUrl)
+        rows = result.rows
+        totalCount = result.totalCount
+      }
       
       return successResponse({
         mode: 'details',
@@ -1001,7 +1143,7 @@ Deno.serve(async (req) => {
         },
         meta: {
           dashboard_id,
-          dataset_ref: `public.${objectName}`,
+          dataset_ref: isGoogleSheets ? `sheets.${objectName}` : `public.${objectName}`,
           range: { start, end },
           trace_id: traceId
         }
@@ -1012,64 +1154,61 @@ Deno.serve(async (req) => {
     // MODE: AGGREGATE - FULL aggregation (NO LIMIT - P0 FIX)
     // =====================================================
     
-    // First, get a sample row to detect columns
-    const sampleUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*&limit=1`
-    const sampleResponse = await fetch(sampleUrl, {
-      headers: { 'apikey': apiKey, 'Authorization': `Bearer ${apiKey}` }
-    })
+    let allRows: Record<string, any>[] = []
+    let totalCount = 0
+    let availableColumns: string[] = []
     
-    const sampleRows = await sampleResponse.json()
-    const availableColumns = sampleRows.length > 0 ? Object.keys(sampleRows[0]) : []
-    
-    // Resolve time column for server-side filtering
-    const timeResolution = timeColumnSpec ? resolveColumn(timeColumnSpec, availableColumns) : null
-    const resolvedTimeColumn = timeResolution?.actualColumn
-    
-    // Build URL WITHOUT limit for full aggregation
-    let aggregationUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*`
-    
-    // Add date filter on resolved time column
-    if (resolvedTimeColumn && start && end) {
-      aggregationUrl += `&${resolvedTimeColumn}=gte.${start}&${resolvedTimeColumn}=lte.${end}`
-    }
-    
-    // Add dynamic filters
-    for (const [key, value] of Object.entries(filters)) {
-      if (value !== undefined && value !== null && value !== '') {
-        if (Array.isArray(value)) {
-          aggregationUrl += `&${key}=in.(${value.map(v => encodeURIComponent(String(v))).join(',')})`
-        } else {
-          aggregationUrl += `&${key}=eq.${encodeURIComponent(String(value))}`
+    if (isGoogleSheets) {
+      allRows = await fetchGoogleSheetsData(objectName)
+      availableColumns = allRows.length > 0 ? Object.keys(allRows[0]) : []
+      totalCount = allRows.length
+      console.log(`[${traceId}] Fetched ${allRows.length} rows from Google Sheets - FULL aggregation`)
+    } else {
+      // First, get a sample row to detect columns
+      const sampleUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*&limit=1`
+      const { rows: sampleRows } = await fetchSupabaseData(sampleUrl)
+      availableColumns = sampleRows.length > 0 ? Object.keys(sampleRows[0]) : []
+      
+      // Resolve time column for server-side filtering
+      const timeResolution = timeColumnSpec ? resolveColumn(timeColumnSpec, availableColumns) : null
+      const resolvedTimeColumn = timeResolution?.actualColumn
+      
+      // Build URL WITHOUT limit for full aggregation
+      let aggregationUrl = `${dataSource.project_url}/rest/v1/${objectName}?select=*`
+      
+      // Add date filter on resolved time column
+      if (resolvedTimeColumn && start && end) {
+        aggregationUrl += `&${resolvedTimeColumn}=gte.${start}&${resolvedTimeColumn}=lte.${end}`
+      }
+      
+      // Add dynamic filters
+      for (const [key, value] of Object.entries(filters)) {
+        if (value !== undefined && value !== null && value !== '') {
+          if (Array.isArray(value)) {
+            aggregationUrl += `&${key}=in.(${value.map(v => encodeURIComponent(String(v))).join(',')})`
+          } else {
+            aggregationUrl += `&${key}=eq.${encodeURIComponent(String(value))}`
+          }
         }
       }
-    }
-    
-    // Order by time
-    if (resolvedTimeColumn) {
-      aggregationUrl += `&order=${resolvedTimeColumn}.asc`
-    }
-
-    console.log(`[${traceId}] Aggregate mode: time_column=${timeColumnSpec}→${resolvedTimeColumn}, NO LIMIT (FULL)`)
-
-    const aggregationResponse = await fetch(aggregationUrl, {
-      headers: {
-        'apikey': apiKey,
-        'Authorization': `Bearer ${apiKey}`,
-        'Accept': 'application/json',
-        'Prefer': 'count=exact'
+      
+      // Order by time
+      if (resolvedTimeColumn) {
+        aggregationUrl += `&order=${resolvedTimeColumn}.asc`
       }
-    })
 
-    if (!aggregationResponse.ok) {
-      const errorText = await aggregationResponse.text()
-      console.error(`[${traceId}] Fetch error: status=${aggregationResponse.status}`)
-      return errorResponse('FETCH_ERROR', `Erro ao consultar dados: ${aggregationResponse.status}`, errorText, traceId)
+      console.log(`[${traceId}] Aggregate mode: time_column=${timeColumnSpec}→${resolvedTimeColumn}, NO LIMIT (FULL)`)
+
+      const result = await fetchSupabaseData(aggregationUrl)
+      allRows = result.rows
+      totalCount = result.totalCount
+      
+      console.log(`[${traceId}] Fetched ${allRows.length} rows (total: ${totalCount}) - FULL aggregation`)
     }
-
-    const allRows = await aggregationResponse.json()
-    const totalCount = parseInt(aggregationResponse.headers.get('content-range')?.split('/')[1] || String(allRows.length))
     
-    console.log(`[${traceId}] Fetched ${allRows.length} rows (total: ${totalCount}) - FULL aggregation`)
+    // Resolve time column
+    const timeResolution = timeColumnSpec ? resolveColumn(timeColumnSpec, availableColumns) : null
+    const resolvedTimeColumn = timeResolution?.actualColumn
 
     // =====================================================
     // BUILD PLAN WITH COLUMN RESOLUTIONS
