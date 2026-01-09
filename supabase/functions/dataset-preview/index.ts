@@ -6,37 +6,32 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Encryption helpers
+// Encryption helpers - MUST match google-sheets-connect encryption format (Base64 key)
 async function getEncryptionKey(): Promise<CryptoKey> {
-  const masterKey = Deno.env.get('MASTER_ENCRYPTION_KEY')
-  if (!masterKey) {
-    throw new Error('MASTER_ENCRYPTION_KEY not configured')
-  }
-  
-  const encoder = new TextEncoder()
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(masterKey.padEnd(32, '0').slice(0, 32)),
-    { name: 'AES-GCM' },
-    false,
-    ['decrypt']
-  )
-  return keyMaterial
+  const keyB64 = Deno.env.get('MASTER_ENCRYPTION_KEY')
+  if (!keyB64) throw new Error('MASTER_ENCRYPTION_KEY not set')
+  const raw = Uint8Array.from(atob(keyB64), c => c.charCodeAt(0))
+  return await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
 }
 
 async function decrypt(ciphertext: string): Promise<string> {
   const key = await getEncryptionKey()
   const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
   const iv = combined.slice(0, 12)
-  const encrypted = combined.slice(12)
-  
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    encrypted
-  )
-  
+  const data = combined.slice(12)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
   return new TextDecoder().decode(decrypted)
+}
+
+async function encrypt(plaintext: string): Promise<string> {
+  const key = await getEncryptionKey()
+  const encoder = new TextEncoder()
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoder.encode(plaintext))
+  const combined = new Uint8Array(iv.length + new Uint8Array(encrypted).length)
+  combined.set(iv)
+  combined.set(new Uint8Array(encrypted), iv.length)
+  return btoa(String.fromCharCode(...combined))
 }
 
 // Validate identifiers to prevent injection
@@ -290,23 +285,32 @@ Deno.serve(async (req) => {
     if (dataSource.type === 'google_sheets') {
       let accessToken: string | null = null
       
-      // Try to get access token
-      if (dataSource.google_access_token_encrypted) {
+      // Check if token is expired based on stored expiry time
+      const tokenExpired = dataSource.google_token_expires_at 
+        ? new Date(dataSource.google_token_expires_at) <= new Date() 
+        : true // Assume expired if no expiry time
+      
+      // Try to get access token if not expired
+      if (!tokenExpired && dataSource.google_access_token_encrypted) {
         try {
           accessToken = await decrypt(dataSource.google_access_token_encrypted)
+          console.log(`[${traceId}] Using stored access token (expires: ${dataSource.google_token_expires_at})`)
         } catch (e) {
           console.error(`[${traceId}] Failed to decrypt access token:`, e)
         }
       }
       
-      // Refresh token if needed
+      // Refresh token if needed (expired or no valid token)
       if (!accessToken && dataSource.google_refresh_token_encrypted) {
+        console.log(`[${traceId}] Attempting to refresh Google OAuth token...`)
         try {
           const refreshToken = await decrypt(dataSource.google_refresh_token_encrypted)
           const clientId = dataSource.google_client_id_encrypted ? await decrypt(dataSource.google_client_id_encrypted) : Deno.env.get('GOOGLE_CLIENT_ID')
           const clientSecret = dataSource.google_client_secret_encrypted ? await decrypt(dataSource.google_client_secret_encrypted) : Deno.env.get('GOOGLE_CLIENT_SECRET')
           
           if (refreshToken && clientId && clientSecret) {
+            console.log(`[${traceId}] Refreshing token with client ID: ${clientId.substring(0, 20)}...`)
+            
             const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
               method: 'POST',
               headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -321,7 +325,33 @@ Deno.serve(async (req) => {
             if (tokenResponse.ok) {
               const tokenData = await tokenResponse.json()
               accessToken = tokenData.access_token
+              const expiresIn = tokenData.expires_in || 3600
+              const newExpiresAt = new Date(Date.now() + expiresIn * 1000).toISOString()
+              
+              console.log(`[${traceId}] Successfully refreshed access token, expires in ${expiresIn}s`)
+              
+              // Save the new access token to the database
+              try {
+                const encryptedToken = await encrypt(accessToken!)
+                
+                await adminClient
+                  .from('tenant_data_sources')
+                  .update({
+                    google_access_token_encrypted: encryptedToken,
+                    google_token_expires_at: newExpiresAt
+                  })
+                  .eq('id', dataSource.id)
+                
+                console.log(`[${traceId}] Saved refreshed token to database`)
+              } catch (saveErr) {
+                console.error(`[${traceId}] Failed to save refreshed token:`, saveErr)
+              }
+            } else {
+              const errorText = await tokenResponse.text()
+              console.error(`[${traceId}] Token refresh failed:`, errorText)
             }
+          } else {
+            console.error(`[${traceId}] Missing credentials for token refresh`)
           }
         } catch (e) {
           console.error(`[${traceId}] Failed to refresh token:`, e)
@@ -331,7 +361,7 @@ Deno.serve(async (req) => {
       if (!accessToken) {
         return new Response(JSON.stringify({ 
           ok: false,
-          error: { code: 'NO_CREDENTIALS', message: 'Credenciais do Google Sheets não configuradas ou expiradas' },
+          error: { code: 'NO_CREDENTIALS', message: 'Credenciais do Google Sheets não configuradas ou expiradas. Por favor, reconecte a fonte de dados.' },
           trace_id: traceId
         }), {
           status: 500,
