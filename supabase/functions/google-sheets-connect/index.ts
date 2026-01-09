@@ -139,6 +139,16 @@ Deno.serve(async (req) => {
         return errorResponse('VALIDATION_ERROR', 'redirect_uri é obrigatório')
       }
 
+      // Log for debugging
+      console.log('[OAuth] get_oauth_url called')
+      console.log('[OAuth] redirect_uri:', redirect_uri)
+      console.log('[OAuth] client_id (first 30 chars):', clientId.substring(0, 30))
+      
+      // Validate redirect_uri format
+      if (!redirect_uri.startsWith('https://') && !redirect_uri.startsWith('http://localhost')) {
+        console.warn('[OAuth] Warning: redirect_uri should use HTTPS for production')
+      }
+
       const scopes = [
         'https://www.googleapis.com/auth/spreadsheets.readonly',
         'https://www.googleapis.com/auth/drive.readonly',
@@ -155,8 +165,16 @@ Deno.serve(async (req) => {
         state: state || '',
       })
 
+      const oauth_url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`
+      
+      console.log('[OAuth] Generated OAuth URL (without state)')
+      
       return successResponse({
-        oauth_url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
+        oauth_url,
+        debug: {
+          redirect_uri_used: redirect_uri,
+          client_id_prefix: clientId.substring(0, 20) + '...'
+        }
       })
     }
 
@@ -174,8 +192,11 @@ Deno.serve(async (req) => {
         return errorResponse('CONFIG_ERROR', 'Credenciais Google não fornecidas. Preencha Client ID e Client Secret.')
       }
 
-      console.log('[OAuth Debug] exchange_code - redirect_uri:', redirect_uri)
-      console.log('[OAuth Debug] exchange_code - client_id (first 20 chars):', clientId.substring(0, 20))
+      // Enhanced debug logging
+      const traceId = crypto.randomUUID().slice(0, 8)
+      console.log(`[OAuth ${traceId}] exchange_code - Starting token exchange`)
+      console.log(`[OAuth ${traceId}] exchange_code - redirect_uri: ${redirect_uri}`)
+      console.log(`[OAuth ${traceId}] exchange_code - client_id (first 30 chars): ${clientId.substring(0, 30)}`)
 
       const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
@@ -191,25 +212,49 @@ Deno.serve(async (req) => {
 
       if (!tokenResponse.ok) {
         const error = await tokenResponse.text()
-        console.error('[OAuth Debug] Token exchange failed:', error)
-        console.error('[OAuth Debug] Used redirect_uri:', redirect_uri)
-        console.error('[OAuth Debug] Used client_id:', clientId.substring(0, 30) + '...')
+        console.error(`[OAuth ${traceId}] Token exchange failed:`, error)
+        console.error(`[OAuth ${traceId}] IMPORTANT - Used redirect_uri: ${redirect_uri}`)
+        console.error(`[OAuth ${traceId}] IMPORTANT - Used client_id: ${clientId.substring(0, 40)}...`)
         
         // Parse error to provide better feedback
         let errorDetails = error
+        let errorCode = 'OAUTH_ERROR'
         try {
           const errorJson = JSON.parse(error)
           if (errorJson.error === 'redirect_uri_mismatch') {
-            errorDetails = `redirect_uri_mismatch: O redirect_uri "${redirect_uri}" não está cadastrado no Google Cloud Console. ` +
-              `Vá em APIs & Services → Credentials → seu OAuth Client ID → Authorized redirect URIs e adicione exatamente: ${redirect_uri}`
+            errorCode = 'REDIRECT_URI_MISMATCH'
+            errorDetails = `O redirect_uri "${redirect_uri}" NÃO está cadastrado no Google Cloud Console.\n\n` +
+              `SOLUÇÃO:\n` +
+              `1. Acesse: https://console.cloud.google.com/apis/credentials\n` +
+              `2. Clique no seu OAuth Client ID\n` +
+              `3. Em "Authorized redirect URIs", adicione exatamente:\n` +
+              `   ${redirect_uri}\n\n` +
+              `ATENÇÃO: A URL deve ser idêntica, sem espaços ou barras extras.\n\n` +
+              `[trace_id: ${traceId}]`
+          } else if (errorJson.error === 'invalid_grant') {
+            errorCode = 'INVALID_GRANT'
+            errorDetails = 'Código OAuth expirado ou já utilizado. Por favor, tente conectar novamente.'
           }
         } catch {
           // Keep original error
         }
         
-        return errorResponse('OAUTH_ERROR', 'Falha na troca do código OAuth', errorDetails)
+        return jsonResponse({ 
+          ok: false, 
+          error: { 
+            code: errorCode, 
+            message: 'Falha na troca do código OAuth', 
+            details: errorDetails,
+            debug: {
+              trace_id: traceId,
+              redirect_uri_used: redirect_uri,
+              client_id_prefix: clientId.substring(0, 20) + '...'
+            }
+          } 
+        }, 400)
       }
 
+      console.log(`[OAuth ${traceId}] Token exchange successful`)
       const tokens = await tokenResponse.json()
       
       // Get user email
@@ -232,6 +277,9 @@ Deno.serve(async (req) => {
         refresh_token_encrypted: refreshTokenEncrypted,
         expires_in: tokens.expires_in,
         email,
+        debug: {
+          trace_id: traceId
+        }
       })
     }
 
