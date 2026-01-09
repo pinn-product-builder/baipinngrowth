@@ -80,3 +80,9 @@ verify_jwt = false
 
 [functions.dataset-preview]
 verify_jwt = false
+
+[functions.generate-dashboard-planner]
+verify_jwt = false
+
+[functions.generate-dashboard-coder]
+verify_jwt = false
