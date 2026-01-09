@@ -40,6 +40,9 @@ const AVAILABLE_MODELS = [
   { value: 'gpt-5-nano', label: 'GPT-5 Nano (Mais rápido)' },
   { value: 'gpt-5-mini', label: 'GPT-5 Mini' },
   { value: 'gpt-5', label: 'GPT-5 (Mais poderoso)' },
+  { value: 'o1', label: 'o1 (Reasoning)' },
+  { value: 'o1-mini', label: 'o1-mini (Reasoning Lite)' },
+  { value: 'custom', label: '🔧 Modelo Customizado...' },
 ];
 
 interface AISettings {
@@ -97,6 +100,7 @@ export default function TenantAISettings() {
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [defaultModel, setDefaultModel] = useState('gpt-4.1-mini');
+  const [customModelId, setCustomModelId] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [maxRpm, setMaxRpm] = useState(60);
   const [maxTokensDay, setMaxTokensDay] = useState<number | null>(null);
@@ -124,7 +128,16 @@ export default function TenantAISettings() {
       setStatus(data.status);
 
       if (data.settings) {
-        setDefaultModel(data.settings.default_model || 'gpt-4.1-mini');
+        const savedModel = data.settings.default_model || 'gpt-4.1-mini';
+        // Check if it's a preset model or custom
+        const isPreset = AVAILABLE_MODELS.some(m => m.value === savedModel && m.value !== 'custom');
+        if (isPreset) {
+          setDefaultModel(savedModel);
+          setCustomModelId('');
+        } else {
+          setDefaultModel('custom');
+          setCustomModelId(savedModel);
+        }
         setEnabled(data.settings.enabled ?? true);
         setMaxRpm(data.settings.max_requests_per_minute || 60);
         setMaxTokensDay(data.settings.max_tokens_per_day);
@@ -157,6 +170,14 @@ export default function TenantAISettings() {
   }, []);
 
   const handleSave = async () => {
+    // Determine final model ID
+    const finalModel = defaultModel === 'custom' ? customModelId.trim() : defaultModel;
+    
+    if (!finalModel) {
+      toast({ title: 'Informe o ID do modelo', variant: 'destructive' });
+      return;
+    }
+
     setSaving(true);
     try {
       const isNew = !settings;
@@ -166,7 +187,7 @@ export default function TenantAISettings() {
         body: {
           action: 'save',
           api_key: apiKey || undefined,
-          default_model: defaultModel,
+          default_model: finalModel,
           enabled,
           max_requests_per_minute: maxRpm,
           max_tokens_per_day: maxTokensDay,
@@ -186,9 +207,9 @@ export default function TenantAISettings() {
       setApiKey('');
       
       if (isNew) {
-        logCreate('tenant_ai_settings', 'openai', 'OpenAI Config', { default_model: defaultModel, enabled });
+        logCreate('tenant_ai_settings', 'openai', 'OpenAI Config', { default_model: finalModel, enabled });
       } else {
-        logUpdate('tenant_ai_settings', settings?.id || 'openai', 'OpenAI Config', beforeData || undefined, { default_model: defaultModel, enabled });
+        logUpdate('tenant_ai_settings', settings?.id || 'openai', 'OpenAI Config', beforeData || undefined, { default_model: finalModel, enabled });
       }
       
       await fetchSettings();
@@ -354,7 +375,28 @@ export default function TenantAISettings() {
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">
+                  Modelos disponíveis na{' '}
+                  <a href="https://platform.openai.com/docs/models" target="_blank" rel="noopener noreferrer" className="text-primary underline">
+                    documentação OpenAI
+                  </a>
+                </p>
               </div>
+
+              {defaultModel === 'custom' && (
+                <div className="space-y-2">
+                  <Label htmlFor="customModel">ID do Modelo Customizado</Label>
+                  <Input
+                    id="customModel"
+                    value={customModelId}
+                    onChange={(e) => setCustomModelId(e.target.value)}
+                    placeholder="ex: gpt-4-turbo-preview, ft:gpt-3.5-turbo:..."
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Digite o ID exato do modelo OpenAI (incluindo fine-tunes)
+                  </p>
+                </div>
+              )}
 
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
