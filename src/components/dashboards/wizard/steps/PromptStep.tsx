@@ -183,23 +183,23 @@ export default function PromptStep({
           <RadioGroup 
             value={generationMode} 
             onValueChange={(v) => onGenerationModeChange(v as GenerationMode)}
-            className="grid grid-cols-2 gap-3"
+            className="grid grid-cols-1 sm:grid-cols-2 gap-3"
           >
             <Label 
               htmlFor="mode-react"
-              className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-all ${
+              className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-all min-h-[100px] ${
                 generationMode === 'react_lovable' 
                   ? 'border-primary bg-primary/5 ring-2 ring-primary/20' 
                   : 'hover:border-primary/50'
               } ${dashboardPrompt.recommended_mode === 'react_lovable' ? 'ring-1 ring-green-500/30' : ''}`}
             >
-              <RadioGroupItem value="react_lovable" id="mode-react" />
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <Code className="h-4 w-4 text-primary" />
+              <RadioGroupItem value="react_lovable" id="mode-react" className="mt-1 shrink-0" />
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Code className="h-4 w-4 text-primary shrink-0" />
                   <span className="font-medium">React/Lovable</span>
                   {dashboardPrompt.recommended_mode === 'react_lovable' && (
-                    <Badge variant="outline" className="text-xs text-green-600 border-green-500">
+                    <Badge variant="outline" className="text-xs text-green-600 border-green-500 whitespace-nowrap">
                       Recomendado
                     </Badge>
                   )}
@@ -212,19 +212,19 @@ export default function PromptStep({
             
             <Label 
               htmlFor="mode-html"
-              className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-all ${
+              className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-all min-h-[100px] ${
                 generationMode === 'html_js' 
                   ? 'border-primary bg-primary/5 ring-2 ring-primary/20' 
                   : 'hover:border-primary/50'
               } ${dashboardPrompt.recommended_mode === 'html_js' ? 'ring-1 ring-green-500/30' : ''}`}
             >
-              <RadioGroupItem value="html_js" id="mode-html" />
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <FileCode className="h-4 w-4 text-primary" />
+              <RadioGroupItem value="html_js" id="mode-html" className="mt-1 shrink-0" />
+              <div className="space-y-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <FileCode className="h-4 w-4 text-primary shrink-0" />
                   <span className="font-medium">HTML/JS</span>
                   {dashboardPrompt.recommended_mode === 'html_js' && (
-                    <Badge variant="outline" className="text-xs text-green-600 border-green-500">
+                    <Badge variant="outline" className="text-xs text-green-600 border-green-500 whitespace-nowrap">
                       Recomendado
                     </Badge>
                   )}
