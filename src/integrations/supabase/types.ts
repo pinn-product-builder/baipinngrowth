@@ -1024,6 +1024,54 @@ export type Database = {
           },
         ]
       }
+      dataset_column_mappings: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          dataset_id: string
+          id: string
+          mapping_json: Json
+          tenant_id: string
+          updated_at: string
+          version: number
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          dataset_id: string
+          id?: string
+          mapping_json?: Json
+          tenant_id: string
+          updated_at?: string
+          version?: number
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          dataset_id?: string
+          id?: string
+          mapping_json?: Json
+          tenant_id?: string
+          updated_at?: string
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dataset_column_mappings_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dataset_column_mappings_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       dataset_columns: {
         Row: {
           aggregator_default: string | null

@@ -37,11 +37,13 @@ import {
   Settings2,
   MapPin,
   Code,
-  FileCode
+  FileCode,
+  Columns
 } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import ColumnMappingStep, { ColumnMapping, ColumnProfile, ColumnRole } from './ColumnMappingStep';
 
 interface Dataset {
   id: string;
@@ -109,7 +111,7 @@ interface DatasetMapping {
   custom_truthy_values?: string[];
 }
 
-type WizardStep = 'select' | 'generate' | 'mapping' | 'preview' | 'save';
+type WizardStep = 'select' | 'introspect' | 'mapping' | 'generate' | 'preview' | 'save';
 type GenerationMode = 'react' | 'html';
 
 // CRM Funnel detection patterns for Kommo datasets
@@ -538,6 +540,9 @@ export default function DashboardAutoBuilder({
     funnel_stages: [],
     truthy_rule: 'default'
   });
+  const [columnMappings, setColumnMappings] = useState<ColumnMapping[]>([]);
+  const [columnProfiles, setColumnProfiles] = useState<ColumnProfile[]>([]);
+  const [isIntrospecting, setIsIntrospecting] = useState(false);
   const [needsMapping, setNeedsMapping] = useState(false);
   const [testQueryResult, setTestQueryResult] = useState<TestQueryResult | null>(null);
   const [isTestingQuery, setIsTestingQuery] = useState(false);
@@ -574,6 +579,9 @@ export default function DashboardAutoBuilder({
       funnel_stages: [],
       truthy_rule: 'default'
     });
+    setColumnMappings([]);
+    setColumnProfiles([]);
+    setIsIntrospecting(false);
     setNeedsMapping(false);
     setTestQueryResult(null);
     setIsTestingQuery(false);
@@ -1361,13 +1369,10 @@ export default function DashboardAutoBuilder({
 
         {/* Progress Steps */}
         <div className="flex items-center gap-2 px-2 py-3 border-b overflow-x-auto">
-          {(['select', 'generate', 'mapping', 'preview', 'save'] as WizardStep[]).map((s, i) => {
-            const allSteps: WizardStep[] = ['select', 'generate', 'mapping', 'preview', 'save'];
+          {(['select', 'introspect', 'mapping', 'generate', 'preview', 'save'] as WizardStep[]).map((s, i) => {
+            const allSteps: WizardStep[] = ['select', 'introspect', 'mapping', 'generate', 'preview', 'save'];
             const currentIdx = allSteps.indexOf(step);
             const stepIdx = allSteps.indexOf(s);
-            
-            // Skip mapping step if not needed
-            if (s === 'mapping' && !needsMapping && step !== 'mapping') return null;
             
             return (
               <div key={s} className="flex items-center gap-2">
@@ -1386,8 +1391,9 @@ export default function DashboardAutoBuilder({
                 </div>
                 <span className={`text-sm whitespace-nowrap ${step === s ? 'font-medium' : 'text-muted-foreground'}`}>
                   {s === 'select' && 'Dataset'}
-                  {s === 'generate' && 'Gerar'}
+                  {s === 'introspect' && 'Analisar'}
                   {s === 'mapping' && 'Mapeamento'}
+                  {s === 'generate' && 'Gerar'}
                   {s === 'preview' && 'Preview'}
                   {s === 'save' && 'Salvar'}
                 </span>
