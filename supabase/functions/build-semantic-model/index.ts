@@ -978,6 +978,21 @@ Deno.serve(async (req) => {
       return errorResponse('INVALID_DATA', 'Resposta inválida do data source', undefined, traceId)
     }
 
+    // P0 HOTFIX: If we got rows, we MUST be able to infer columns
+    if (sampleRows.length === 0) {
+      console.warn(`[${traceId}] P0 WARNING: Empty sample rows from ${objectName}`)
+      return errorResponse('NO_DATA', 'Dataset vazio - nenhuma linha retornada. Verifique se a view/tabela possui dados.', undefined, traceId)
+    }
+
+    // P0 HOTFIX: Verify we can extract columns from the first row
+    const firstRow = sampleRows[0]
+    if (!firstRow || typeof firstRow !== 'object' || Object.keys(firstRow).length === 0) {
+      console.error(`[${traceId}] P0 CRITICAL: Sample row is invalid or has no columns`, { firstRow })
+      return errorResponse('INVALID_ROW', 'Linha de amostra inválida - impossível inferir colunas', undefined, traceId)
+    }
+
+    console.log(`[${traceId}] P0 CHECK: Sample has ${sampleRows.length} rows, first row has ${Object.keys(firstRow).length} columns: ${Object.keys(firstRow).slice(0, 5).join(', ')}...`)
+
     // Build semantic model v2
     const semanticModel = buildSemanticModel(
       dataset_id,
@@ -988,13 +1003,45 @@ Deno.serve(async (req) => {
 
     console.log(`[${traceId}] Built semantic model v2: ${semanticModel.columns.length} columns, confidence ${Math.round(semanticModel.overall_confidence * 100)}%`)
 
+    // P0 CRITICAL CHECK: semantic_model.columns MUST NOT be empty if we have rows
+    if (semanticModel.columns.length === 0 && sampleRows.length > 0) {
+      console.error(`[${traceId}] P0 CRITICAL: buildSemanticModel returned 0 columns but sample has ${sampleRows.length} rows!`)
+      
+      // P0 HOTFIX: Force column inference from sample rows as last resort
+      const inferredColumns = Object.keys(sampleRows[0]).map(colName => ({
+        name: colName,
+        db_type: 'text',
+        semantic_role: 'unknown' as SemanticRole,
+        display_label: generateLabel(colName),
+        aggregator: 'none' as const,
+        format: 'text' as const,
+        stats: calculateAdvancedStats(sampleRows.map(r => r[colName]), colName),
+        confidence: 0.3,
+        notes: ['Coluna inferida por fallback P0 - sem classificação semântica'],
+        usable_as_filter: false,
+        usable_in_kpi: false,
+        usable_in_chart: false,
+        ignore_in_ui: false,
+        filter_type: 'none' as const
+      }))
+      
+      semanticModel.columns = inferredColumns
+      semanticModel.warnings.push('P0 FALLBACK: Colunas inferidas diretamente das linhas de amostra')
+      console.log(`[${traceId}] P0 FALLBACK: Inferred ${inferredColumns.length} columns from sample rows`)
+    }
+
     // P0 HOTFIX: Include sample_rows in response for fallback column inference
-    // (useful when semantic_model.columns is empty but we have raw data)
     return successResponse({
       semantic_model: semanticModel,
       sample_count: sampleRows.length,
-      sample_rows: sampleRows.slice(0, 20), // Limit to 20 for response size
-      trace_id: traceId
+      sample_rows: sampleRows.slice(0, 50), // Increased to 50 for better inference
+      trace_id: traceId,
+      // P0 DEBUG: Include column names for verification
+      _debug: {
+        column_count: semanticModel.columns.length,
+        column_names: semanticModel.columns.map(c => c.name),
+        rows_analyzed: sampleRows.length
+      }
     })
 
   } catch (error: any) {
