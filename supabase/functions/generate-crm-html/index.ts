@@ -1242,8 +1242,56 @@ Deno.serve(async (req) => {
 
     console.log(`Fetched ${rawRows.length} rows`)
 
-    // Analyze columns
-    const columnNames = Object.keys(rawRows[0])
+    // P0 HOTFIX: Robust column extraction
+    let columnNames: string[] = []
+    const firstRow = rawRows[0]
+    
+    // Handle different row formats
+    if (typeof firstRow === 'string') {
+      // Row might be stringified JSON
+      try {
+        const parsed = JSON.parse(firstRow)
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+          columnNames = Object.keys(parsed)
+          console.log('P0: Parsed stringified JSON row')
+        }
+      } catch {
+        console.warn('P0: First row is string but not valid JSON')
+      }
+    } else if (Array.isArray(firstRow)) {
+      // CSV-like: check if first row looks like headers
+      const looksLikeHeaders = firstRow.every((v: any) => typeof v === 'string' && !/^\d+$/.test(String(v)))
+      if (looksLikeHeaders) {
+        columnNames = firstRow.map((v: any) => String(v))
+        console.log('P0: Using array first row as headers')
+      } else {
+        columnNames = firstRow.map((_: any, i: number) => `col_${i}`)
+        console.log('P0: Generated col_0, col_1... for array rows')
+      }
+    } else if (typeof firstRow === 'object' && firstRow !== null) {
+      // Normal object row - get union of keys from first 20 rows
+      const allKeys = new Set<string>()
+      for (let i = 0; i < Math.min(rawRows.length, 20); i++) {
+        const row = rawRows[i]
+        if (row && typeof row === 'object' && !Array.isArray(row)) {
+          Object.keys(row).forEach(k => allKeys.add(String(k)))
+        }
+      }
+      columnNames = Array.from(allKeys)
+    }
+    
+    // P0: Fallback if still no columns
+    if (columnNames.length === 0) {
+      console.error('P0 CRITICAL: No columns detected from rows!', {
+        firstRowType: typeof firstRow,
+        firstRowSample: JSON.stringify(firstRow).slice(0, 200)
+      })
+      return errorResponse('NO_COLUMNS', 'Nenhuma coluna detectada no dataset', 
+        `firstRowType: ${typeof firstRow}, rowsCount: ${rawRows.length}`)
+    }
+    
+    console.log(`P0: Detected ${columnNames.length} columns: ${columnNames.slice(0, 5).join(', ')}...`)
+    
     const mapping = analyzeColumns(columnNames)
 
     console.log(`Time: ${mapping.timeColumn}, Stages: ${mapping.funnelStages.length}, Dims: ${mapping.dimensions.length}`)
@@ -1283,6 +1331,11 @@ Deno.serve(async (req) => {
     return jsonResponse({
       ok: true,
       html,
+      rows_used: rawRows.length,
+      columns_used: columnNames,
+      time_column: mapping.timeColumn,
+      funnel_stages: mapping.funnelStages.map(s => s.label),
+      warnings: [],
       stats: {
         rows: rawRows.length,
         time_column: mapping.timeColumn,
@@ -1295,6 +1348,11 @@ Deno.serve(async (req) => {
         id_column: mapping.idColumn,
         funnel_stages: mapping.funnelStages.map(s => s.column),
         dimensions: mapping.dimensions
+      },
+      // P0 DEBUG: Include extraction info
+      _debug: {
+        column_count: columnNames.length,
+        extraction_method: 'object_keys'
       }
     })
 
