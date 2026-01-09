@@ -1151,10 +1151,12 @@ export default function DashboardAutoBuilder({
           kpis: htmlResult.kpis || htmlResult.summary?.kpis || [],
           charts: htmlResult.charts || [],
           funnel: htmlResult.funnel_stages?.length >= 2 ? {
-            stages: htmlResult.funnel_stages.map((col: string, i: number) => ({
-              column: col,
-              label: col.replace(/^(st_|status_)/, '').replace(/_/g, ' ')
-            }))
+            stages: htmlResult.funnel_stages.map((col: any, i: number) => {
+              // Handle both string and object formats
+              const colName = typeof col === 'string' ? col : col?.column || col?.key || String(col)
+              const colLabel = typeof col === 'object' && col?.label ? col.label : colName.replace(/^(st_|status_)/, '').replace(/_/g, ' ')
+              return { column: colName, label: colLabel }
+            })
           } : null,
           columns: htmlResult.columns_used || [],
           time: htmlResult.time_column ? { column: htmlResult.time_column } : null,
