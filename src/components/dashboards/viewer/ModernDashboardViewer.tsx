@@ -11,7 +11,10 @@ import { RefreshCw, BarChart3, LogIn, Bug, Clock, Table, Calendar, Wand2 } from 
 import { useAuth } from '@/contexts/AuthContext';
 
 import DashboardFilterBar, { DateRange } from './DashboardFilterBar';
-import DashboardTabs, { TabsContent, TabType } from './DashboardTabs';
+import AdaptiveDashboardTabs, { TabsContent } from './AdaptiveDashboardTabs';
+import { useDashboardCapabilities } from '@/hooks/useDashboardCapabilities';
+import { mapLegacyTabId } from '@/lib/dashboard';
+import type { DynamicTabId } from '@/lib/dashboard/types';
 import DetailDrawer from './DetailDrawer';
 import EnhancedDataTable from './EnhancedDataTable';
 import DiagnosticsDrawer from './DiagnosticsDrawer';
@@ -195,7 +198,7 @@ export default function ModernDashboardViewer({
   const [comparisonEnabled, setComparisonEnabled] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange>(getInitialDateRange);
   const [previousRange, setPreviousRange] = useState<DateRange | undefined>();
-  const [activeTab, setActiveTab] = useState<TabType>('decisoes');
+  const [activeTab, setActiveTab] = useState<DynamicTabId>('overview');
   const [selectedRow, setSelectedRow] = useState<any>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -745,15 +748,28 @@ export default function ModernDashboardViewer({
   // Persist tab selection per dashboard (MOVED UP - must be before any returns)
   useEffect(() => {
     const storedTab = localStorage.getItem(`dashboard-tab-${dashboardId}`);
-    if (storedTab && ['decisoes', 'executivo', 'funil', 'eficiencia', 'tendencias', 'detalhes'].includes(storedTab)) {
-      setActiveTab(storedTab as TabType);
+    if (storedTab) {
+      // Try to map legacy tab ID to new dynamic tab ID
+      const mappedTab = mapLegacyTabId(storedTab);
+      if (mappedTab) {
+        setActiveTab(mappedTab);
+      } else if (['overview', 'table', 'time', 'funnel', 'explore', 'efficiency'].includes(storedTab)) {
+        setActiveTab(storedTab as DynamicTabId);
+      }
     }
   }, [dashboardId]);
 
-  const handleTabChange = useCallback((tab: TabType) => {
+  const handleTabChange = useCallback((tab: DynamicTabId) => {
     setActiveTab(tab);
     localStorage.setItem(`dashboard-tab-${dashboardId}`, tab);
   }, [dashboardId]);
+
+  // Use adaptive dashboard capabilities
+  const { capabilities, tabs: generatedTabs } = useDashboardCapabilities({
+    data,
+    columns: normalizedData?.columns.map(c => ({ name: c.name, type: c.type })),
+    dashboardSpec: rawDashboardSpec,
+  });
 
   // Warnings summary for executive view
   const warningsSummary = useMemo(() => {
@@ -1053,23 +1069,21 @@ export default function ModernDashboardViewer({
           onRowClick={handleRowClick}
         />
       ) : (
-        <DashboardTabs 
+        <AdaptiveDashboardTabs 
+          tabs={generatedTabs}
           activeTab={activeTab} 
           onTabChange={handleTabChange}
-          enabledTabs={['decisoes', 'executivo', 'funil', 'eficiencia', 'tendencias', 'detalhes']}
+          showDiscardedInfo={isAdminOrManager}
         >
-          {/* Tab: Decisões (Decision Center) - FIRST TAB */}
-          <TabsContent value="decisoes" className="mt-6">
+          {/* Tab: Overview (replaces decisoes/executivo) */}
+          <TabsContent value="overview" className="mt-6 space-y-6">
             <DecisionCenter
               data={data}
               previousPeriodData={previousData}
               dateColumn="dia"
-              onViewDetails={() => handleTabChange('detalhes')}
+              onViewDetails={() => handleTabChange('table')}
             />
-          </TabsContent>
-
-          {/* Tab: Executivo */}
-          <TabsContent value="executivo" className="mt-6 space-y-6">
+            
             {/* Warnings summary (brief) */}
             {warningsSummary && (
               <div className="flex items-center gap-2 p-3 rounded-lg bg-warning/10 border border-warning/20">
@@ -1078,7 +1092,7 @@ export default function ModernDashboardViewer({
                   variant="link" 
                   size="sm" 
                   className="ml-auto h-auto p-0 text-warning"
-                  onClick={() => handleTabChange('detalhes')}
+                  onClick={() => handleTabChange('table')}
                 >
                   Ver detalhes
                 </Button>
@@ -1136,8 +1150,8 @@ export default function ModernDashboardViewer({
             />
           </TabsContent>
 
-          {/* Tab: Funil */}
-          <TabsContent value="funil" className="mt-6 space-y-6">
+          {/* Tab: Funnel */}
+          <TabsContent value="funnel" className="mt-6 space-y-6">
             <ExecutiveFunnel
               data={v2Aggregations?.kpis || aggregatedData}
               previousData={comparisonEnabled ? previousAggregated : undefined}
@@ -1183,8 +1197,8 @@ export default function ModernDashboardViewer({
             </Card>
           </TabsContent>
 
-          {/* Tab: Eficiência */}
-          <TabsContent value="eficiencia" className="mt-6 space-y-6">
+          {/* Tab: Efficiency */}
+          <TabsContent value="efficiency" className="mt-6 space-y-6">
             {/* Cost efficiency KPIs */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
@@ -1225,8 +1239,8 @@ export default function ModernDashboardViewer({
             />
           </TabsContent>
 
-          {/* Tab: Tendências */}
-          <TabsContent value="tendencias" className="mt-6 space-y-6">
+          {/* Tab: Time/Trends */}
+          <TabsContent value="time" className="mt-6 space-y-6">
             <ExecutiveTrendCharts
               data={data}
               previousData={previousData}
@@ -1235,8 +1249,8 @@ export default function ModernDashboardViewer({
             />
           </TabsContent>
 
-          {/* Tab: Detalhes */}
-          <TabsContent value="detalhes" className="mt-6 space-y-6">
+          {/* Tab: Table (details) */}
+          <TabsContent value="table" className="mt-6 space-y-6">
             {/* Full warnings if any */}
             {normalizedData && normalizedData.warnings.length > 0 && (
               <Card>
@@ -1264,7 +1278,7 @@ export default function ModernDashboardViewer({
               onRowClick={handleRowClick}
             />
           </TabsContent>
-        </DashboardTabs>
+        </AdaptiveDashboardTabs>
       )}
 
       {/* Detail Drawer */}
