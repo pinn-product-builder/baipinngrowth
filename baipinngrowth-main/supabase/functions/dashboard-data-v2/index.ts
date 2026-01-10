@@ -684,27 +684,28 @@ function computeAggregations(
     }
   }
 
-  // 3. Compute time series (if time column exists and resolves)
-  if (resolvedTimeColumn) {
-    // Group by date
-    const byDate = new Map<string, Record<string, any>[]>()
+  // 3. Compute charts (time series or dimension-based)
+  for (const chart of plan.charts || []) {
+    const seriesArray = Array.isArray(chart.series) ? chart.series : []
+    if (seriesArray.length === 0) continue
     
-    for (const row of filteredRows) {
-      const d = parseDate(row[resolvedTimeColumn])
-      if (!d) continue
-      const key = formatDateKey(d)
-      if (!byDate.has(key)) byDate.set(key, [])
-      byDate.get(key)!.push(row)
-    }
+    // Check if chart needs time column or dimension grouping
+    const needsTimeColumn = chart.type === 'line' || !chart.groupBy
+    const groupByColumn = chart.groupBy
     
-    // Sort dates
-    const sortedDates = [...byDate.keys()].sort()
-    
-    // Compute series for each chart
-    for (const chart of plan.charts || []) {
-      const seriesArray = Array.isArray(chart.series) ? chart.series : []
-      if (seriesArray.length === 0) continue
+    if (needsTimeColumn && resolvedTimeColumn) {
+      // Time series chart
+      const byDate = new Map<string, Record<string, any>[]>()
       
+      for (const row of filteredRows) {
+        const d = parseDate(row[resolvedTimeColumn])
+        if (!d) continue
+        const key = formatDateKey(d)
+        if (!byDate.has(key)) byDate.set(key, [])
+        byDate.get(key)!.push(row)
+      }
+      
+      const sortedDates = [...byDate.keys()].sort()
       const chartSeries: Record<string, number>[] = []
       
       for (const dateKey of sortedDates) {
@@ -721,7 +722,6 @@ function computeAggregations(
             continue
           }
           
-          // Sum or truthy_count depending on column type
           const kpiDef = plan.kpis.find((k: any) => k.column === seriesColumn)
           
           if (kpiDef?.aggregation === 'truthy_count') {
@@ -741,6 +741,60 @@ function computeAggregations(
       }
       
       result.series[chart.id] = chartSeries
+    } else if (groupByColumn && !needsTimeColumn) {
+      // Dimension-based chart (bar, pie, etc.)
+      const groupByResolution = resolveColumn(groupByColumn, availableColumns)
+      const actualGroupByColumn = groupByResolution.actualColumn
+      
+      if (!actualGroupByColumn || !groupByResolution.resolved) {
+        continue
+      }
+      
+      const byDimension = new Map<string, Record<string, any>[]>()
+      
+      for (const row of filteredRows) {
+        const dimValue = String(row[actualGroupByColumn] || 'Outros')
+        if (!byDimension.has(dimValue)) byDimension.set(dimValue, [])
+        byDimension.get(dimValue)!.push(row)
+      }
+      
+      const chartSeries: Record<string, number>[] = []
+      
+      for (const [dimValue, dimRows] of byDimension) {
+        const point: Record<string, any> = { dimension: dimValue }
+        
+        for (const s of seriesArray) {
+          const seriesColumn = s.column
+          const resolution = resolveColumn(seriesColumn, availableColumns)
+          const actualColumn = resolution.actualColumn
+          
+          if (!actualColumn || !resolution.resolved) {
+            point[seriesColumn] = 0
+            continue
+          }
+          
+          const kpiDef = plan.kpis.find((k: any) => k.column === seriesColumn)
+          
+          if (kpiDef?.aggregation === 'truthy_count') {
+            point[seriesColumn] = dimRows.filter(row => isTruthy(row[actualColumn])).length
+          } else if (kpiDef?.aggregation === 'avg') {
+            const nums = dimRows.map(row => parseFloat(row[actualColumn])).filter(v => isFinite(v))
+            point[seriesColumn] = nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : 0
+          } else {
+            point[seriesColumn] = dimRows.reduce((sum, row) => {
+              const v = parseFloat(row[actualColumn])
+              return sum + (isFinite(v) ? v : 0)
+            }, 0)
+          }
+        }
+        
+        chartSeries.push(point)
+      }
+      
+      result.series[chart.id] = chartSeries
+    } else if (!resolvedTimeColumn && needsTimeColumn) {
+      // Chart requires time column but it's not resolved - skip with warning
+      console.warn(`Chart ${chart.id} requires time column but it's not resolved`)
     }
   }
 
@@ -1254,6 +1308,11 @@ Deno.serve(async (req) => {
     // Resolve time column
     const timeResolution = timeColumnSpec ? resolveColumn(timeColumnSpec, availableColumns) : null
     const resolvedTimeColumn = timeResolution?.actualColumn
+    
+    console.log(`[${traceId}] Time column resolution: spec="${timeColumnSpec}" → resolved="${resolvedTimeColumn}", availableColumns=${availableColumns.slice(0, 5).join(', ')}...`)
+    if (timeColumnSpec && !resolvedTimeColumn) {
+      console.warn(`[${traceId}] WARNING: Time column "${timeColumnSpec}" not resolved. Available columns: ${availableColumns.join(', ')}`)
+    }
 
     // =====================================================
     // BUILD PLAN WITH COLUMN RESOLUTIONS
@@ -1277,14 +1336,29 @@ Deno.serve(async (req) => {
     const stageColumns = mappedFunnel?.stages?.map((s: any) => s.column) || []
     const stageResolutions = stageColumns.map((col: string) => resolveColumn(col, availableColumns))
     
-    const mappedCharts = (spec.charts || []).map((chart: any) => ({
-      ...chart,
-      id: chart.id || chart.label,
-      series: Array.isArray(chart.series) ? chart.series.map((s: any) => ({
-        column: s.column || s.key,
-        label: s.label
-      })) : []
-    }))
+    const mappedCharts = (spec.charts || []).map((chart: any) => {
+      // Handle different chart formats
+      let series = []
+      if (Array.isArray(chart.series)) {
+        series = chart.series.map((s: any) => ({
+          column: s.column || s.key || s.y,
+          label: s.label
+        }))
+      } else if (chart.metric) {
+        // Legacy format: chart with metric and groupBy
+        series = [{
+          column: chart.metric,
+          label: chart.label || chart.metric
+        }]
+      }
+      
+      return {
+        ...chart,
+        id: chart.id || chart.label || `chart_${Math.random().toString(36).substr(2, 9)}`,
+        series,
+        groupBy: chart.groupBy || chart.x || chart.x_column
+      }
+    })
     
     const plan = {
       time_column: timeColumnSpec,
@@ -1295,6 +1369,15 @@ Deno.serve(async (req) => {
     }
     
     console.log(`[${traceId}] Plan: ${mappedKpis.length} KPIs, ${stageColumns.length} funnel stages, ${mappedCharts.length} charts`)
+    if (mappedCharts.length > 0) {
+      console.log(`[${traceId}] Charts detail:`, mappedCharts.map((c: any) => ({
+        id: c.id,
+        type: c.type,
+        seriesCount: c.series?.length || 0,
+        groupBy: c.groupBy,
+        needsTime: c.type === 'line' || !c.groupBy
+      })))
+    }
 
     // =====================================================
     // DATA QUALITY ANALYSIS WITH AUDIT

@@ -47,6 +47,13 @@ import ColumnMappingStep, { ColumnMapping, ColumnProfile, ColumnRole } from './C
 import PromptStep from './steps/PromptStep';
 import type { DashboardPrompt as DashboardPromptType, DashboardPlan } from './types';
 
+// Import new modular utilities and hooks
+import { detectCrmFunnelDataset, findColumnMatch, generateFallbackSpec, convertPlanToSpec } from './utils';
+import { useWizardState, useDatasetAnalysis, useDashboardGeneration } from './hooks';
+import { DEFAULT_PROMPT, type WizardStep, type GenerationMode } from './constants';
+import ProgressIndicator from './components/ProgressIndicator';
+import AggregationPreview from './components/AggregationPreview';
+
 interface Dataset {
   id: string;
   name: string;
@@ -115,137 +122,14 @@ interface DatasetMapping {
   custom_truthy_values?: string[];
 }
 
-// Updated wizard steps: Dataset → Analyze → Mapping → Prompt (LLM1) → Generate (LLM2) → Preview → Save
-type WizardStep = 'select' | 'analyze' | 'mapping' | 'prompt' | 'generate' | 'preview' | 'save';
-type GenerationMode = 'react_lovable' | 'html_js';
+// Removed: Functions moved to utils modules
+// - detectCrmFunnelDataset -> utils/crmDetection.ts
+// - normalizeColumnName, findColumnMatch -> utils/columnMatching.ts
+// - generateFallbackSpec, convertPlanToSpec -> utils/specGenerator.ts
+// - DEFAULT_PROMPT, WizardStep, GenerationMode -> constants.ts
 
-// CRM Funnel detection patterns for Kommo datasets
-const CRM_FUNNEL_DETECTION = {
-  id_patterns: ['lead_id', 'leadid', 'kommo_lead_id', 'idd'],
-  time_patterns: ['created_at', 'created_at_ts', 'dia', 'data', 'inserted_at'],
-  stage_patterns: [
-    'st_entrada', 'st_lead_ativo', 'st_qualificado', 'st_exp_nao_confirmada',
-    'st_exp_agendada', 'st_faltou_exp', 'st_reagendou', 'st_exp_realizada',
-    'st_venda', 'st_perdida', 'entrada', 'qualificado', 'venda', 'perdida'
-  ],
-  dimension_patterns: ['unidade', 'vendedora', 'professor', 'modalidade', 'origem', 'retencao']
-};
-
-// Detect if dataset looks like CRM/Kommo funnel
-function detectCrmFunnelDataset(columns: string[], datasetName: string): { isCrm: boolean; confidence: number; reasons: string[] } {
-  const colNamesLower = columns.map(c => c.toLowerCase());
-  const reasons: string[] = [];
-  let score = 0;
-  
-  // Check dataset name
-  if (datasetName.toLowerCase().includes('kommo') || datasetName.toLowerCase().includes('crm')) {
-    score += 20;
-    reasons.push('Nome contém "kommo" ou "crm"');
-  }
-  
-  // Check for ID column
-  const hasIdColumn = CRM_FUNNEL_DETECTION.id_patterns.some(p => colNamesLower.includes(p));
-  if (hasIdColumn) {
-    score += 15;
-    reasons.push('Coluna lead_id encontrada');
-  }
-  
-  // Check for time column
-  const hasTimeColumn = CRM_FUNNEL_DETECTION.time_patterns.some(p => colNamesLower.includes(p));
-  if (hasTimeColumn) {
-    score += 10;
-    reasons.push('Coluna de tempo encontrada');
-  }
-  
-  // Check for stage columns (need at least 4)
-  const stageCount = CRM_FUNNEL_DETECTION.stage_patterns.filter(p => 
-    colNamesLower.some(c => c.includes(p.replace('st_', '')) || c === p)
-  ).length;
-  if (stageCount >= 4) {
-    score += 35;
-    reasons.push(`${stageCount} etapas de funil detectadas`);
-  } else if (stageCount >= 2) {
-    score += 15;
-    reasons.push(`${stageCount} etapas de funil detectadas (mínimo 4 ideal)`);
-  }
-  
-  // Check for dimension columns
-  const dimCount = CRM_FUNNEL_DETECTION.dimension_patterns.filter(p => 
-    colNamesLower.some(c => c.includes(p))
-  ).length;
-  if (dimCount >= 2) {
-    score += 20;
-    reasons.push(`${dimCount} dimensões encontradas (unidade, vendedora, etc)`);
-  }
-  
-  return {
-    isCrm: score >= 60,
-    confidence: Math.min(score, 100),
-    reasons
-  };
-}
-
-const DEFAULT_PROMPT = `Você é o BAI Dashboard Architect, especialista em BI para CRM + tráfego pago.
-Gere um DashboardSpec v1 (JSON) adaptativo usando APENAS as colunas do dataset_profile.
-
-REGRAS:
-- Nunca referencie colunas inexistentes (match case-insensitive)
-- Para campos de funil em text (entrada, qualificado, venda), use aggregation "truthy_count" (não count simples)
-- Se não houver coluna de tempo, gere KPIs agregados + Funil total + Detalhes (nunca spec vazio)
-- KPIs: máx 8, focados em decisão
-- Gráficos: máx 4, priorize tendências e funil
-- Diferencie dimensões (vendedora, origem) de métricas (valor_venda, custo)
-
-ABAS: Decisões, Executivo, Funil, Tendências, Detalhes
-
-Inclua diagnostics e queryPlan no JSON.`;
-
-// Convert DashboardPlan to DashboardSpec format
-// Column name normalization helper for fuzzy matching
-function normalizeColumnName(name: string): string {
-  return (name || '')
-    .toLowerCase()
-    .replace(/[_\-\s]+/g, '')
-    .replace(/^(st|flag|is|has|col)/, '');
-}
-
-function findColumnMatch(target: string, availableColumns: string[]): string | null {
-  const normalizedTarget = normalizeColumnName(target);
-  
-  // Exact match first
-  if (availableColumns.includes(target)) return target;
-  
-  // Case-insensitive match
-  const caseMatch = availableColumns.find(c => c.toLowerCase() === target.toLowerCase());
-  if (caseMatch) return caseMatch;
-  
-  // Normalized match (removes prefixes like st_, flag_, etc.)
-  const normalizedMatch = availableColumns.find(c => normalizeColumnName(c) === normalizedTarget);
-  if (normalizedMatch) return normalizedMatch;
-  
-  // Partial match (e.g., "entrada" matches "st_entrada")
-  const partialMatch = availableColumns.find(c => 
-    c.toLowerCase().includes(target.toLowerCase()) || 
-    target.toLowerCase().includes(c.toLowerCase())
-  );
-  if (partialMatch) return partialMatch;
-  
-  return null;
-}
-
-// CRM fallback funnel order
-const CRM_FUNNEL_ORDER = [
-  'st_entrada', 'entrada',
-  'st_lead_ativo', 'lead_ativo',
-  'st_qualificado', 'qualificado',
-  'st_exp_agendada', 'exp_agendada', 'agendada',
-  'st_exp_realizada', 'exp_realizada', 'realizada',
-  'st_venda', 'venda', 'vendas',
-  'aluno_ativo',
-  'st_perdida', 'perdida'
-];
-
-function generateFallbackSpec(semanticModel: any): any {
+// Legacy function kept for backward compatibility during migration
+function generateFallbackSpecLegacy(semanticModel: any): any {
   const columns = semanticModel?.columns || [];
   const columnNames = columns.map((c: any) => c.name);
   
@@ -505,7 +389,9 @@ function convertPlanToSpec(plan: any, semanticModel: any): any {
     (!spec.funnel || !spec.funnel.stages || spec.funnel.stages.length < 2);
 
   if (isEmpty && semanticModel) {
-    console.warn('[convertPlanToSpec] Empty spec detected, generating fallback...');
+    if (import.meta.env.DEV) {
+      console.warn('[convertPlanToSpec] Empty spec detected, generating fallback...');
+    }
     return generateFallbackSpec(semanticModel);
   }
 
