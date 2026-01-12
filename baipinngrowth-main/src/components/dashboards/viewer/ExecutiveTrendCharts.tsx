@@ -28,6 +28,8 @@ interface ExecutiveTrendChartsProps {
   goals?: Record<string, number>;
   comparisonEnabled?: boolean;
   className?: string;
+  /** Date column key from template config */
+  dateColumn?: string;
 }
 
 type Aggregation = 'day' | 'week' | 'month';
@@ -97,44 +99,76 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   );
 };
 
+// Detect date column from data
+const DATE_COLUMN_PATTERNS = ['dia', 'date', 'data', 'created_at', 'Data de Criação', 'Data de entrada', 'Data Criação'];
+const LEAD_COLUMN_PATTERNS = ['leads_total', 'entrada_total', 'ENTRADA', 'Leads', 'leads', 'entrada'];
+const SALE_COLUMN_PATTERNS = ['venda_total', 'VENDA', 'Vendas', 'vendas', 'venda'];
+
+function detectColumn(row: Record<string, any>, patterns: string[]): string | null {
+  if (!row) return null;
+  const keys = Object.keys(row);
+  for (const pattern of patterns) {
+    const found = keys.find(k => k.toLowerCase() === pattern.toLowerCase() || k === pattern);
+    if (found) return found;
+  }
+  return null;
+}
+
 export default function ExecutiveTrendCharts({
   data,
   previousData = [],
   goals = {},
   comparisonEnabled = false,
   className,
+  dateColumn: dateColumnProp,
 }: ExecutiveTrendChartsProps) {
   const [aggregation, setAggregation] = useState<Aggregation>('day');
   
   // Get custo_mensal from goals to calculate daily metrics
   const custoMensal = goals.custo_mensal ?? goals.investimento_mensal ?? 0;
   
-  // Aggregate data based on selected period and ensure dia is string
+  // Detect column names from actual data
+  const firstRow = data[0] || {};
+  const dateColumn = dateColumnProp || detectColumn(firstRow, DATE_COLUMN_PATTERNS) || 'dia';
+  const leadColumn = detectColumn(firstRow, LEAD_COLUMN_PATTERNS);
+  const saleColumn = detectColumn(firstRow, SALE_COLUMN_PATTERNS);
+  
+  // Aggregate data based on selected period and ensure date is string
   // Also calculate cpl, cac, custo_total per day based on proportional distribution
   const chartData = useMemo(() => {
     // Calculate totals for proportional distribution
-    const totalLeads = data.reduce((sum, row) => sum + (row.leads_total || row.entrada_total || 0), 0);
-    const totalVendas = data.reduce((sum, row) => sum + (row.venda_total || 0), 0);
+    const totalLeads = data.reduce((sum, row) => {
+      const leads = row.leads_total ?? row.entrada_total ?? (leadColumn ? row[leadColumn] : 0) ?? 0;
+      return sum + (typeof leads === 'number' ? leads : (leads === true || leads === 1 ? 1 : 0));
+    }, 0);
+    
+    const totalVendas = data.reduce((sum, row) => {
+      const vendas = row.venda_total ?? (saleColumn ? row[saleColumn] : 0) ?? 0;
+      return sum + (typeof vendas === 'number' ? vendas : (vendas === true || vendas === 1 ? 1 : 0));
+    }, 0);
     
     // Convert Date objects to ISO strings and calculate daily costs
     const normalized = data.map(row => {
-      const leads = row.leads_total || row.entrada_total || 0;
-      const vendas = row.venda_total || 0;
+      const dateValue = row[dateColumn] ?? row.dia;
+      const leads = row.leads_total ?? row.entrada_total ?? (leadColumn ? row[leadColumn] : 0) ?? 0;
+      const leadsNum = typeof leads === 'number' ? leads : (leads === true || leads === 1 ? 1 : 0);
+      const vendas = row.venda_total ?? (saleColumn ? row[saleColumn] : 0) ?? 0;
+      const vendasNum = typeof vendas === 'number' ? vendas : (vendas === true || vendas === 1 ? 1 : 0);
       
       // Distribute cost proportionally based on leads
       const dailyCost = totalLeads > 0 && custoMensal > 0 
-        ? (leads / totalLeads) * custoMensal 
+        ? (leadsNum / totalLeads) * custoMensal 
         : row.custo_total || 0;
       
       // Calculate CPL and CAC for this day
-      const cpl = leads > 0 ? (dailyCost > 0 ? dailyCost / leads : (row.cpl || 0)) : null;
-      const cac = vendas > 0 ? (dailyCost > 0 ? dailyCost / vendas : (row.cac || 0)) : null;
+      const cpl = leadsNum > 0 ? (dailyCost > 0 ? dailyCost / leadsNum : (row.cpl || 0)) : null;
+      const cac = vendasNum > 0 ? (dailyCost > 0 ? dailyCost / vendasNum : (row.cac || 0)) : null;
       
       return {
         ...row,
-        dia: row.dia instanceof Date ? row.dia.toISOString() : row.dia,
+        dia: dateValue instanceof Date ? dateValue.toISOString() : dateValue,
         custo_total: dailyCost || row.custo_total || 0,
-        leads_total: leads,
+        leads_total: leadsNum,
         cpl: cpl,
         cac: cac,
       };
@@ -144,7 +178,7 @@ export default function ExecutiveTrendCharts({
     
     // TODO: Implement week/month aggregation
     return normalized;
-  }, [data, aggregation, custoMensal]);
+  }, [data, aggregation, custoMensal, dateColumn, leadColumn, saleColumn]);
   
   // Calculate averages for reference lines
   const averages = useMemo(() => {
