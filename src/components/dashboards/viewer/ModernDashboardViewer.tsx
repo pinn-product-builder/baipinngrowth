@@ -1161,6 +1161,7 @@ export default function ModernDashboardViewer({
               previousData={previousData}
               goals={templateConfig.goals}
               comparisonEnabled={comparisonEnabled}
+              dateColumn={templateConfig.dateColumn}
             />
 
             {/* Diagnostics summary */}
@@ -1320,6 +1321,7 @@ export default function ModernDashboardViewer({
               previousData={previousData}
               goals={templateConfig.goals}
               comparisonEnabled={comparisonEnabled}
+              dateColumn={templateConfig.dateColumn}
             />
           </TabsContent>
 
@@ -1330,6 +1332,7 @@ export default function ModernDashboardViewer({
               previousData={previousData}
               goals={templateConfig.goals}
               comparisonEnabled={comparisonEnabled}
+              dateColumn={templateConfig.dateColumn}
             />
           </TabsContent>
 
