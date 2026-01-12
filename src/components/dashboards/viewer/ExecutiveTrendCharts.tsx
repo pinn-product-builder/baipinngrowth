@@ -133,51 +133,103 @@ export default function ExecutiveTrendCharts({
   const leadColumn = detectColumn(firstRow, LEAD_COLUMN_PATTERNS);
   const saleColumn = detectColumn(firstRow, SALE_COLUMN_PATTERNS);
   
-  // Aggregate data based on selected period and ensure date is string
-  // Also calculate cpl, cac, custo_total per day based on proportional distribution
+  // Helper to check if a value is truthy (handles "TRUE", true, 1, non-empty values)
+  const isTruthy = (val: any): boolean => {
+    if (val === null || val === undefined || val === '') return false;
+    if (typeof val === 'boolean') return val;
+    if (typeof val === 'number') return val !== 0;
+    if (typeof val === 'string') {
+      const lower = val.toLowerCase().trim();
+      return lower === 'true' || lower === '1' || lower === 'sim' || lower === 'yes';
+    }
+    return true;
+  };
+
+  // Aggregate raw lead-level data by date
   const chartData = useMemo(() => {
-    // Calculate totals for proportional distribution
-    const totalLeads = data.reduce((sum, row) => {
-      const leads = row.leads_total ?? row.entrada_total ?? (leadColumn ? row[leadColumn] : 0) ?? 0;
-      return sum + (typeof leads === 'number' ? leads : (leads === true || leads === 1 ? 1 : 0));
-    }, 0);
+    if (data.length === 0) return [];
     
-    const totalVendas = data.reduce((sum, row) => {
-      const vendas = row.venda_total ?? (saleColumn ? row[saleColumn] : 0) ?? 0;
-      return sum + (typeof vendas === 'number' ? vendas : (vendas === true || vendas === 1 ? 1 : 0));
-    }, 0);
+    // Check if data is already aggregated (has numeric totals) or needs aggregation
+    const firstRow = data[0];
+    const isAlreadyAggregated = typeof firstRow.leads_total === 'number' || 
+                                 typeof firstRow.entrada_total === 'number' ||
+                                 typeof firstRow.custo_total === 'number';
     
-    // Convert Date objects to ISO strings and calculate daily costs
-    const normalized = data.map(row => {
-      const dateValue = row[dateColumn] ?? row.dia;
-      const leads = row.leads_total ?? row.entrada_total ?? (leadColumn ? row[leadColumn] : 0) ?? 0;
-      const leadsNum = typeof leads === 'number' ? leads : (leads === true || leads === 1 ? 1 : 0);
-      const vendas = row.venda_total ?? (saleColumn ? row[saleColumn] : 0) ?? 0;
-      const vendasNum = typeof vendas === 'number' ? vendas : (vendas === true || vendas === 1 ? 1 : 0);
+    // If already aggregated, just normalize dates
+    if (isAlreadyAggregated) {
+      return data.map(row => {
+        const dateValue = row[dateColumn] ?? row.dia;
+        return {
+          ...row,
+          dia: dateValue instanceof Date ? dateValue.toISOString() : dateValue,
+        };
+      });
+    }
+    
+    // Aggregate lead-level data by date
+    const byDate = new Map<string, { 
+      leads: number; 
+      entradas: number; 
+      vendas: number; 
+      count: number 
+    }>();
+    
+    data.forEach(row => {
+      const rawDate = row[dateColumn] ?? row.dia;
+      if (!rawDate) return;
       
-      // Distribute cost proportionally based on leads
-      const dailyCost = totalLeads > 0 && custoMensal > 0 
-        ? (leadsNum / totalLeads) * custoMensal 
-        : row.custo_total || 0;
+      // Normalize date to YYYY-MM-DD format
+      let dateKey: string;
+      if (rawDate instanceof Date) {
+        dateKey = rawDate.toISOString().split('T')[0];
+      } else if (typeof rawDate === 'string') {
+        // Handle "2025-12-09 11:15:54" format
+        dateKey = rawDate.split(' ')[0].split('T')[0];
+      } else {
+        return;
+      }
       
-      // Calculate CPL and CAC for this day
-      const cpl = leadsNum > 0 ? (dailyCost > 0 ? dailyCost / leadsNum : (row.cpl || 0)) : null;
-      const cac = vendasNum > 0 ? (dailyCost > 0 ? dailyCost / vendasNum : (row.cac || 0)) : null;
+      const existing = byDate.get(dateKey) || { leads: 0, entradas: 0, vendas: 0, count: 0 };
       
-      return {
-        ...row,
-        dia: dateValue instanceof Date ? dateValue.toISOString() : dateValue,
-        custo_total: dailyCost || row.custo_total || 0,
-        leads_total: leadsNum,
-        cpl: cpl,
-        cac: cac,
-      };
+      // Count entries where the column is truthy
+      const isEntrada = leadColumn ? isTruthy(row[leadColumn]) : false;
+      const isVenda = saleColumn ? isTruthy(row[saleColumn]) : false;
+      
+      existing.count += 1;
+      existing.leads += 1; // Each row is a lead
+      existing.entradas += isEntrada ? 1 : 0;
+      existing.vendas += isVenda ? 1 : 0;
+      
+      byDate.set(dateKey, existing);
     });
     
-    if (aggregation === 'day') return normalized;
+    // Calculate totals for cost distribution
+    const totalLeads = Array.from(byDate.values()).reduce((sum, d) => sum + d.leads, 0);
+    const totalVendas = Array.from(byDate.values()).reduce((sum, d) => sum + d.vendas, 0);
     
-    // TODO: Implement week/month aggregation
-    return normalized;
+    // Convert to array and calculate metrics
+    const aggregated = Array.from(byDate.entries())
+      .map(([date, values]) => {
+        const dailyCost = totalLeads > 0 && custoMensal > 0
+          ? (values.leads / totalLeads) * custoMensal
+          : 0;
+        
+        const cpl = values.leads > 0 && dailyCost > 0 ? dailyCost / values.leads : null;
+        const cac = values.vendas > 0 && dailyCost > 0 ? dailyCost / values.vendas : null;
+        
+        return {
+          dia: date,
+          leads_total: values.leads,
+          entrada_total: values.entradas,
+          venda_total: values.vendas,
+          custo_total: dailyCost,
+          cpl,
+          cac,
+        };
+      })
+      .sort((a, b) => a.dia.localeCompare(b.dia));
+    
+    return aggregated;
   }, [data, aggregation, custoMensal, dateColumn, leadColumn, saleColumn]);
   
   // Calculate averages for reference lines
