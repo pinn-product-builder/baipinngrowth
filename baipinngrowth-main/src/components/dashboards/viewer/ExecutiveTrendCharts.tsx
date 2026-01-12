@@ -106,36 +106,62 @@ export default function ExecutiveTrendCharts({
 }: ExecutiveTrendChartsProps) {
   const [aggregation, setAggregation] = useState<Aggregation>('day');
   
+  // Get custo_mensal from goals to calculate daily metrics
+  const custoMensal = goals.custo_mensal ?? goals.investimento_mensal ?? 0;
+  
   // Aggregate data based on selected period and ensure dia is string
+  // Also calculate cpl, cac, custo_total per day based on proportional distribution
   const chartData = useMemo(() => {
-    // Convert Date objects to ISO strings for chart rendering
-    const normalized = data.map(row => ({
-      ...row,
-      dia: row.dia instanceof Date ? row.dia.toISOString() : row.dia,
-    }));
+    // Calculate totals for proportional distribution
+    const totalLeads = data.reduce((sum, row) => sum + (row.leads_total || row.entrada_total || 0), 0);
+    const totalVendas = data.reduce((sum, row) => sum + (row.venda_total || 0), 0);
+    
+    // Convert Date objects to ISO strings and calculate daily costs
+    const normalized = data.map(row => {
+      const leads = row.leads_total || row.entrada_total || 0;
+      const vendas = row.venda_total || 0;
+      
+      // Distribute cost proportionally based on leads
+      const dailyCost = totalLeads > 0 && custoMensal > 0 
+        ? (leads / totalLeads) * custoMensal 
+        : row.custo_total || 0;
+      
+      // Calculate CPL and CAC for this day
+      const cpl = leads > 0 ? (dailyCost > 0 ? dailyCost / leads : (row.cpl || 0)) : null;
+      const cac = vendas > 0 ? (dailyCost > 0 ? dailyCost / vendas : (row.cac || 0)) : null;
+      
+      return {
+        ...row,
+        dia: row.dia instanceof Date ? row.dia.toISOString() : row.dia,
+        custo_total: dailyCost || row.custo_total || 0,
+        leads_total: leads,
+        cpl: cpl,
+        cac: cac,
+      };
+    });
     
     if (aggregation === 'day') return normalized;
     
     // TODO: Implement week/month aggregation
     return normalized;
-  }, [data, aggregation]);
+  }, [data, aggregation, custoMensal]);
   
   // Calculate averages for reference lines
   const averages = useMemo(() => {
-    if (data.length === 0) return {};
+    if (chartData.length === 0) return {};
     
     const result: Record<string, number> = {};
     const keys = ['cpl', 'cac', 'leads_total', 'custo_total'];
     
     keys.forEach(key => {
-      const values = data.map(r => r[key]).filter(v => typeof v === 'number' && isFinite(v));
+      const values = chartData.map(r => r[key]).filter(v => typeof v === 'number' && isFinite(v));
       if (values.length > 0) {
         result[key] = values.reduce((a, b) => a + b, 0) / values.length;
       }
     });
     
     return result;
-  }, [data]);
+  }, [chartData]);
   
   if (data.length === 0) return null;
   
