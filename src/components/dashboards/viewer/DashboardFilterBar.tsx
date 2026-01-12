@@ -126,8 +126,8 @@ export default function DashboardFilterBar({
   };
 
   return (
-    <div className="sticky top-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b">
-      <div className="flex flex-wrap items-center gap-2 p-3">
+    <div className="bg-transparent">
+      <div className="flex flex-wrap items-center gap-2 py-2">
         {/* Date Range Pickers */}
         <div className="flex items-center gap-2">
           <Popover>
