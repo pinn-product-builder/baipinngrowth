@@ -92,7 +92,7 @@ export default function AdaptiveDashboardTabs({
         onValueChange={(v) => onTabChange(v as DynamicTabId)}
         className="w-full"
       >
-        <TabsList className="w-full justify-start h-auto p-1 bg-muted/50 rounded-lg gap-1 flex-wrap">
+        <TabsList className="w-full justify-start h-auto p-1 bg-muted/50 rounded-lg gap-1 overflow-x-auto flex-nowrap scrollbar-none">
           {visibleTabs.map(tab => (
             <TabsTrigger 
               key={tab.id} 

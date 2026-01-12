@@ -1004,7 +1004,7 @@ export default function ModernDashboardViewer({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col min-h-0">
       {/* Debug Panel - Admin only */}
       {isAdminOrManager && (
         <DebugPanel
@@ -1016,11 +1016,11 @@ export default function ModernDashboardViewer({
       )}
 
       {/* Sticky Header Bar */}
-      <div className="sticky top-0 z-20 bg-background/95 backdrop-blur-sm pb-4 -mx-1 px-1 pt-1">
+      <div className="sticky top-0 z-30 bg-background border-b pb-3 pt-2">
         {/* Top info bar */}
         <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold truncate">{dashboardName}</h1>
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <h1 className="text-lg font-semibold truncate max-w-[200px] sm:max-w-none">{dashboardName}</h1>
             {dashboardSpec && (
               <Badge variant="secondary" className="text-xs">
                 Spec v{dashboardSpec.version}
@@ -1081,28 +1081,30 @@ export default function ModernDashboardViewer({
         />
       </div>
 
-      {/* Compatibility mode fallback */}
-      {compatibilityMode ? (
-        <CompatibilityModeView 
-          data={data} 
-          columns={normalizedData?.columns.map(c => c.name) || Object.keys(data[0] || {})}
-          warnings={normalizedData?.warnings.map(w => w.message) || []}
-          onRowClick={handleRowClick}
-        />
-      ) : (
-        <AdaptiveDashboardTabs 
-          tabs={generatedTabs}
-          activeTab={activeTab} 
-          onTabChange={handleTabChange}
-          showDiscardedInfo={isAdminOrManager}
-        >
-          {/* Tab: Overview (replaces decisoes/executivo) */}
-          <TabsContent value="overview" className="mt-6 space-y-6">
-            <DecisionCenter
-              data={data}
-              previousPeriodData={previousData}
-              dateColumn="dia"
-              onViewDetails={() => handleTabChange('table')}
+      {/* Main Content - with proper spacing from sticky header */}
+      <div className="flex-1 pt-4 space-y-6">
+        {/* Compatibility mode fallback */}
+        {compatibilityMode ? (
+          <CompatibilityModeView 
+            data={data} 
+            columns={normalizedData?.columns.map(c => c.name) || Object.keys(data[0] || {})}
+            warnings={normalizedData?.warnings.map(w => w.message) || []}
+            onRowClick={handleRowClick}
+          />
+        ) : (
+          <AdaptiveDashboardTabs 
+            tabs={generatedTabs}
+            activeTab={activeTab} 
+            onTabChange={handleTabChange}
+            showDiscardedInfo={isAdminOrManager}
+          >
+            {/* Tab: Overview (replaces decisoes/executivo) */}
+            <TabsContent value="overview" className="mt-4 space-y-6">
+              <DecisionCenter
+                data={data}
+                previousPeriodData={previousData}
+                dateColumn="dia"
+                onViewDetails={() => handleTabChange('table')}
             />
             
             {/* Warnings summary (brief) */}
@@ -1173,7 +1175,7 @@ export default function ModernDashboardViewer({
           </TabsContent>
 
           {/* Tab: Funnel */}
-          <TabsContent value="funnel" className="mt-6 space-y-6">
+          <TabsContent value="funnel" className="mt-4 space-y-6">
             <ExecutiveFunnel
               data={v2Aggregations?.kpis || aggregatedData}
               previousData={comparisonEnabled ? previousAggregated : undefined}
@@ -1220,7 +1222,7 @@ export default function ModernDashboardViewer({
           </TabsContent>
 
           {/* Tab: Efficiency */}
-          <TabsContent value="efficiency" className="mt-6 space-y-6">
+          <TabsContent value="efficiency" className="mt-4 space-y-6">
             {/* Investment info */}
             {aggregatedData.custo_marketing > 0 && (
               <Card className="bg-muted/30">
@@ -1326,7 +1328,7 @@ export default function ModernDashboardViewer({
           </TabsContent>
 
           {/* Tab: Time/Trends */}
-          <TabsContent value="time" className="mt-6 space-y-6">
+          <TabsContent value="time" className="mt-4 space-y-6">
             <ExecutiveTrendCharts
               data={data}
               previousData={previousData}
@@ -1337,7 +1339,7 @@ export default function ModernDashboardViewer({
           </TabsContent>
 
           {/* Tab: Table (details) */}
-          <TabsContent value="table" className="mt-6 space-y-6">
+          <TabsContent value="table" className="mt-4 space-y-6">
             {/* Full warnings if any */}
             {normalizedData && normalizedData.warnings.length > 0 && (
               <Card>
@@ -1366,7 +1368,8 @@ export default function ModernDashboardViewer({
             />
           </TabsContent>
         </AdaptiveDashboardTabs>
-      )}
+        )}
+      </div>
 
       {/* Detail Drawer */}
       <DetailDrawer
