@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { format, subDays, differenceInDays, parseISO } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
+import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
@@ -322,13 +323,25 @@ export default function ModernDashboardViewer({
       // Return server-computed KPIs directly
       const serverKpis = { ...v2Aggregations.kpis };
       
-      // Add derived metrics that may not be in the server response
-      if (serverKpis.custo_total !== undefined && serverKpis.custo_total > 0) {
-        if (serverKpis.leads_total && serverKpis.leads_total > 0) {
-          serverKpis.cpl = serverKpis.custo_total / serverKpis.leads_total;
+      // Get custo_total from spec goals or use a default investment value
+      // This allows calculating CPL/CAC even when there's no cost column in data
+      const custoTotal = serverKpis.custo_total ?? 
+        (rawDashboardSpec?.goals?.custo_mensal) ?? 
+        (rawDashboardSpec?.goals?.investimento_mensal) ?? 0;
+      
+      // Calculate efficiency metrics using ENTRADA and VENDA from funnel
+      const entradas = serverKpis.ENTRADA || serverKpis.entrada || serverKpis.entrada_total || 0;
+      const vendas = serverKpis.VENDA || serverKpis.venda || serverKpis.venda_total || 0;
+      
+      // Add derived metrics
+      if (custoTotal > 0) {
+        serverKpis.custo_marketing = custoTotal;
+        if (entradas > 0) {
+          serverKpis.cpl = custoTotal / entradas;
+          serverKpis.custo_por_entrada = custoTotal / entradas;
         }
-        if (serverKpis.venda_total && serverKpis.venda_total > 0) {
-          serverKpis.cac = serverKpis.custo_total / serverKpis.venda_total;
+        if (vendas > 0) {
+          serverKpis.cac = custoTotal / vendas;
         }
       }
       
@@ -348,16 +361,24 @@ export default function ModernDashboardViewer({
       });
     });
     
+    // Get custo_total from spec goals or use existing sum
+    const custoTotal = sums.custo_total ?? 
+      (rawDashboardSpec?.goals?.custo_mensal) ?? 
+      (rawDashboardSpec?.goals?.investimento_mensal) ?? 0;
+    
+    // Calculate efficiency metrics using available funnel data
+    const entradas = sums.ENTRADA || sums.entrada || sums.entrada_total || 0;
+    const vendas = sums.VENDA || sums.venda || sums.venda_total || 0;
+    
     // Calculate derived metrics (with null safety)
-    if (sums.custo_total !== undefined && sums.custo_total > 0) {
-      if (sums.leads_total && sums.leads_total > 0) {
-        sums.cpl = sums.custo_total / sums.leads_total;
+    if (custoTotal > 0) {
+      sums.custo_marketing = custoTotal;
+      if (entradas > 0) {
+        sums.cpl = custoTotal / entradas;
+        sums.custo_por_entrada = custoTotal / entradas;
       }
-      if (sums.venda_total && sums.venda_total > 0) {
-        sums.cac = sums.custo_total / sums.venda_total;
-      }
-      if (sums.entrada_total && sums.entrada_total > 0) {
-        sums.custo_por_entrada = sums.custo_total / sums.entrada_total;
+      if (vendas > 0) {
+        sums.cac = custoTotal / vendas;
       }
     }
     
@@ -375,7 +396,7 @@ export default function ModernDashboardViewer({
     }
     
     return sums;
-  }, [data, v2Aggregations]);
+  }, [data, v2Aggregations, rawDashboardSpec]);
 
   const previousAggregated: AggregatedData = useMemo(() => {
     if (previousData.length === 0) return {};
@@ -1199,23 +1220,50 @@ export default function ModernDashboardViewer({
 
           {/* Tab: Efficiency */}
           <TabsContent value="efficiency" className="mt-6 space-y-6">
+            {/* Investment info */}
+            {aggregatedData.custo_marketing > 0 && (
+              <Card className="bg-muted/30">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Investimento no Período</p>
+                      <p className="text-lg font-semibold">
+                        R$ {aggregatedData.custo_marketing.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </p>
+                    </div>
+                    <Badge variant="outline" className="text-xs">
+                      Configurado via dashboard_spec
+                    </Badge>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            
             {/* Cost efficiency KPIs */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
-                { key: 'cpl', label: 'CPL' },
-                { key: 'cac', label: 'CAC' },
-                { key: 'custo_por_entrada', label: 'Custo por Entrada' },
-                { key: 'custo_por_reuniao_realizada', label: 'Custo por Reunião' },
-              ].map(({ key, label }) => {
+                { key: 'custo_marketing', label: 'Custo Marketing', icon: '💰' },
+                { key: 'cpl', label: 'CPL (Custo por Lead)', icon: '📊' },
+                { key: 'cac', label: 'CAC (Custo por Venda)', icon: '🎯' },
+                { key: 'custo_por_entrada', label: 'Custo por Entrada', icon: '📈' },
+              ].map(({ key, label, icon }) => {
                 const value = aggregatedData[key];
                 const goal = templateConfig.goals?.[key];
                 const isGood = goal && typeof value === 'number' ? value <= goal : undefined;
+                const hasValue = typeof value === 'number' && isFinite(value) && value > 0;
                 return (
-                  <Card key={key} className={isGood === false ? 'border-destructive/50' : isGood === true ? 'border-success/50' : ''}>
+                  <Card key={key} className={cn(
+                    "transition-all",
+                    isGood === false && 'border-destructive/50 bg-destructive/5',
+                    isGood === true && 'border-success/50 bg-success/5',
+                    !hasValue && 'opacity-60'
+                  )}>
                     <CardContent className="p-4">
-                      <p className="text-xs text-muted-foreground mb-1">{label}</p>
+                      <p className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+                        <span>{icon}</span> {label}
+                      </p>
                       <p className="text-2xl font-semibold">
-                        {typeof value === 'number' && isFinite(value) 
+                        {hasValue 
                           ? `R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` 
                           : '—'}
                       </p>
@@ -1224,11 +1272,47 @@ export default function ModernDashboardViewer({
                           Meta: R$ {goal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </p>
                       )}
+                      {!hasValue && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Configure investimento_mensal no spec
+                        </p>
+                      )}
                     </CardContent>
                   </Card>
                 );
               })}
             </div>
+            
+            {/* Efficiency ratios */}
+            {(aggregatedData.ENTRADA > 0 || aggregatedData.VENDA > 0) && (
+              <Card>
+                <CardContent className="p-4">
+                  <h4 className="text-sm font-medium mb-3">Dados do Funil (Base para Cálculos)</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">Entradas:</span>
+                      <span className="ml-2 font-medium">{(aggregatedData.ENTRADA || 0).toLocaleString('pt-BR')}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Vendas:</span>
+                      <span className="ml-2 font-medium">{(aggregatedData.VENDA || 0).toLocaleString('pt-BR')}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Taxa Conversão:</span>
+                      <span className="ml-2 font-medium">
+                        {aggregatedData.ENTRADA > 0 
+                          ? `${((aggregatedData.VENDA / aggregatedData.ENTRADA) * 100).toFixed(1)}%`
+                          : '—'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Qualificados:</span>
+                      <span className="ml-2 font-medium">{(aggregatedData.QUALIFICADO || 0).toLocaleString('pt-BR')}</span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Cost efficiency trend chart */}
             <ExecutiveTrendCharts
