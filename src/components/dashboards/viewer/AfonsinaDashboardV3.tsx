@@ -204,7 +204,7 @@ export default function AfonsinaDashboardV3({
                 {format(dateRange.start, 'dd/MM', { locale: ptBR })} - {format(dateRange.end, 'dd/MM', { locale: ptBR })}
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
+            <PopoverContent className="w-auto p-0 z-50 bg-popover" align="end">
               <Calendar
                 mode="range"
                 selected={{ from: dateRange.start, to: dateRange.end }}
@@ -214,6 +214,7 @@ export default function AfonsinaDashboardV3({
                 }}
                 locale={ptBR}
                 numberOfMonths={2}
+                className="pointer-events-auto"
               />
             </PopoverContent>
           </Popover>
