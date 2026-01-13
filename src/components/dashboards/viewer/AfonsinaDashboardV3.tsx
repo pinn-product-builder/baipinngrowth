@@ -247,7 +247,7 @@ export default function AfonsinaDashboardV3({
             Visão Geral
           </TabsTrigger>
           <TabsTrigger value="funnel" className="gap-2">
-            <Calendar className="h-4 w-4" />
+            <CalendarIcon className="h-4 w-4" />
             Funil
           </TabsTrigger>
           <TabsTrigger value="efficiency" className="gap-2">
