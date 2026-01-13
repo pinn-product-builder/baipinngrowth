@@ -2131,6 +2131,294 @@ export type Database = {
           },
         ]
       }
+      vw_agente_kpis_30d: {
+        Row: {
+          dias_ativos: number | null
+          eventos_total: number | null
+          leads_tocados: number | null
+          org_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_agente_kpis_7d: {
+        Row: {
+          dias_ativos: number | null
+          eventos_total: number | null
+          leads_tocados: number | null
+          org_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_dashboard_daily_60d_v3: {
+        Row: {
+          day: string | null
+          ligacoes: number | null
+          ligacoes_atendidas: number | null
+          ligacoes_perdidas: number | null
+          minutos: number | null
+          org_id: string | null
+        }
+        Insert: {
+          day?: string | null
+          ligacoes?: number | null
+          ligacoes_atendidas?: number | null
+          ligacoes_perdidas?: number | null
+          minutos?: never
+          org_id?: string | null
+        }
+        Update: {
+          day?: string | null
+          ligacoes?: number | null
+          ligacoes_atendidas?: number | null
+          ligacoes_perdidas?: number | null
+          minutos?: never
+          org_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vapi_calls_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_dashboard_kpis_30d_v3: {
+        Row: {
+          dias_ativos: number | null
+          leads_total: number | null
+          ligacoes_media_dia: number | null
+          ligacoes_total: number | null
+          mensagens_recebidas: number | null
+          minutos_totais: number | null
+          org_id: string | null
+          reunioes_marcadas: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vapi_calls_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_dashboard_kpis_7d_v3: {
+        Row: {
+          dias_ativos: number | null
+          leads_total: number | null
+          ligacoes_media_dia: number | null
+          ligacoes_total: number | null
+          mensagens_recebidas: number | null
+          minutos_totais: number | null
+          org_id: string | null
+          reunioes_marcadas: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vapi_calls_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_funnel_current_exec_v4: {
+        Row: {
+          leads: number | null
+          org_id: string | null
+          stage_key: string | null
+          stage_name: string | null
+          stage_order: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_funnel_daily_30d_v3: {
+        Row: {
+          day: string | null
+          leads: number | null
+          org_id: string | null
+          stage_key: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_kommo_msg_in_by_hour_7d_v3: {
+        Row: {
+          hour: number | null
+          msg_in_total: number | null
+          org_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_kommo_msg_in_daily_60d_v3: {
+        Row: {
+          day: string | null
+          msg_in_total: number | null
+          org_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_kommo_msg_in_heatmap_30d_v3: {
+        Row: {
+          dow: number | null
+          hour: number | null
+          msg_in_total: number | null
+          org_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_meetings_daily_60d_v3: {
+        Row: {
+          day: string | null
+          meetings_booked: number | null
+          meetings_completed: number | null
+          org_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_meetings_kpis_30d_v3: {
+        Row: {
+          meetings_booked: number | null
+          meetings_cancelled: number | null
+          meetings_completed: number | null
+          org_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_meetings_kpis_7d_v3: {
+        Row: {
+          meetings_booked: number | null
+          meetings_cancelled: number | null
+          meetings_completed: number | null
+          org_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_meetings_upcoming_v3: {
+        Row: {
+          lead_email: string | null
+          lead_name: string | null
+          lead_phone: string | null
+          meeting_url: string | null
+          org_id: string | null
+          start_at: string | null
+          status: string | null
+          summary: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_vapi_calls_by_assistant_daily_v3: {
+        Row: {
+          assistant_id: string | null
+          assistant_name: string | null
+          avg_duration_seconds: number | null
+          calls_answered: number | null
+          calls_missed: number | null
+          calls_total: number | null
+          day: string | null
+          org_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vapi_calls_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       vw_vapi_calls_daily_v3: {
         Row: {
           avg_duration_seconds: number | null
@@ -2158,6 +2446,38 @@ export type Database = {
           day?: string | null
           org_id?: string | null
           total_duration_seconds?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vapi_calls_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_vapi_calls_hourly_v3: {
+        Row: {
+          calls_total: number | null
+          hour: number | null
+          org_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vapi_calls_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_vapi_calls_meetings_daily_v3: {
+        Row: {
+          day: string | null
+          meetings_from_calls: number | null
+          org_id: string | null
         }
         Relationships: [
           {
