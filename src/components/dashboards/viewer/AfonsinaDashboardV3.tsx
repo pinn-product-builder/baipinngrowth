@@ -363,7 +363,7 @@ export default function AfonsinaDashboardV3({
           <Card>
             <CardContent className="p-6">
               <h3 className="text-base font-medium mb-4">Taxas de Conversão</h3>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-6">
+              <div className="grid grid-cols-2 gap-6">
                 <div>
                   <p className="text-sm text-muted-foreground">Taxa de Entrada</p>
                   <p className="text-xl font-semibold">
@@ -374,24 +374,6 @@ export default function AfonsinaDashboardV3({
                   <p className="text-sm text-muted-foreground">Taxa Reunião Agendada</p>
                   <p className="text-xl font-semibold">
                     {kpis.taxa_reuniao_agendada !== null ? `${kpis.taxa_reuniao_agendada.toFixed(1)}%` : '—'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Taxa Comparecimento</p>
-                  <p className="text-xl font-semibold">
-                    {kpis.taxa_comparecimento !== null ? `${kpis.taxa_comparecimento.toFixed(1)}%` : '—'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Taxa Venda (pós-reunião)</p>
-                  <p className="text-xl font-semibold">
-                    {kpis.taxa_venda_pos_reuniao !== null ? `${kpis.taxa_venda_pos_reuniao.toFixed(1)}%` : '—'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Taxa Venda Total</p>
-                  <p className="text-xl font-semibold text-primary">
-                    {kpis.taxa_venda_total !== null ? `${kpis.taxa_venda_total.toFixed(1)}%` : '—'}
                   </p>
                 </div>
               </div>
