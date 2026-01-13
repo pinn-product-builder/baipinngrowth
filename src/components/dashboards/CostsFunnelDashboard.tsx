@@ -1,5 +1,5 @@
 import { ModernDashboardViewer, DashboardErrorBoundary } from './viewer';
-import { PinnAfonsinaDashboard } from './pinn';
+import { PinnFullDashboard } from './pinn';
 
 interface CostsFunnelDashboardProps {
   dashboardId: string;
@@ -19,11 +19,11 @@ export default function CostsFunnelDashboard({
   dashboardName = 'Dashboard',
   detectedColumns = [],
 }: CostsFunnelDashboardProps) {
-  // Use the new Pinn dashboard for Afonsina
+  // Use the new full Pinn dashboard for Afonsina
   if (dashboardId === AFONSINA_DASHBOARD_ID) {
     return (
       <DashboardErrorBoundary>
-        <PinnAfonsinaDashboard
+        <PinnFullDashboard
           dashboardId={dashboardId}
           dashboardName={dashboardName || 'Dashboard Afonsina'}
         />
