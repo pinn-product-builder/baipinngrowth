@@ -2023,6 +2023,53 @@ export type Database = {
         }
         Relationships: []
       }
+      vapi_calls: {
+        Row: {
+          avg_duration_seconds: number | null
+          call_date: string
+          calls_answered: number | null
+          calls_missed: number | null
+          calls_total: number
+          created_at: string
+          id: string
+          org_id: string
+          total_duration_seconds: number | null
+          updated_at: string
+        }
+        Insert: {
+          avg_duration_seconds?: number | null
+          call_date: string
+          calls_answered?: number | null
+          calls_missed?: number | null
+          calls_total?: number
+          created_at?: string
+          id?: string
+          org_id: string
+          total_duration_seconds?: number | null
+          updated_at?: string
+        }
+        Update: {
+          avg_duration_seconds?: number | null
+          call_date?: string
+          calls_answered?: number | null
+          calls_missed?: number | null
+          calls_total?: number
+          created_at?: string
+          id?: string
+          org_id?: string
+          total_duration_seconds?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vapi_calls_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       tenant_data_sources_safe: {
@@ -2078,6 +2125,44 @@ export type Database = {
           {
             foreignKeyName: "tenant_data_sources_tenant_id_fkey"
             columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vw_vapi_calls_daily_v3: {
+        Row: {
+          avg_duration_seconds: number | null
+          calls_answered: number | null
+          calls_missed: number | null
+          calls_total: number | null
+          day: string | null
+          org_id: string | null
+          total_duration_seconds: number | null
+        }
+        Insert: {
+          avg_duration_seconds?: number | null
+          calls_answered?: number | null
+          calls_missed?: number | null
+          calls_total?: number | null
+          day?: string | null
+          org_id?: string | null
+          total_duration_seconds?: number | null
+        }
+        Update: {
+          avg_duration_seconds?: number | null
+          calls_answered?: number | null
+          calls_missed?: number | null
+          calls_total?: number | null
+          day?: string | null
+          org_id?: string | null
+          total_duration_seconds?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vapi_calls_org_id_fkey"
+            columns: ["org_id"]
             isOneToOne: false
             referencedRelation: "tenants"
             referencedColumns: ["id"]
