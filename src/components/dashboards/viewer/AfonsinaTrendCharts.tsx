@@ -293,61 +293,6 @@ export default function AfonsinaTrendCharts({
             </div>
           </CardContent>
         </Card>
-        
-        {/* Chart 3: Conversion rates over time */}
-        <Card className="lg:col-span-2">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Taxas de Conversão ao Longo do Tempo</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[280px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" vertical={false} />
-                  <XAxis 
-                    dataKey="date" 
-                    tickFormatter={formatDate} 
-                    tick={{ fontSize: 11 }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <YAxis 
-                    tick={{ fontSize: 11 }} 
-                    tickFormatter={(v) => `${v.toFixed(0)}%`}
-                    domain={[0, 'auto']}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Legend 
-                    iconType="circle"
-                    iconSize={8}
-                    wrapperStyle={{ paddingTop: 16 }}
-                  />
-                  
-                  <Area 
-                    type="monotone" 
-                    dataKey="taxa_entrada" 
-                    name="Taxa Entrada" 
-                    stroke="hsl(var(--primary))"
-                    fill="hsl(var(--primary) / 0.1)"
-                    strokeWidth={2}
-                    connectNulls
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="taxa_reuniao_agendada" 
-                    name="Taxa Reunião Agendada" 
-                    stroke="hsl(38, 92%, 50%)"
-                    fill="hsl(38, 92%, 50% / 0.1)"
-                    strokeWidth={2}
-                    connectNulls
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
       </div>
     </div>
   );
