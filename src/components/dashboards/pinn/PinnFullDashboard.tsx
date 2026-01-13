@@ -59,12 +59,12 @@ export default function PinnFullDashboard({
   dashboardName = 'Dashboard',
   className,
 }: PinnFullDashboardProps) {
-  const { user, profile } = useAuth();
+  const { tenantId } = useAuth();
   const [period, setPeriod] = useState<7 | 30 | 60>(30);
   const [activeTab, setActiveTab] = useState('overview');
   
-  // Get org_id from profile
-  const orgId = profile?.tenant_id || null;
+  // Get org_id from auth context
+  const orgId = tenantId;
   
   // Fetch all data
   const { data: dashboardKPIs, isLoading: kpisLoading, refetch: refetchKPIs } = useDashboardKPIs(orgId, period);
