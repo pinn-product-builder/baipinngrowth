@@ -1,5 +1,5 @@
 import { ModernDashboardViewer, DashboardErrorBoundary } from './viewer';
-import AfonsinaDashboardV3 from './viewer/AfonsinaDashboardV3';
+import { PinnAfonsinaDashboard } from './pinn';
 
 interface CostsFunnelDashboardProps {
   dashboardId: string;
@@ -9,7 +9,7 @@ interface CostsFunnelDashboardProps {
   detectedColumns?: string[];
 }
 
-// Dashboard ID for Afonsina (uses v3 views)
+// Dashboard ID for Afonsina (uses Pinn theme)
 const AFONSINA_DASHBOARD_ID = '16c74d98-22a5-4779-9bf0-f4711fe91528';
 
 export default function CostsFunnelDashboard({ 
@@ -19,14 +19,13 @@ export default function CostsFunnelDashboard({
   dashboardName = 'Dashboard',
   detectedColumns = [],
 }: CostsFunnelDashboardProps) {
-  // Use the new v3 dashboard for Afonsina
+  // Use the new Pinn dashboard for Afonsina
   if (dashboardId === AFONSINA_DASHBOARD_ID) {
     return (
       <DashboardErrorBoundary>
-        <AfonsinaDashboardV3
+        <PinnAfonsinaDashboard
           dashboardId={dashboardId}
           dashboardName={dashboardName || 'Dashboard Afonsina'}
-          className="p-6"
         />
       </DashboardErrorBoundary>
     );
