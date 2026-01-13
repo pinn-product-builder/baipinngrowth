@@ -33,14 +33,11 @@ import {
 import { cn } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
 
-import { 
-  PinnGlassCard, 
-  PinnGlassCardContent,
-  PinnKPICard, 
-  PinnChart, 
-  PinnPeriodSelector, 
-  PinnSectionHeader,
-} from './index';
+import { PinnGlassCard, PinnGlassCardContent } from './PinnGlassCard';
+import { PinnKPICard } from './PinnKPICard';
+import { PinnChart } from './PinnChart';
+import { PinnPeriodSelector } from './PinnPeriodSelector';
+import { PinnSectionHeader } from './PinnSectionHeader';
 import { useVapiDashboardData } from '@/hooks/useVapiDashboardData';
 import { useAfonsinaDashboardData } from '@/hooks/useAfonsinaDashboardData';
 
