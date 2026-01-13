@@ -1280,6 +1280,63 @@ export type Database = {
           },
         ]
       }
+      events_v2: {
+        Row: {
+          actor: string | null
+          agent_id: string | null
+          channel: string
+          created_at: string
+          dedupe_key: string
+          event_ts: string
+          event_type: string
+          id: string
+          lead_id: string | null
+          org_id: string
+          payload: Json | null
+        }
+        Insert: {
+          actor?: string | null
+          agent_id?: string | null
+          channel: string
+          created_at?: string
+          dedupe_key: string
+          event_ts?: string
+          event_type: string
+          id?: string
+          lead_id?: string | null
+          org_id: string
+          payload?: Json | null
+        }
+        Update: {
+          actor?: string | null
+          agent_id?: string | null
+          channel?: string
+          created_at?: string
+          dedupe_key?: string
+          event_ts?: string
+          event_type?: string
+          id?: string
+          lead_id?: string | null
+          org_id?: string
+          payload?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "events_v2_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads_v2"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "events_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       feature_flags: {
         Row: {
           config: Json | null
@@ -1318,6 +1375,106 @@ export type Database = {
           {
             foreignKeyName: "feature_flags_tenant_id_fkey"
             columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ingest_keys_v2: {
+        Row: {
+          created_at: string
+          id: string
+          is_active: boolean | null
+          key_hash: string
+          name: string | null
+          org_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_active?: boolean | null
+          key_hash: string
+          name?: string | null
+          org_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_active?: boolean | null
+          key_hash?: string
+          name?: string | null
+          org_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ingest_keys_v2_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      leads_v2: {
+        Row: {
+          created_at: string
+          email: string | null
+          id: string
+          kommo_contact_id: string | null
+          kommo_lead_id: string | null
+          name: string | null
+          org_id: string
+          phone_e164: string | null
+          phone_raw: string | null
+          updated_at: string
+          utm_ad: string | null
+          utm_adset: string | null
+          utm_campaign: string | null
+          utm_medium: string | null
+          utm_source: string | null
+        }
+        Insert: {
+          created_at?: string
+          email?: string | null
+          id?: string
+          kommo_contact_id?: string | null
+          kommo_lead_id?: string | null
+          name?: string | null
+          org_id: string
+          phone_e164?: string | null
+          phone_raw?: string | null
+          updated_at?: string
+          utm_ad?: string | null
+          utm_adset?: string | null
+          utm_campaign?: string | null
+          utm_medium?: string | null
+          utm_source?: string | null
+        }
+        Update: {
+          created_at?: string
+          email?: string | null
+          id?: string
+          kommo_contact_id?: string | null
+          kommo_lead_id?: string | null
+          name?: string | null
+          org_id?: string
+          phone_e164?: string | null
+          phone_raw?: string | null
+          updated_at?: string
+          utm_ad?: string | null
+          utm_adset?: string | null
+          utm_campaign?: string | null
+          utm_medium?: string | null
+          utm_source?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "leads_v2_org_id_fkey"
+            columns: ["org_id"]
             isOneToOne: false
             referencedRelation: "tenants"
             referencedColumns: ["id"]
