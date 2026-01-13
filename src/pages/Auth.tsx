@@ -5,9 +5,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { BarChart3, Eye, EyeOff, ArrowLeft, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, ArrowLeft, Loader2, Zap } from 'lucide-react';
 import { z } from 'zod';
 
 const loginSchema = z.object({
@@ -38,14 +37,12 @@ export default function Auth() {
   useEffect(() => {
     const redirectAfterLogin = async () => {
       if (user) {
-        // Check if user belongs to Afonsina tenant
         const { data: profileData } = await supabase
           .from('profiles')
           .select('tenant_id')
           .eq('id', user.id)
           .maybeSingle();
 
-        // Afonsina tenant - redirect directly to the dashboard
         if (profileData?.tenant_id === '22222222-2222-2222-2222-222222222222') {
           navigate('/dashboards/16c74d98-22a5-4779-9bf0-f4711fe91528');
         } else {
@@ -65,17 +62,13 @@ export default function Auth() {
   const checkAdminExists = async () => {
     try {
       const { data, error } = await supabase.functions.invoke('check-admin-exists');
-      
       if (error) throw error;
-      
       if (!data?.hasAdmin) {
-        // Nenhum admin existe, redirecionar para setup
         navigate('/setup');
         return;
       }
     } catch (error) {
       console.error('Erro ao verificar admin:', error);
-      // Continuar para login em caso de erro
     } finally {
       setIsCheckingAdmin(false);
     }
@@ -118,7 +111,6 @@ export default function Auth() {
             toast({ title: 'Falha no login', description: error.message, variant: 'destructive' });
           }
         }
-        // Redirect is handled by the useEffect that watches the user state
       } else {
         const { error } = await resetPassword(email);
         if (error) {
@@ -136,111 +128,140 @@ export default function Auth() {
   if (isCheckingAdmin) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <div className="flex flex-col items-center gap-4">
+          <div className="relative">
+            <div className="h-12 w-12 rounded-xl bg-gradient-orange flex items-center justify-center glow-orange animate-pulse">
+              <Zap className="h-6 w-6 text-white" />
+            </div>
+          </div>
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-md animate-fade-in">
-        {/* Logo */}
-        <div className="mb-8 flex justify-center">
-          <div className="flex items-center gap-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
-              <BarChart3 className="h-6 w-6 text-primary-foreground" />
+    <div className="flex min-h-screen items-center justify-center px-4 relative overflow-hidden">
+      {/* Background Effects */}
+      <div className="absolute inset-0 bg-background" />
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/5 rounded-full blur-3xl" />
+      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-primary/10 rounded-full blur-3xl" />
+      
+      <div className="w-full max-w-md animate-fade-in relative z-10">
+        {/* Logo Pinn */}
+        <div className="mb-10 flex flex-col items-center">
+          <div className="relative mb-4">
+            <div className="h-16 w-16 rounded-2xl bg-gradient-orange flex items-center justify-center glow-orange">
+              <Zap className="h-8 w-8 text-white" />
             </div>
-            <span className="text-xl font-semibold">BAI Analytics</span>
+            <div className="absolute -inset-1 bg-gradient-orange rounded-2xl blur-xl opacity-30" />
+          </div>
+          <h1 className="text-3xl font-bold text-gradient-orange">PINN</h1>
+          <p className="text-sm text-muted-foreground uppercase tracking-widest mt-1">Analytics Platform</p>
+        </div>
+
+        {/* Card Login */}
+        <div className="glass-strong rounded-2xl border border-border/50 p-8 shadow-glass">
+          <div className="mb-6 text-center">
+            <h2 className="text-2xl font-semibold text-foreground">
+              {mode === 'login' ? 'Bem-vindo de volta' : 'Recuperar senha'}
+            </h2>
+            <p className="text-sm text-muted-foreground mt-2">
+              {mode === 'login' 
+                ? 'Entre com suas credenciais para acessar' 
+                : 'Digite seu email para receber as instruções'}
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="space-y-2">
+              <Label htmlFor="email" className="text-sm font-medium text-foreground">
+                Email
+              </Label>
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="seu@email.com"
+                disabled={isSubmitting}
+                className="h-12 bg-muted/50 border-border/50 focus:border-primary focus:ring-primary/20 rounded-xl"
+              />
+              {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
+            </div>
+
+            {mode === 'login' && (
+              <div className="space-y-2">
+                <Label htmlFor="password" className="text-sm font-medium text-foreground">
+                  Senha
+                </Label>
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    disabled={isSubmitting}
+                    className="h-12 bg-muted/50 border-border/50 focus:border-primary focus:ring-primary/20 rounded-xl pr-12"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                  </button>
+                </div>
+                {errors.password && <p className="text-xs text-destructive">{errors.password}</p>}
+              </div>
+            )}
+
+            {mode === 'login' && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setMode('forgot')}
+                  className="text-sm text-primary hover:text-primary/80 transition-colors"
+                >
+                  Esqueceu a senha?
+                </button>
+              </div>
+            )}
+
+            <Button 
+              type="submit" 
+              className="w-full h-12 rounded-xl bg-gradient-orange hover:opacity-90 text-white font-semibold text-base transition-all glow-orange-subtle"
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                mode === 'login' ? 'Entrar' : 'Enviar link de recuperação'
+              )}
+            </Button>
+          </form>
+
+          <div className="mt-6 text-center">
+            {mode === 'login' ? (
+              <p className="text-sm text-muted-foreground">
+                Acesso por convite apenas. Contate seu administrador.
+              </p>
+            ) : (
+              <button 
+                onClick={() => setMode('login')} 
+                className="inline-flex items-center gap-2 text-sm text-primary hover:text-primary/80 transition-colors"
+              >
+                <ArrowLeft className="h-4 w-4" /> Voltar ao login
+              </button>
+            )}
           </div>
         </div>
 
-        <Card className="border-border/50 shadow-lg">
-          <CardHeader className="space-y-1">
-            <CardTitle className="text-2xl">
-              {mode === 'login' && 'Entrar'}
-              {mode === 'forgot' && 'Recuperar senha'}
-            </CardTitle>
-            <CardDescription>
-              {mode === 'login' && 'Digite suas credenciais para acessar seus dashboards'}
-              {mode === 'forgot' && 'Digite seu email para receber instruções de recuperação'}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="seu@email.com"
-                  disabled={isSubmitting}
-                />
-                {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
-              </div>
-
-              {mode === 'login' && (
-                <div className="space-y-2">
-                  <Label htmlFor="password">Senha</Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
-                      type={showPassword ? 'text' : 'password'}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Digite sua senha"
-                      disabled={isSubmitting}
-                      className="pr-10"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                  {errors.password && <p className="text-xs text-destructive">{errors.password}</p>}
-                </div>
-              )}
-
-              {mode === 'login' && (
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setMode('forgot')}
-                    className="text-sm text-primary hover:underline"
-                  >
-                    Esqueceu a senha?
-                  </button>
-                </div>
-              )}
-
-              <Button type="submit" className="w-full" disabled={isSubmitting}>
-                {isSubmitting ? 'Aguarde...' : (
-                  mode === 'login' ? 'Entrar' : 'Enviar link de recuperação'
-                )}
-              </Button>
-            </form>
-
-            <div className="mt-6 text-center text-sm">
-              {mode === 'login' && (
-                <p className="text-muted-foreground">
-                  O acesso é apenas por convite. Entre em contato com seu administrador.
-                </p>
-              )}
-              {mode === 'forgot' && (
-                <button 
-                  onClick={() => setMode('login')} 
-                  className="inline-flex items-center gap-1 text-primary hover:underline"
-                >
-                  <ArrowLeft className="h-3 w-3" /> Voltar ao login
-                </button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+        {/* Footer */}
+        <p className="text-center text-xs text-muted-foreground mt-8">
+          Powered by <span className="text-primary font-medium">Pinn</span>
+        </p>
       </div>
     </div>
   );

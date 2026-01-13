@@ -6,108 +6,109 @@
 
 @layer base {
   :root {
-    /* Deep navy B2B palette */
-    --background: 210 20% 98%;
-    --foreground: 215 25% 15%;
+    /* ============================================ */
+    /* PINN THEME - Dark Premium com Acento Laranja */
+    /* ============================================ */
+    
+    /* Background escuro premium */
+    --background: 240 15% 6%;
+    --foreground: 0 0% 95%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 215 25% 15%;
+    /* Cards com glassmorphism */
+    --card: 240 12% 10%;
+    --card-foreground: 0 0% 95%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 215 25% 15%;
+    --popover: 240 12% 12%;
+    --popover-foreground: 0 0% 95%;
 
-    --primary: 210 80% 35%;
+    /* Primary = Laranja Pinn */
+    --primary: 24 100% 50%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 210 15% 93%;
-    --secondary-foreground: 215 25% 25%;
+    --secondary: 240 10% 16%;
+    --secondary-foreground: 0 0% 90%;
 
-    --muted: 210 15% 95%;
-    --muted-foreground: 215 15% 45%;
+    --muted: 240 10% 14%;
+    --muted-foreground: 240 5% 55%;
 
-    --accent: 175 65% 40%;
+    /* Accent também laranja */
+    --accent: 24 100% 50%;
     --accent-foreground: 0 0% 100%;
 
     --destructive: 0 72% 50%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 210 20% 88%;
-    --input: 210 20% 88%;
-    --ring: 210 80% 35%;
+    --border: 240 10% 18%;
+    --input: 240 10% 18%;
+    --ring: 24 100% 50%;
 
-    --radius: 0.5rem;
+    --radius: 0.75rem;
 
-    /* Sidebar - Dark navy */
-    --sidebar-background: 215 35% 12%;
-    --sidebar-foreground: 210 20% 92%;
-    --sidebar-primary: 175 65% 50%;
+    /* Sidebar - Mais escuro ainda */
+    --sidebar-background: 240 18% 5%;
+    --sidebar-foreground: 0 0% 90%;
+    --sidebar-primary: 24 100% 50%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 215 30% 18%;
-    --sidebar-accent-foreground: 210 20% 92%;
-    --sidebar-border: 215 30% 20%;
-    --sidebar-ring: 175 65% 50%;
+    --sidebar-accent: 240 12% 12%;
+    --sidebar-accent-foreground: 0 0% 95%;
+    --sidebar-border: 240 10% 15%;
+    --sidebar-ring: 24 100% 50%;
 
-    /* Custom tokens */
-    --success: 145 65% 40%;
+    /* Status colors */
+    --success: 145 65% 42%;
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 50%;
     --warning-foreground: 0 0% 100%;
 
-    /* Shadows */
-    --shadow-sm: 0 1px 2px 0 hsl(215 25% 15% / 0.05);
-    --shadow-md: 0 4px 6px -1px hsl(215 25% 15% / 0.1), 0 2px 4px -2px hsl(215 25% 15% / 0.1);
-    --shadow-lg: 0 10px 15px -3px hsl(215 25% 15% / 0.1), 0 4px 6px -4px hsl(215 25% 15% / 0.1);
-    --shadow-glow: 0 0 20px hsl(175 65% 40% / 0.15);
+    /* Shadows com glow laranja */
+    --shadow-sm: 0 1px 2px 0 hsl(0 0% 0% / 0.3);
+    --shadow-md: 0 4px 6px -1px hsl(0 0% 0% / 0.4), 0 2px 4px -2px hsl(0 0% 0% / 0.3);
+    --shadow-lg: 0 10px 15px -3px hsl(0 0% 0% / 0.5), 0 4px 6px -4px hsl(0 0% 0% / 0.4);
+    --shadow-glow: 0 0 30px hsl(24 100% 50% / 0.15);
+    --shadow-glow-intense: 0 0 40px hsl(24 100% 50% / 0.25);
     
-    /* Pinn Theme Colors */
+    /* Pinn specific tokens */
     --pinn-orange: 24 100% 50%;
     --pinn-orange-glow: 24 100% 60%;
-    --pinn-dark: 240 20% 8%;
-    --pinn-dark-lighter: 240 15% 12%;
-    --pinn-dark-card: 240 15% 10%;
+    --pinn-dark: 240 20% 6%;
+    --pinn-dark-lighter: 240 15% 10%;
+    --pinn-dark-card: 240 12% 9%;
+    --pinn-gradient-start: 240 18% 5%;
+    --pinn-gradient-end: 240 15% 10%;
   }
 
-  .dark {
-    --background: 215 35% 8%;
-    --foreground: 210 20% 95%;
-
-    --card: 215 30% 12%;
-    --card-foreground: 210 20% 95%;
-
-    --popover: 215 30% 12%;
-    --popover-foreground: 210 20% 95%;
-
-    --primary: 175 65% 50%;
-    --primary-foreground: 215 35% 10%;
-
-    --secondary: 215 25% 18%;
-    --secondary-foreground: 210 20% 90%;
-
-    --muted: 215 25% 15%;
-    --muted-foreground: 210 15% 55%;
-
-    --accent: 175 65% 45%;
-    --accent-foreground: 215 35% 10%;
-
-    --destructive: 0 62% 45%;
+  /* Light mode (mantido para compatibilidade, mas default é dark) */
+  .light {
+    --background: 210 20% 98%;
+    --foreground: 215 25% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 25% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 25% 15%;
+    --primary: 24 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 15% 93%;
+    --secondary-foreground: 215 25% 25%;
+    --muted: 210 15% 95%;
+    --muted-foreground: 215 15% 45%;
+    --accent: 24 100% 50%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 50%;
     --destructive-foreground: 0 0% 100%;
-
-    --border: 215 25% 20%;
-    --input: 215 25% 20%;
-    --ring: 175 65% 50%;
-
-    --sidebar-background: 215 40% 6%;
-    --sidebar-foreground: 210 20% 90%;
-    --sidebar-primary: 175 65% 50%;
-    --sidebar-primary-foreground: 215 35% 10%;
-    --sidebar-accent: 215 35% 12%;
-    --sidebar-accent-foreground: 210 20% 90%;
-    --sidebar-border: 215 30% 15%;
-    --sidebar-ring: 175 65% 50%;
-
-    --success: 145 60% 45%;
+    --border: 210 20% 88%;
+    --input: 210 20% 88%;
+    --ring: 24 100% 50%;
+    --sidebar-background: 215 35% 12%;
+    --sidebar-foreground: 210 20% 92%;
+    --sidebar-primary: 24 100% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 215 30% 18%;
+    --sidebar-accent-foreground: 210 20% 92%;
+    --sidebar-border: 215 30% 20%;
+    --sidebar-ring: 24 100% 50%;
+    --success: 145 65% 40%;
     --success-foreground: 0 0% 100%;
-    --warning: 38 90% 55%;
+    --warning: 38 92% 50%;
     --warning-foreground: 0 0% 100%;
   }
 }
@@ -117,9 +118,22 @@
     @apply border-border;
   }
 
+  html {
+    /* Força o tema dark como padrão */
+    color-scheme: dark;
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
     font-family: 'DM Sans', sans-serif;
+    /* Background com gradiente sutil */
+    background: linear-gradient(
+      135deg,
+      hsl(var(--pinn-gradient-start)) 0%,
+      hsl(var(--pinn-gradient-end)) 50%,
+      hsl(var(--pinn-gradient-start)) 100%
+    );
+    min-height: 100vh;
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -128,10 +142,50 @@
 }
 
 @layer utilities {
+  /* Glassmorphism premium */
   .glass {
-    @apply bg-card/80 backdrop-blur-sm;
+    @apply backdrop-blur-xl border border-white/5;
+    background: linear-gradient(
+      135deg,
+      hsl(var(--card) / 0.8) 0%,
+      hsl(var(--card) / 0.6) 100%
+    );
   }
 
+  .glass-strong {
+    @apply backdrop-blur-2xl border border-white/10;
+    background: linear-gradient(
+      135deg,
+      hsl(var(--card) / 0.9) 0%,
+      hsl(var(--card) / 0.7) 100%
+    );
+  }
+
+  /* Glow effects */
+  .glow-orange {
+    box-shadow: 0 0 30px hsl(24 100% 50% / 0.2),
+                0 0 60px hsl(24 100% 50% / 0.1);
+  }
+
+  .glow-orange-subtle {
+    box-shadow: 0 0 20px hsl(24 100% 50% / 0.1);
+  }
+
+  .glow-border {
+    border-color: hsl(24 100% 50% / 0.3);
+    box-shadow: inset 0 0 20px hsl(24 100% 50% / 0.05),
+                0 0 20px hsl(24 100% 50% / 0.1);
+  }
+
+  /* Text gradient */
+  .text-gradient-orange {
+    background: linear-gradient(135deg, hsl(24 100% 50%) 0%, hsl(24 100% 65%) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Animations */
   .animate-fade-in {
     animation: fade-in 0.3s ease-out;
   }
@@ -143,15 +197,15 @@
   .animate-scale-in {
     animation: scale-in 0.2s ease-out;
   }
+
+  .animate-glow-pulse {
+    animation: glow-pulse 3s ease-in-out infinite;
+  }
 }
 
 @keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes slide-in {
@@ -176,27 +230,36 @@
   }
 }
 
-/* Scrollbar styling */
+@keyframes glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 20px hsl(24 100% 50% / 0.15);
+  }
+  50% {
+    box-shadow: 0 0 40px hsl(24 100% 50% / 0.25);
+  }
+}
+
+/* Scrollbar styling - Dark premium */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: hsl(var(--muted));
-  border-radius: 4px;
+  background: hsl(var(--muted) / 0.3);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.3);
-  border-radius: 4px;
+  background: hsl(var(--muted-foreground) / 0.2);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.5);
+  background: hsl(24 100% 50% / 0.5);
 }
 
-/* Hide scrollbar for horizontal scroll areas */
+/* Hide scrollbar */
 .scrollbar-none {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -205,22 +268,23 @@
   display: none;
 }
 
-/* Recharts tooltip styling */
+/* Recharts - Pinn styling */
 .recharts-tooltip-wrapper {
   z-index: 50 !important;
 }
 
 .recharts-default-tooltip {
-  background-color: hsl(var(--popover)) !important;
+  background: hsl(var(--popover)) !important;
   border: 1px solid hsl(var(--border)) !important;
-  border-radius: 0.5rem !important;
-  box-shadow: var(--shadow-lg) !important;
+  border-radius: 0.75rem !important;
+  box-shadow: 0 10px 40px hsl(0 0% 0% / 0.5) !important;
+  backdrop-filter: blur(12px);
 }
 
 .recharts-tooltip-label {
   color: hsl(var(--foreground)) !important;
-  font-weight: 500 !important;
-  margin-bottom: 0.25rem !important;
+  font-weight: 600 !important;
+  margin-bottom: 0.5rem !important;
 }
 
 .recharts-tooltip-item {
@@ -231,12 +295,10 @@
   color: hsl(var(--foreground)) !important;
 }
 
-/* Legend styling */
 .recharts-legend-item-text {
   color: hsl(var(--foreground)) !important;
 }
 
-/* Chart animations */
 .recharts-line-curve,
 .recharts-area-curve {
   transition: stroke-width 0.2s ease;
@@ -245,4 +307,16 @@
 .recharts-line:hover .recharts-line-curve,
 .recharts-area:hover .recharts-area-curve {
   stroke-width: 3px;
+}
+
+/* Pinn Theme class for specific contexts */
+.pinn-theme {
+  --background: 240 15% 6%;
+  --foreground: 0 0% 95%;
+  --card: 240 12% 10%;
+  --card-foreground: 0 0% 95%;
+  --primary: 24 100% 50%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 24 100% 50%;
+  --accent-foreground: 0 0% 100%;
 }

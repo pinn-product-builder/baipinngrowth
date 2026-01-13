@@ -18,13 +18,11 @@ import {
   Flag,
   FileText,
   Bot,
-  Sun,
-  Moon,
-  Monitor,
   Layers,
   GitBranch,
   HeartPulse,
-  Target
+  Target,
+  Zap
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -61,7 +59,6 @@ const navItems: NavItem[] = [
   { label: 'Audit Logs', href: '/admin/audit-logs', icon: FileText, adminOnly: true },
 ];
 
-// Rotas permitidas para manager (subconjunto de admin)
 const managerAllowedRoutes = ['/admin/users', '/admin/dashboards', '/admin/activity-logs', '/admin/scheduled-reports'];
 
 const roleLabels: Record<string, string> = {
@@ -72,20 +69,9 @@ const roleLabels: Record<string, string> = {
 
 export default function AppLayout() {
   const { user, userRole, signOut } = useAuth();
-  const { theme, setTheme, isDark } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  const getThemeIcon = () => {
-    if (theme === 'system') return <Monitor className="h-4 w-4" />;
-    return isDark ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />;
-  };
-
-  const cycleTheme = () => {
-    const next = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
-    setTheme(next);
-  };
 
   const isAdmin = userRole === 'admin';
   const isManager = userRole === 'manager';
@@ -102,39 +88,43 @@ export default function AppLayout() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Overlay do sidebar mobile */}
+    <div className="flex h-screen overflow-hidden bg-background">
+      {/* Overlay mobile */}
       {sidebarOpen && (
         <div 
-          className="fixed inset-0 z-40 bg-foreground/20 backdrop-blur-sm lg:hidden"
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
-      {/* Sidebar */}
+      {/* Sidebar - Pinn Style */}
       <aside className={cn(
-        "fixed inset-y-0 left-0 z-50 w-64 bg-sidebar text-sidebar-foreground transition-transform duration-300 ease-in-out lg:relative lg:translate-x-0",
+        "fixed inset-y-0 left-0 z-50 w-72 transition-transform duration-300 ease-in-out lg:relative lg:translate-x-0",
+        "bg-sidebar border-r border-sidebar-border",
         sidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <div className="flex h-full flex-col">
-          {/* Logo */}
-          <div className="flex h-16 items-center justify-between border-b border-sidebar-border px-6">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sidebar-primary">
-                <BarChart3 className="h-5 w-5 text-sidebar-primary-foreground" />
+          {/* Logo Pinn */}
+          <div className="flex h-20 items-center justify-between px-6 border-b border-sidebar-border">
+            <div className="flex items-center gap-3">
+              <div className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-orange glow-orange">
+                <Zap className="h-5 w-5 text-white" />
               </div>
-              <span className="text-lg font-semibold">BAI Analytics</span>
+              <div className="flex flex-col">
+                <span className="text-lg font-bold text-gradient-orange">PINN</span>
+                <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Analytics</span>
+              </div>
             </div>
             <button 
               onClick={() => setSidebarOpen(false)}
-              className="lg:hidden"
+              className="lg:hidden text-muted-foreground hover:text-foreground transition-colors"
             >
               <X className="h-5 w-5" />
             </button>
           </div>
 
           {/* Navegação */}
-          <nav className="flex-1 space-y-1 px-3 py-4">
+          <nav className="flex-1 overflow-y-auto py-6 px-4 space-y-1 scrollbar-none">
             {filteredNavItems.map((item) => {
               const isActive = location.pathname === item.href || 
                 (item.href !== '/dashboards' && location.pathname.startsWith(item.href));
@@ -147,57 +137,47 @@ export default function AppLayout() {
                     setSidebarOpen(false);
                   }}
                   className={cn(
-                    "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                    "flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition-all duration-200",
                     isActive 
-                      ? "bg-sidebar-accent text-sidebar-primary" 
-                      : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                      ? "bg-primary/10 text-primary glow-orange-subtle border border-primary/20" 
+                      : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
                   )}
                 >
-                  <item.icon className="h-5 w-5" />
+                  <item.icon className={cn(
+                    "h-5 w-5 transition-colors",
+                    isActive ? "text-primary" : ""
+                  )} />
                   {item.label}
                 </button>
               );
             })}
           </nav>
 
-          {/* Seção do usuário */}
+          {/* User Section */}
           <div className="border-t border-sidebar-border p-4">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm hover:bg-sidebar-accent">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-sidebar-accent">
-                    <User className="h-4 w-4" />
+                <button className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm hover:bg-sidebar-accent transition-colors">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-orange">
+                    <User className="h-4 w-4 text-white" />
                   </div>
-                  <div className="flex-1 text-left">
-                    <p className="font-medium truncate">{user?.email}</p>
-                    <p className="text-xs text-sidebar-foreground/60">{userRole ? roleLabels[userRole] || userRole : 'Usuário'}</p>
+                  <div className="flex-1 text-left min-w-0">
+                    <p className="font-medium truncate text-foreground">{user?.email}</p>
+                    <p className="text-xs text-muted-foreground">{userRole ? roleLabels[userRole] || userRole : 'Usuário'}</p>
                   </div>
-                  <ChevronDown className="h-4 w-4 text-sidebar-foreground/60" />
+                  <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuItem onClick={() => navigate('/account')}>
+              <DropdownMenuContent align="end" className="w-56 glass-strong border-border/50">
+                <DropdownMenuItem onClick={() => navigate('/account')} className="cursor-pointer">
                   <User className="mr-2 h-4 w-4" />
-                  Conta
+                  Minha Conta
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => setTheme('light')}>
-                  <Sun className="mr-2 h-4 w-4" />
-                  Tema claro
-                  {theme === 'light' && <span className="ml-auto text-xs text-primary">✓</span>}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTheme('dark')}>
-                  <Moon className="mr-2 h-4 w-4" />
-                  Tema escuro
-                  {theme === 'dark' && <span className="ml-auto text-xs text-primary">✓</span>}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTheme('system')}>
-                  <Monitor className="mr-2 h-4 w-4" />
-                  Sistema
-                  {theme === 'system' && <span className="ml-auto text-xs text-primary">✓</span>}
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={handleSignOut} className="text-destructive focus:text-destructive">
+                <DropdownMenuSeparator className="bg-border/50" />
+                <DropdownMenuItem 
+                  onClick={handleSignOut} 
+                  className="text-destructive focus:text-destructive cursor-pointer"
+                >
                   <LogOut className="mr-2 h-4 w-4" />
                   Sair
                 </DropdownMenuItem>
@@ -207,29 +187,26 @@ export default function AppLayout() {
         </div>
       </aside>
 
-      {/* Conteúdo principal */}
+      {/* Main Content */}
       <main className="flex flex-1 flex-col overflow-hidden">
-        {/* Barra superior */}
-        <header className="flex h-16 items-center gap-4 border-b bg-card px-4 lg:px-6">
+        {/* Header - Pinn Style */}
+        <header className="flex h-16 items-center gap-4 border-b border-border/50 bg-card/50 backdrop-blur-xl px-6">
           <button
             onClick={() => setSidebarOpen(true)}
-            className="lg:hidden"
+            className="lg:hidden text-muted-foreground hover:text-foreground transition-colors"
           >
             <Menu className="h-6 w-6" />
           </button>
           <div className="flex-1" />
-          {/* Theme toggle in header */}
-          <button
-            onClick={cycleTheme}
-            className="flex items-center justify-center h-9 w-9 rounded-md hover:bg-muted transition-colors"
-            title={`Tema: ${theme === 'light' ? 'Claro' : theme === 'dark' ? 'Escuro' : 'Sistema'}`}
-          >
-            {getThemeIcon()}
-          </button>
+          {/* Badge Pinn */}
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20">
+            <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+            <span className="text-xs font-medium text-primary">Pinn Active</span>
+          </div>
         </header>
 
-        {/* Conteúdo da página */}
-        <div className="flex-1 overflow-auto p-4 lg:p-6">
+        {/* Page Content */}
+        <div className="flex-1 overflow-auto">
           <Outlet />
         </div>
       </main>
