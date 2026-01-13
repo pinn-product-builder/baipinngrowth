@@ -155,7 +155,7 @@ export default function AfonsinaKPICards({
   return (
     <div className={cn("space-y-6", className)}>
       {/* Row 1: Main volume KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KPICard
           label="Investimento"
           value={kpis.investimento_total}
@@ -188,26 +188,10 @@ export default function AfonsinaKPICards({
           icon={Calendar}
           comparisonEnabled={comparisonEnabled}
         />
-        <KPICard
-          label="Reuniões Realizadas"
-          value={kpis.reunioes_realizadas}
-          previousValue={previousKpis?.reunioes_realizadas}
-          format="number"
-          icon={Calendar}
-          comparisonEnabled={comparisonEnabled}
-        />
-        <KPICard
-          label="Vendas"
-          value={kpis.vendas_total}
-          previousValue={previousKpis?.vendas_total}
-          format="number"
-          icon={Target}
-          comparisonEnabled={comparisonEnabled}
-        />
       </div>
       
       {/* Row 2: Cost efficiency KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-4">
         <KPICard
           label="CPL (Custo por Lead)"
           value={kpis.cpl}
@@ -215,7 +199,7 @@ export default function AfonsinaKPICards({
           format="currency"
           icon={BarChart3}
           comparisonEnabled={comparisonEnabled}
-          inverse // For costs, down is good
+          inverse
         />
         <KPICard
           label="Custo por Entrada"
@@ -226,28 +210,10 @@ export default function AfonsinaKPICards({
           comparisonEnabled={comparisonEnabled}
           inverse
         />
-        <KPICard
-          label="Custo por Reunião"
-          value={kpis.custo_por_reuniao_realizada}
-          previousValue={previousKpis?.custo_por_reuniao_realizada}
-          format="currency"
-          icon={BarChart3}
-          comparisonEnabled={comparisonEnabled}
-          inverse
-        />
-        <KPICard
-          label="CAC (Custo por Venda)"
-          value={kpis.cac}
-          previousValue={previousKpis?.cac}
-          format="currency"
-          icon={Target}
-          comparisonEnabled={comparisonEnabled}
-          inverse
-        />
       </div>
       
       {/* Row 3: Conversion rates */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 gap-4">
         <KPICard
           label="Taxa de Entrada"
           value={kpis.taxa_entrada}
@@ -262,30 +228,6 @@ export default function AfonsinaKPICards({
           previousValue={previousKpis?.taxa_reuniao_agendada}
           format="percent"
           icon={TrendingUp}
-          comparisonEnabled={comparisonEnabled}
-        />
-        <KPICard
-          label="Taxa Comparecimento"
-          value={kpis.taxa_comparecimento}
-          previousValue={previousKpis?.taxa_comparecimento}
-          format="percent"
-          icon={TrendingUp}
-          comparisonEnabled={comparisonEnabled}
-        />
-        <KPICard
-          label="Taxa Venda (pós-reunião)"
-          value={kpis.taxa_venda_pos_reuniao}
-          previousValue={previousKpis?.taxa_venda_pos_reuniao}
-          format="percent"
-          icon={TrendingUp}
-          comparisonEnabled={comparisonEnabled}
-        />
-        <KPICard
-          label="Taxa Venda Total"
-          value={kpis.taxa_venda_total}
-          previousValue={previousKpis?.taxa_venda_total}
-          format="percent"
-          icon={Target}
           comparisonEnabled={comparisonEnabled}
         />
       </div>
