@@ -312,7 +312,7 @@ export default function AfonsinaDashboardV3({
         {/* Efficiency Tab */}
         <TabsContent value="efficiency" className="mt-6 space-y-6">
           {/* Cost efficiency cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <Card>
               <CardContent className="p-4">
                 <p className="text-xs text-muted-foreground mb-1">💰 Investimento Total</p>
@@ -341,17 +341,6 @@ export default function AfonsinaDashboardV3({
                 <p className="text-2xl font-bold">
                   {kpis.custo_por_entrada !== null 
                     ? `R$ ${kpis.custo_por_entrada.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
-                    : '—'
-                  }
-                </p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-xs text-muted-foreground mb-1">🎯 CAC</p>
-                <p className="text-2xl font-bold">
-                  {kpis.cac !== null 
-                    ? `R$ ${kpis.cac.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
                     : '—'
                   }
                 </p>

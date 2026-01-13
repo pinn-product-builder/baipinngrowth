@@ -111,7 +111,7 @@ export default function AfonsinaTrendCharts({
     if (chartData.length === 0) return {};
     
     const result: Record<string, number> = {};
-    const keys = ['cpl', 'cac', 'leads', 'investimento'] as const;
+    const keys = ['cpl', 'leads', 'investimento'] as const;
     
     keys.forEach(key => {
       const values = chartData
@@ -226,11 +226,11 @@ export default function AfonsinaTrendCharts({
           </CardContent>
         </Card>
         
-        {/* Chart 2: CPL x CAC */}
+        {/* Chart 2: CPL over time */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center justify-between">
-              <span>CPL × CAC</span>
+              <span>CPL ao Longo do Tempo</span>
               {averages.cpl && (
                 <Badge variant="outline" className="text-xs font-normal">
                   Média CPL: {formatCurrency(averages.cpl)}
@@ -288,16 +288,6 @@ export default function AfonsinaTrendCharts({
                     activeDot={{ r: 5, fill: 'hsl(var(--primary))' }}
                     connectNulls
                   />
-                  <Line 
-                    type="monotone" 
-                    dataKey="cac" 
-                    name="CAC" 
-                    stroke="hsl(0, 72%, 50%)"
-                    strokeWidth={2.5}
-                    dot={false}
-                    activeDot={{ r: 5, fill: 'hsl(0, 72%, 50%)' }}
-                    connectNulls
-                  />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -346,19 +336,10 @@ export default function AfonsinaTrendCharts({
                   />
                   <Area 
                     type="monotone" 
-                    dataKey="taxa_comparecimento" 
-                    name="Taxa Comparecimento" 
+                    dataKey="taxa_reuniao_agendada" 
+                    name="Taxa Reunião Agendada" 
                     stroke="hsl(38, 92%, 50%)"
                     fill="hsl(38, 92%, 50% / 0.1)"
-                    strokeWidth={2}
-                    connectNulls
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="taxa_venda_total" 
-                    name="Taxa Venda" 
-                    stroke="hsl(145, 65%, 40%)"
-                    fill="hsl(145, 65%, 40% / 0.1)"
                     strokeWidth={2}
                     connectNulls
                   />
