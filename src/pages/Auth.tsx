@@ -36,9 +36,25 @@ export default function Auth() {
   }, []);
 
   useEffect(() => {
-    if (user) {
-      navigate('/dashboards');
-    }
+    const redirectAfterLogin = async () => {
+      if (user) {
+        // Check if user belongs to Afonsina tenant
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('tenant_id')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        // Afonsina tenant - redirect directly to the dashboard
+        if (profileData?.tenant_id === '22222222-2222-2222-2222-222222222222') {
+          navigate('/dashboards/16c74d98-22a5-4779-9bf0-f4711fe91528');
+        } else {
+          navigate('/dashboards');
+        }
+      }
+    };
+    
+    redirectAfterLogin();
   }, [user, navigate]);
 
   useEffect(() => {
@@ -101,9 +117,8 @@ export default function Auth() {
           } else {
             toast({ title: 'Falha no login', description: error.message, variant: 'destructive' });
           }
-        } else {
-          navigate('/dashboards');
         }
+        // Redirect is handled by the useEffect that watches the user state
       } else {
         const { error } = await resetPassword(email);
         if (error) {
