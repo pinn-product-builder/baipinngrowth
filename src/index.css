@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Inter:wght@300;400;500;600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -58,6 +58,13 @@
     --shadow-md: 0 4px 6px -1px hsl(215 25% 15% / 0.1), 0 2px 4px -2px hsl(215 25% 15% / 0.1);
     --shadow-lg: 0 10px 15px -3px hsl(215 25% 15% / 0.1), 0 4px 6px -4px hsl(215 25% 15% / 0.1);
     --shadow-glow: 0 0 20px hsl(175 65% 40% / 0.15);
+    
+    /* Pinn Theme Colors */
+    --pinn-orange: 24 100% 50%;
+    --pinn-orange-glow: 24 100% 60%;
+    --pinn-dark: 240 20% 8%;
+    --pinn-dark-lighter: 240 15% 12%;
+    --pinn-dark-card: 240 15% 10%;
   }
 
   .dark {

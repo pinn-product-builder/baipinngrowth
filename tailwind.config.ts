@@ -68,6 +68,13 @@ export default {
           DEFAULT: "hsl(var(--warning))",
           foreground: "hsl(var(--warning-foreground))",
         },
+        pinn: {
+          orange: "#FF6B00",
+          "orange-glow": "#FF8A33",
+          dark: "#0D0D14",
+          "dark-lighter": "#14141F",
+          "dark-card": "#111118",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
