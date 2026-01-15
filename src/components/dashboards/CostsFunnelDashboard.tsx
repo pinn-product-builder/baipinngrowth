@@ -9,8 +9,11 @@ interface CostsFunnelDashboardProps {
   detectedColumns?: string[];
 }
 
-// Dashboard ID for Afonsina (uses Pinn theme)
-const AFONSINA_DASHBOARD_ID = '16c74d98-22a5-4779-9bf0-f4711fe91528';
+// Dashboard IDs for Afonsina (uses Pinn theme)
+const AFONSINA_DASHBOARD_IDS = [
+  '16c74d98-22a5-4779-9bf0-f4711fe91528',
+  'ef25b642-c720-4784-ac88-cecee4dc7dee',
+];
 
 export default function CostsFunnelDashboard({ 
   dashboardId, 
@@ -19,8 +22,8 @@ export default function CostsFunnelDashboard({
   dashboardName = 'Dashboard',
   detectedColumns = [],
 }: CostsFunnelDashboardProps) {
-  // Use the new full Pinn dashboard for Afonsina
-  if (dashboardId === AFONSINA_DASHBOARD_ID) {
+  // Use the new full Pinn dashboard for Afonsina dashboards
+  if (AFONSINA_DASHBOARD_IDS.includes(dashboardId)) {
     return (
       <DashboardErrorBoundary>
         <PinnFullDashboard
